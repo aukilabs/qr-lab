@@ -61,7 +61,7 @@ def _sample_code(rng, intr, name, idx, *, version=1, ecc="m", mirrored=False,
                  inplane=None, tilt=None):
     for _ in range(200):
         code = CodeSpec(
-            payload=f"QRK:{name}:{idx}",
+            payload=f"Q:{name}:{idx}",
             version=version, ecc=ecc, mirrored=mirrored,
             physical_size_m=size,
             distance_m=float(rng.uniform(*dist_range)),
