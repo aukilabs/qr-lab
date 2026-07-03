@@ -14,7 +14,7 @@ mod triplet;
 pub use finder::{find_finders, FinderCandidate};
 pub use homography::PerspectiveTransform;
 pub use luma::{luma_from_rgba, LumaError, LumaView};
-pub use scanner::{detect, detect_traced, Detections, StageTimings};
+pub use scanner::{detect, detect_traced, Detections, StageClock, StageTimings};
 pub use tiles::TileGrid;
 pub use trace::Trace;
 #[cfg(feature = "debug-trace")]

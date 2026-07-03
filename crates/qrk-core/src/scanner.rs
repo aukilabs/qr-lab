@@ -1,9 +1,10 @@
 //! Orchestrates the three detection stages — tile thresholding, finder
 //! scanning, triplet grouping — behind one `detect`/`detect_traced` entry
-//! point, and measures per-stage wall time with `std::time::Instant`
-//! (here, not inside the stage functions themselves, so the stages stay
+//! point, and measures per-stage wall time with [`StageClock`] (here, not
+//! inside the stage functions themselves, so the stages stay
 //! measurement-free and reusable standalone).
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
 use crate::finder::{find_finders, FinderCandidate};
@@ -32,6 +33,44 @@ pub struct Detections {
     pub timings: StageTimings,
 }
 
+/// Per-stage wall-clock timer behind [`StageTimings`].
+///
+/// On `wasm32` targets `std::time::Instant::now()` compiles but panics at
+/// runtime ("time not implemented on this platform" on
+/// wasm32-unknown-unknown), so there the clock is a zero-field struct and
+/// every stage reports 0 ns — callers measure wall time host-side (the
+/// debug UI uses JS `performance.now()`; a follow-up can wire it through
+/// web-sys). Everywhere else it wraps `Instant`.
+#[derive(Clone, Copy, Debug)]
+pub struct StageClock {
+    #[cfg(not(target_arch = "wasm32"))]
+    start: Instant,
+}
+
+impl StageClock {
+    /// Start timing a stage.
+    #[must_use]
+    pub fn start() -> Self {
+        Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            start: Instant::now(),
+        }
+    }
+
+    /// Nanoseconds since [`StageClock::start`] (always 0 on `wasm32`).
+    #[must_use]
+    pub fn elapsed_ns(self) -> u64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.start.elapsed().as_nanos() as u64
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            0
+        }
+    }
+}
+
 /// Run the full detection pipeline on `view`, discarding trace data.
 pub fn detect(view: &LumaView) -> Detections {
     detect_traced(view, &mut Trace::new())
@@ -40,19 +79,19 @@ pub fn detect(view: &LumaView) -> Detections {
 /// Run the full detection pipeline on `view`, recording each stage's
 /// output into `trace` (a no-op without the `debug-trace` feature).
 pub fn detect_traced(view: &LumaView, trace: &mut Trace) -> Detections {
-    let tiles_start = Instant::now();
+    let tiles_clock = StageClock::start();
     let grid = TileGrid::build(view);
-    let tiles_ns = tiles_start.elapsed().as_nanos() as u64;
+    let tiles_ns = tiles_clock.elapsed_ns();
     trace.record_tiles(&grid);
 
-    let finders_start = Instant::now();
+    let finders_clock = StageClock::start();
     let finders = find_finders(view, &grid);
-    let finders_ns = finders_start.elapsed().as_nanos() as u64;
+    let finders_ns = finders_clock.elapsed_ns();
     trace.record_finders(&finders);
 
-    let triplets_start = Instant::now();
+    let triplets_clock = StageClock::start();
     let triplets = group_triplets(view, &grid, &finders);
-    let triplets_ns = triplets_start.elapsed().as_nanos() as u64;
+    let triplets_ns = triplets_clock.elapsed_ns();
     trace.record_triplets(&triplets);
 
     Detections {
