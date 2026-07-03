@@ -739,14 +739,15 @@ def test_generate_cli_writes_fixture_triplet(tmp_path):
         c = np.array(code["corners_px"])
         assert (c[:, 0] > 0).all() and (c[:, 0] < 1279).all()
         assert (c[:, 1] > 0).all() and (c[:, 1] < 719).all()
-        # Dark ink just inside the TL corner (0.5 module diagonal inward
-        # toward the finder), light quiet zone just outside.
+        # Dark ink just inside the TL corner (0.5*module Euclidean along the
+        # diagonal = 0.35 modules per axis, inside the finder's dark outer
+        # ring), light quiet zone just outside.
         n = {1: 21}.get(code["version"], code["version"] * 4 + 17)
         mod = code["module_size_px"]
         tl = c[0]
         inward = (c[2] - c[0]) / np.linalg.norm(c[2] - c[0])
-        pin = (tl + inward * mod * 1.5).astype(int)
-        pout = (tl - inward * mod * 1.5).astype(int)
+        pin = (tl + inward * mod * 0.5).astype(int)
+        pout = (tl - inward * mod * 0.5).astype(int)
         assert img[pin[1], pin[0]] < 110
         assert img[pout[1], pout[0]] > 150
 
@@ -834,7 +835,9 @@ def _sample_code(rng, intr, name, idx, *, version=1, ecc="m", mirrored=False,
                  inplane=None, tilt=None):
     for _ in range(200):
         code = CodeSpec(
-            payload=f"QRK:{name}:{idx}",
+            # "Q:" not "QRK:": tilt45_XX/mirror_XX names must keep the
+            # payload within version-1-M byte capacity (14).
+            payload=f"Q:{name}:{idx}",
             version=version, ecc=ecc, mirrored=mirrored,
             physical_size_m=size,
             distance_m=float(rng.uniform(*dist_range)),
@@ -1196,8 +1199,10 @@ fn suite_loads_and_ground_truth_is_sane() {
 
 #[test]
 fn luma_pixels_match_ground_truth_ink() {
-    // For every code: the pixel 1.5 modules diagonally inside the TL corner
-    // is dark (finder ink), 1.5 modules outside is light (quiet zone).
+    // For every code: probe 0.5*module Euclidean along the TL->BR diagonal
+    // (0.35 modules per axis) — inside is dark finder ink, outside is the
+    // light quiet zone. (1.5*module would overshoot the finder's 1-module
+    // dark outer ring into the white second ring.)
     for f in common::load_all() {
         let v = f.view();
         for c in &f.codes {
@@ -1205,7 +1210,7 @@ fn luma_pixels_match_ground_truth_ink() {
             let br = c.corners_px[2];
             let len = ((br[0] - tl[0]).powi(2) + (br[1] - tl[1]).powi(2)).sqrt();
             let dir = [(br[0] - tl[0]) / len, (br[1] - tl[1]) / len];
-            let m = c.module_size_px * 1.5;
+            let m = c.module_size_px * 0.5;
             let inside = v.get(
                 (tl[0] + dir[0] * m).round() as usize,
                 (tl[1] + dir[1] * m).round() as usize,
