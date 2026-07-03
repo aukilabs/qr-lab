@@ -21,6 +21,7 @@
 - Both polarities are first-class end to end (`inverted` flag on candidates and triplets); no stage assumes a white quiet zone (the trans_/invtrans_ fixtures gate this).
 - Fixture gates use ground truth via the homography: expected finder centers at normalized `(3.5/n, 3.5/n)`, `((n−3.5)/n, 3.5/n)`, `(3.5/n, (n−3.5)/n)` mapped through square→quad(corners TL,TR,BR,BL), `n = 4·version + 17`. Position tolerance: `max(2.0, module_size_px)`.
 - **Gate-failure protocol:** if a fixture gate fails against a faithful implementation, report exact numbers (fixture, code, distances, candidate list) as DONE_WITH_CONCERNS — never loosen a tolerance or constant silently; constants change only by controller decision recorded in this plan.
+- **No overfitting (user directive):** the fixtures are highly idealized; they VERIFY behavior, they never drive tuning. Every constant must have a principled derivation (QR geometry or established practice — zxing/AprilTag) stated where it is defined; "makes fixture X pass" is not a rationale. Prefer fixing the algorithm over nudging a constant.
 - Commits end with the repo's Claude co-author trailer.
 
 ## File Structure
