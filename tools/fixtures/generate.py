@@ -41,7 +41,7 @@ def render_fixture(spec, intr):
         img = cv2.GaussianBlur(img, (0, 0), spec.blur_sigma)
     if spec.noise_sigma > 0:
         noise = rng.normal(0, spec.noise_sigma, img.shape)
-        img = np.clip(img.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+        img = np.clip(np.rint(img.astype(np.float32) + noise), 0, 255).astype(np.uint8)
 
     meta = {
         "name": spec.name, "width": intr.width, "height": intr.height,
