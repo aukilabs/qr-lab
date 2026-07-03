@@ -44,17 +44,32 @@ def corners_px(intr, r, t, physical_size_m):
     return camera.project(intr, r, t, pts)
 
 
-def render_code(img, intr, r, t, modules, physical_size_m, levels):
-    """Draw one code (with quiet zone) into img (uint8 h×w), in place."""
+def render_code(img, intr, r, t, modules, physical_size_m, levels,
+                inverted=False, opaque_plate=True):
+    """Draw one code into img (uint8 h×w), in place.
+
+    inverted: light modules on a dark plate (or on the background).
+    opaque_plate=False: paint only the modules — the quiet zone and light
+    cells are transparent, so the scene background shows through.
+    """
     n = modules.shape[0]
-    # Source bitmap: quiet zone + modules at MODULE_SRC_PX per module.
     total = n + 2 * QUIET_MODULES
-    src = np.full((total * MODULE_SRC_PX, total * MODULE_SRC_PX),
-                  levels.white, np.uint8)
+    ink = levels.white if inverted else levels.black
+    plate = levels.black if inverted else levels.white
     dark = np.kron(modules, np.ones((MODULE_SRC_PX, MODULE_SRC_PX), bool))
     q = QUIET_MODULES * MODULE_SRC_PX
-    block = src[q:q + n * MODULE_SRC_PX, q:q + n * MODULE_SRC_PX]
-    block[dark] = levels.black
+    if opaque_plate:
+        src = np.full((total * MODULE_SRC_PX, total * MODULE_SRC_PX),
+                      plate, np.uint8)
+        src[q:q + n * MODULE_SRC_PX, q:q + n * MODULE_SRC_PX][dark] = ink
+        mask_src = np.full(src.shape, 255, np.uint8)
+    else:
+        # Constant ink color; the alpha mask alone carries the module
+        # edges (un-premultiplied compositing, no plate-color bleed).
+        src = np.full((total * MODULE_SRC_PX, total * MODULE_SRC_PX),
+                      ink, np.uint8)
+        mask_src = np.zeros(src.shape, np.uint8)
+        mask_src[q:q + n * MODULE_SRC_PX, q:q + n * MODULE_SRC_PX][dark] = 255
 
     # Homography: source bitmap px -> supersampled image px, exact for a
     # plane, from the 4 quiet-zone corner correspondences.
@@ -75,7 +90,7 @@ def render_code(img, intr, r, t, modules, physical_size_m, levels):
         src, h_mat, ss_size, flags=cv2.INTER_LINEAR,
         borderMode=cv2.BORDER_CONSTANT, borderValue=255)
     mask = cv2.warpPerspective(
-        np.full(src.shape, 255, np.uint8), h_mat, ss_size,
+        mask_src, h_mat, ss_size,
         flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
 
     small = cv2.resize(warped, (img.shape[1], img.shape[0]),
