@@ -927,6 +927,10 @@ def build_all(seed: int):
         rng = _rng_for(seed, name)
         n = v * 4 + 17
         dist = 0.9
+        # 5 px/module target, shrunk via _fits until the quiet-zone corners
+        # fit in-frame — v30+ cannot reach 5 px/module in 720p, especially
+        # under random in-plane rotation (see the shrink loop in the code:
+        # while not _fits(intr, code): size *= 0.9, capped at 100 iters).
         size = 5.0 * n * dist / intr.fx  # target ~5 px/module
         payload = f"QRK:{name}:" + "x" * max(0, (v * v) // 2)
         add(name, [CodeSpec(
