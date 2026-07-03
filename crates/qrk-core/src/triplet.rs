@@ -13,6 +13,13 @@
 //! derived from QR geometry or the perspective envelope — never a value
 //! tuned against a fixture (Plan 2 "No overfitting").
 
+// PLAN 3 (recorded): the candidate-input cap (bounding `finders` before
+// the O(n^3) triple search below, by taking the top-K candidates ranked
+// by `hits`) is a decision deferred to Plan 3, not yet implemented here.
+// Plan 3 may also need `try_group`'s per-leg `module_tr`/`module_bl`
+// exposed on `TripletCandidate` separately (today only their mean is
+// kept) for downstream dimension refinement.
+
 use crate::finder::FinderCandidate;
 use crate::tiles::TileGrid;
 use crate::LumaView;
@@ -61,10 +68,14 @@ const MAX_LEG_IMBALANCE: f64 = 0.5;
 /// amended contract this is a *coarse pre-filter only* (the scan module
 /// is rotation-biased; the authoritative module comes from the per-leg
 /// measurement below): a single QR code's three finders share one
-/// physical module size, and even under the suite's steepest perspective
-/// the scan estimates of a genuine triple do not spread beyond 1.5x. A
-/// larger spread is evidence the candidates come from different codes
-/// (cross-code noise in multi-code frames).
+/// physical module size, but the scan module is a horizontal-crossing
+/// measurement, so under the spec's operating envelope (§6: perspective
+/// tilt up to ~45° from fronto-parallel) a tilted finder's scan-measured
+/// module can foreshorten by up to `1/cos(45°) ≈ 1.41` relative to an
+/// untilted finder sharing the same frame. 1.5 keeps that spread plus
+/// headroom for scan-line jitter. A larger spread is evidence the
+/// candidates come from different codes (cross-code noise in multi-code
+/// frames).
 const MAX_MODULE_RATIO: f64 = 1.5;
 
 /// Floor of the noise-scaled leg-agreement bound (see [`dim_agree_tol`]):

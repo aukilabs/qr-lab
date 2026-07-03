@@ -71,34 +71,54 @@ impl StageClock {
     }
 }
 
-/// Run the full detection pipeline on `view`, discarding trace data.
-pub fn detect(view: &LumaView) -> Detections {
-    detect_traced(view, &mut Trace::new())
-}
-
-/// Run the full detection pipeline on `view`, recording each stage's
-/// output into `trace` (a no-op without the `debug-trace` feature).
-pub fn detect_traced(view: &LumaView, trace: &mut Trace) -> Detections {
+/// The single detection orchestration every entry point (`detect`,
+/// `detect_traced`, and `qrk-wasm`'s `scan_rgba`) funnels through: runs
+/// the three stages in order and, when `trace` is `Some`, records each
+/// stage's output into it. When `trace` is `None` no `record_*` call is
+/// made at all — not merely a cheap no-op — so a caller that does not
+/// want a trace never pays `Trace::record_finders`/`record_triplets`'s
+/// `to_vec()` clone cost even when this crate is compiled with the
+/// `debug-trace` feature (as `qrk-wasm` does, to keep the feature
+/// available for its own optional trace output without taxing the
+/// common no-trace path).
+pub fn detect_with(view: &LumaView, mut trace: Option<&mut Trace>) -> Detections {
     let tiles_clock = StageClock::start();
     let grid = TileGrid::build(view);
     let tiles_ns = tiles_clock.elapsed_ns();
-    trace.record_tiles(&grid);
+    if let Some(t) = &mut trace {
+        t.record_tiles(&grid);
+    }
 
     let finders_clock = StageClock::start();
     let finders = find_finders(view, &grid);
     let finders_ns = finders_clock.elapsed_ns();
-    trace.record_finders(&finders);
+    if let Some(t) = &mut trace {
+        t.record_finders(&finders);
+    }
 
     let triplets_clock = StageClock::start();
     let triplets = group_triplets(view, &grid, &finders);
     let triplets_ns = triplets_clock.elapsed_ns();
-    trace.record_triplets(&triplets);
+    if let Some(t) = &mut trace {
+        t.record_triplets(&triplets);
+    }
 
     Detections {
         finders,
         triplets,
         timings: StageTimings { tiles_ns, finders_ns, triplets_ns },
     }
+}
+
+/// Run the full detection pipeline on `view`, discarding trace data.
+pub fn detect(view: &LumaView) -> Detections {
+    detect_with(view, None)
+}
+
+/// Run the full detection pipeline on `view`, recording each stage's
+/// output into `trace` (a no-op without the `debug-trace` feature).
+pub fn detect_traced(view: &LumaView, trace: &mut Trace) -> Detections {
+    detect_with(view, Some(trace))
 }
 
 #[cfg(test)]

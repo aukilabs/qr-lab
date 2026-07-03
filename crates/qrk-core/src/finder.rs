@@ -3,6 +3,12 @@
 //! cross-sections in either polarity. Task 5 builds `find_finders` on top
 //! of `match_row` in this same file.
 
+// PLAN 5 (recorded): segment-level skip-tile scanning (skip only the
+// non-content *segments* of a row per TileGrid, not the whole row) must
+// land BEFORE NEON vectorization — today `find_finders` only implements
+// the coarser whole-row skip (`grid.row_all_skip(y)` below); the spec's
+// stage-2 per-segment skipping is not yet implemented.
+
 use crate::consts::ROW_STEP;
 use crate::tiles::TileGrid;
 use crate::LumaView;
@@ -51,18 +57,27 @@ pub(crate) fn pattern_fits(runs: &[f64; 5]) -> bool {
 /// chance to fire. Every window whose lengths satisfy [`pattern_fits`]
 /// (checked in both polarities, since the rule is symmetric in the run
 /// values) produces one [`RunHit`] appended to `out`.
-pub(crate) fn match_row(bits: impl Iterator<Item = bool>, out: &mut Vec<RunHit>) {
-    let mut runs: Vec<(bool, usize, usize)> = Vec::new();
+///
+/// `scratch` is caller-owned run-length storage: cleared at the top of
+/// this call and otherwise reused, so a caller scanning many rows (e.g.
+/// `find_finders`' row loop) can pass the same `Vec` every call instead
+/// of paying a fresh heap allocation per row.
+pub(crate) fn match_row(
+    bits: impl Iterator<Item = bool>,
+    scratch: &mut Vec<(bool, usize, usize)>,
+    out: &mut Vec<RunHit>,
+) {
+    scratch.clear();
     for (x, v) in bits.enumerate() {
-        match runs.last_mut() {
+        match scratch.last_mut() {
             Some(last) if last.0 == v => last.2 += 1,
-            _ => runs.push((v, x, 1)),
+            _ => scratch.push((v, x, 1)),
         }
     }
-    if runs.len() < 5 {
+    if scratch.len() < 5 {
         return;
     }
-    for w in runs.windows(5) {
+    for w in scratch.windows(5) {
         let lens = [
             w[0].2 as f64,
             w[1].2 as f64,
@@ -177,6 +192,10 @@ impl Scan<'_, '_> {
     fn verify_hit(&self, hit: &RunHit, y: usize) -> Option<FinderCandidate> {
         let x0 = hit.center.round() as isize;
         let y0 = y as isize;
+        // Per-run walk cap: the farthest a genuine run can extend from
+        // the seed pixel is the 3-module core's 1.5-module half, plus
+        // the 1-module separator, plus the 1-module ring = 3.5 modules;
+        // 4.0 adds slack for measurement jitter.
         let cap = ((4.0 * hit.module).ceil() as isize).max(1);
 
         let (v_runs, t) = self.axis_cross_check(x0, y0, 0, 1, cap)?;
@@ -218,6 +237,11 @@ fn merge_candidate(merged: &mut Vec<FinderCandidate>, new: FinderCandidate) {
         if (c.x - new.x).abs() >= thresh || (c.y - new.y).abs() >= thresh {
             continue;
         }
+        // 1.3, not the cross-finder 1.5 perspective bound (see
+        // triplet.rs's MAX_MODULE_RATIO derivation): `c` and `new` are
+        // two observations of the SAME finder, so they differ only by
+        // run-quantization jitter, not perspective foreshortening — a
+        // tighter bound is safe, and 1.3 sits between the two.
         let ratio = if c.module > new.module { c.module / new.module } else { new.module / c.module };
         if ratio > 1.3 {
             continue;
@@ -242,13 +266,18 @@ pub fn find_finders(view: &LumaView, grid: &TileGrid) -> Vec<FinderCandidate> {
     let scan = Scan { view, grid, w, h };
     let mut merged: Vec<FinderCandidate> = Vec::new();
     let mut row_hits: Vec<RunHit> = Vec::new();
+    // Scratch run-length buffer, hoisted out of the loop and reused
+    // (cleared inside `match_row`) across all ~h/ROW_STEP scanned rows —
+    // otherwise `match_row` would allocate a fresh `Vec` per row (~360
+    // times per 720p frame at ROW_STEP=2).
+    let mut runs_scratch: Vec<(bool, usize, usize)> = Vec::new();
     for y in (0..h).step_by(ROW_STEP) {
         if grid.row_all_skip(y) {
             continue;
         }
         row_hits.clear();
         let bits = (0..w).map(|x| view.get(x, y) < grid.threshold_at(x, y));
-        match_row(bits, &mut row_hits);
+        match_row(bits, &mut runs_scratch, &mut row_hits);
         for hit in &row_hits {
             if let Some(cand) = scan.verify_hit(hit, y) {
                 merge_candidate(&mut merged, cand);
@@ -288,7 +317,8 @@ mod tests {
             (false, 10),
         ]);
         let mut hits = Vec::new();
-        match_row(row.iter().copied(), &mut hits);
+        let mut scratch = Vec::new();
+        match_row(row.iter().copied(), &mut scratch, &mut hits);
         assert_eq!(hits.len(), 1);
         let h = &hits[0];
         assert!(!h.inverted);
@@ -310,7 +340,8 @@ mod tests {
             (true, 10),
         ]);
         let mut hits = Vec::new();
-        match_row(row.iter().copied(), &mut hits);
+        let mut scratch = Vec::new();
+        match_row(row.iter().copied(), &mut scratch, &mut hits);
         assert_eq!(hits.len(), 1);
         assert!(hits[0].inverted);
     }
@@ -327,7 +358,8 @@ mod tests {
             (false, 2),
         ]);
         let mut hits = Vec::new();
-        match_row(row.iter().copied(), &mut hits);
+        let mut scratch = Vec::new();
+        match_row(row.iter().copied(), &mut scratch, &mut hits);
         assert!(hits.is_empty());
     }
 
@@ -340,7 +372,8 @@ mod tests {
         spec.extend_from_slice(&one);
         spec.push((false, 8));
         let mut hits = Vec::new();
-        match_row(bits(&spec).iter().copied(), &mut hits);
+        let mut scratch = Vec::new();
+        match_row(bits(&spec).iter().copied(), &mut scratch, &mut hits);
         // NOTE (corrected vs. brief, see task-4-report.md for the full
         // numeric derivation): the brief asserted `hits.len() == 2`, but
         // `pattern_fits`'s own verbatim tolerance — outer runs within

@@ -47,16 +47,27 @@ impl TileGrid {
         TileGrid { tiles_x, tiles_y, threshold, skip }
     }
 
+    /// # Panics
+    /// Panics (via out-of-bounds slice indexing) if `x` or `y` is
+    /// outside the image this grid was built from, i.e.
+    /// `x >= tiles_x * TILE` or `y >= tiles_y * TILE`.
     #[inline]
     pub fn threshold_at(&self, x: usize, y: usize) -> u8 {
         self.threshold[(y / TILE) * self.tiles_x + x / TILE]
     }
 
+    /// # Panics
+    /// Panics (via out-of-bounds slice indexing) if `x` or `y` is
+    /// outside the image this grid was built from, i.e.
+    /// `x >= tiles_x * TILE` or `y >= tiles_y * TILE`.
     #[inline]
     pub fn is_skip(&self, x: usize, y: usize) -> bool {
         self.skip[(y / TILE) * self.tiles_x + x / TILE]
     }
 
+    /// # Panics
+    /// Panics (via out-of-bounds slice indexing) if `y` is outside the
+    /// image this grid was built from, i.e. `y >= tiles_y * TILE`.
     pub fn row_all_skip(&self, y: usize) -> bool {
         let base = (y / TILE) * self.tiles_x;
         self.skip[base..base + self.tiles_x].iter().all(|&s| s)

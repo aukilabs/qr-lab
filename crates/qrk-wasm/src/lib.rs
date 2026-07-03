@@ -3,10 +3,7 @@
 //! frame and gets back detections (and, optionally, the full per-stage
 //! trace) as a plain JS object.
 
-use qrk_core::{
-    detect_traced, find_finders, group_triplets, luma_from_rgba, Detections, LumaView, StageClock,
-    StageTimings, TileGrid, Trace,
-};
+use qrk_core::{detect_with, luma_from_rgba, Detections, LumaView, Trace};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -62,49 +59,21 @@ pub fn scan_rgba(
     let view = LumaView::new(&luma, width, height, width)
         .map_err(|e| JsValue::from_str(&format!("scan_rgba: invalid luma view: {e:?}")))?;
 
-    let (detections, trace) = if with_trace {
-        let mut trace = Trace::new();
-        let detections = detect_traced(&view, &mut trace);
-        (detections, Some(trace))
-    } else {
-        (detect_untraced(&view), None)
-    };
+    // `qrk_core::detect_with` is the single orchestration both `detect`
+    // and `detect_traced` funnel through; it only pays `Trace`'s
+    // record/clone cost when `trace` is `Some`, so passing `None` here
+    // (this crate compiles `qrk-core` with `debug-trace`) is as cheap as
+    // the old crate-local `detect_untraced` duplicate used to be —
+    // without needing that duplicate.
+    let mut trace = with_trace.then(Trace::new);
+    let detections = detect_with(&view, trace.as_mut());
 
     serde_wasm_bindgen::to_value(&WasmResult { detections, trace }).map_err(JsValue::from)
 }
 
-/// `qrk_core::detect` without trace recording. This crate compiles
-/// `qrk-core` with `debug-trace`, so plain `detect` would clone every
-/// stage's output (tile vectors, finder and triplet candidates) into a
-/// throwaway `Trace` on each frame; running the public stage functions
-/// directly skips that cost when the caller did not ask for a trace.
-fn detect_untraced(view: &LumaView<'_>) -> Detections {
-    let tiles_clock = StageClock::start();
-    let grid = TileGrid::build(view);
-    let tiles_ns = tiles_clock.elapsed_ns();
-
-    let finders_clock = StageClock::start();
-    let finders = find_finders(view, &grid);
-    let finders_ns = finders_clock.elapsed_ns();
-
-    let triplets_clock = StageClock::start();
-    let triplets = group_triplets(view, &grid, &finders);
-    let triplets_ns = triplets_clock.elapsed_ns();
-
-    Detections {
-        finders,
-        triplets,
-        timings: StageTimings {
-            tiles_ns,
-            finders_ns,
-            triplets_ns,
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{detect_untraced, WasmResult};
+    use super::WasmResult;
 
     const SIDE: usize = 32;
 
@@ -133,7 +102,7 @@ mod tests {
         let view = qrk_core::LumaView::new(&luma, SIDE, SIDE, SIDE).unwrap();
 
         let result = WasmResult {
-            detections: detect_untraced(&view),
+            detections: qrk_core::detect_with(&view, None),
             trace: None,
         };
         let json = serde_json::to_value(&result).unwrap();
@@ -171,13 +140,28 @@ mod tests {
     }
 
     #[test]
-    fn detect_untraced_matches_detect() {
-        let luma = flat_luma();
-        let view = qrk_core::LumaView::new(&luma, SIDE, SIDE, SIDE).unwrap();
+    fn detect_with_none_and_some_trace_agree_on_a_real_fixture() {
+        // `find_finders`'s row scan on flat/synthetic images short-circuits
+        // too early to exercise most of the detection pipeline, so this
+        // loads a real golden fixture (qrk-wasm has no fixture loader of
+        // its own — see `tests/common/mod.rs` in qrk-core — so read the
+        // raw bytes directly) and checks `detect_with(None)` (the
+        // `scan_rgba` no-trace path) against `detect_with(Some(..))` (the
+        // with-trace path) to confirm the shared orchestration produces
+        // identical detections either way.
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/near_00.luma");
+        let luma = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let (width, height) = (1280usize, 720usize);
+        assert_eq!(luma.len(), width * height, "near_00.luma: unexpected size");
+        let view = qrk_core::LumaView::new(&luma, width, height, width).unwrap();
 
-        let a = detect_untraced(&view);
-        let b = qrk_core::detect(&view);
+        let a = qrk_core::detect_with(&view, None);
+        let mut trace = qrk_core::Trace::new();
+        let b = qrk_core::detect_with(&view, Some(&mut trace));
+
         assert_eq!(a.finders.len(), b.finders.len());
         assert_eq!(a.triplets.len(), b.triplets.len());
+        assert!(!a.finders.is_empty(), "near_00 should yield finder candidates");
     }
 }

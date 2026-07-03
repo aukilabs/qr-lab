@@ -75,7 +75,8 @@ pub fn load(name: &str) -> Fixture {
 #[allow(dead_code)]
 pub fn expected_finder_centers(c: &CodeTruth) -> [[f64; 2]; 3] {
     let n = (4 * c.version + 17) as f64;
-    let h = PerspectiveTransform::square_to_quad(c.corners_px);
+    let h = PerspectiveTransform::square_to_quad(c.corners_px)
+        .expect("ground-truth quad is never degenerate");
     let f = 3.5 / n;
     let g = (n - 3.5) / n;
     [h.map(f, f), h.map(g, f), h.map(f, g)]
