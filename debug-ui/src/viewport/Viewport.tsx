@@ -2,7 +2,6 @@ import {
   useEffect,
   useRef,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
 } from "react";
 import {
   fitToView,
@@ -20,7 +19,9 @@ export interface ViewportProps {
   /** Called once per redraw with the overlay canvas's 2D context and the
    * current view transform; the ctx is in CSS-pixel space (already scaled
    * for devicePixelRatio and cleared) — layers project image-space data
-   * through `imageToScreen(view, ...)` themselves before drawing. */
+   * through `imageToScreen(view, ...)` themselves before drawing.
+   * Callers should memoize this callback; identity changes trigger a
+   * redraw. */
   overlays: (ctx: CanvasRenderingContext2D, view: ViewTransform) => void;
   /** Fires on every pointer move with the image-space coordinates under
    * the cursor, and with `null` when the pointer leaves the viewport — for
@@ -152,15 +153,34 @@ export function Viewport({ image, overlays, onCursorImagePos }: ViewportProps) {
     cb(screenPoint ? screenToImage(viewRef.current, screenPoint) : null);
   };
 
-  const handleWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const point = containerPoint(e.clientX, e.clientY);
-    if (!point) return;
-    const factor = Math.exp(-e.deltaY * WHEEL_ZOOM_SENSITIVITY);
-    viewRef.current = zoomAt(viewRef.current, point, factor);
-    scheduleRedraw();
-    reportCursor(point);
-  };
+  // Wheel-to-zoom. Attached manually (not via JSX `onWheel`) because React
+  // registers its wheel listeners as PASSIVE since v17, which makes
+  // `preventDefault()` a silent no-op — the page would scroll / pinch-zoom
+  // alongside our zoomAt. A native `{ passive: false }` listener is the
+  // only way to actually consume the event. The handler reads everything
+  // through refs (viewRef etc.), so binding once is safe; the container
+  // div's identity is stable for the component's lifetime (a single,
+  // unconditionally rendered element), so this effect never needs to
+  // re-bind — if that ever changes, switch containerRef to a callback ref
+  // and re-run this effect off the node.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleWheel = (e: globalThis.WheelEvent) => {
+      e.preventDefault();
+      const point = containerPoint(e.clientX, e.clientY);
+      if (!point) return;
+      const factor = Math.exp(-e.deltaY * WHEEL_ZOOM_SENSITIVITY);
+      viewRef.current = zoomAt(viewRef.current, point, factor);
+      scheduleRedraw();
+      reportCursor(point);
+    };
+
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handler reads only refs; container node is stable
+  }, []);
 
   const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -213,7 +233,6 @@ export function Viewport({ image, overlays, onCursorImagePos }: ViewportProps) {
         touchAction: "none",
         cursor: "grab",
       }}
-      onWheel={handleWheel}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={endDrag}

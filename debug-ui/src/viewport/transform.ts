@@ -77,6 +77,12 @@ export function fitToView(
   if (imgW <= 0 || imgH <= 0 || viewW <= 0 || viewH <= 0) {
     return identity;
   }
+  // The contain-scale goes through the same [MIN_SCALE, MAX_SCALE] clamp
+  // as interactive zoom. Trade-off: an image so large that fitting needs
+  // scale < MIN_SCALE (e.g. a 100000px-wide strip into a 100px view) gets
+  // clipped instead of fully shown — accepted, since a consistent zoom
+  // floor matters more than pathological aspect ratios the debug UI never
+  // feeds it (a 24MP photo still fits at 0.05).
   const scale = clampScale(Math.min(viewW / imgW, viewH / imgH));
   return {
     scale,

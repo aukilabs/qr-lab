@@ -150,6 +150,20 @@ describe("fitToView", () => {
     expect(t.ty).toBeCloseTo(0, 6);
   });
 
+  it("clamps the contain-scale to the zoom floor, accepting clipping at extreme aspect ratios", () => {
+    // 100000x10 strip into a 100x100 view would need scale 0.001 to fit;
+    // the shared zoom clamp floors it at 0.05, so the strip is centered
+    // but clipped horizontally. Pins the documented trade-off in
+    // fitToView: the zoom floor wins over the "whole image visible"
+    // contract for pathological inputs.
+    const t = fitToView(100000, 10, 100, 100);
+    expect(t.scale).toBeCloseTo(0.05, 6);
+    expect(t.tx).toBeCloseTo((100 - 100000 * 0.05) / 2, 6); // -2450: clipped
+    expect(t.ty).toBeCloseTo((100 - 10 * 0.05) / 2, 6); // 49.75: centered
+    // Left edge of the image lands far off-screen — clipping is accepted.
+    expect(imageToScreen(t, [0, 0])[0]).toBeLessThan(0);
+  });
+
   it("falls back to identity for degenerate (non-positive) dimensions", () => {
     expect(fitToView(0, 100, 200, 200)).toEqual(identity);
     expect(fitToView(100, 0, 200, 200)).toEqual(identity);
