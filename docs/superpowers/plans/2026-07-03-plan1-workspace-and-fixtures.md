@@ -1328,6 +1328,163 @@ git commit -m "test: Rust golden-fixture loader + suite smoke tests"
 
 ---
 
+### Task 7 (user addition, post-merge): inverted and transparent-background fixtures
+
+**Rationale (user):** all fixtures had dark modules on a white plate; the scanner must also handle inverted codes, and must not assume perfect module↔background contrast — so add fixtures with no plate at all (modules composited straight onto the scene background).
+
+**Files:**
+- Modify: `tools/fixtures/render.py` (render_code signature + compositing)
+- Modify: `tools/fixtures/scenarios.py` (CodeSpec fields + 3 new scenario blocks)
+- Modify: `tools/fixtures/generate.py` (pass flags through; record in JSON)
+- Modify: `tools/fixtures/test_render.py`, `tools/fixtures/test_scenarios.py`, `tools/fixtures/test_suite_sanity.py`
+- Modify: `crates/qrk-core/tests/common/mod.rs`, `crates/qrk-core/tests/fixtures_smoke.rs`
+- Regenerate: `fixtures/` (all JSONs gain 2 fields; existing png/luma must stay byte-identical; 16 new fixtures)
+
+**Interfaces:**
+- `render.render_code(img, intr, R, t, modules, physical_size_m, levels, inverted=False, opaque_plate=True)` — `inverted` swaps ink/plate levels; `opaque_plate=False` paints ONLY the modules (alpha = module coverage; ink color constant across the source so the mask alone carries edges — correct un-premultiplied compositing).
+- `scenarios.CodeSpec` gains `inverted: bool = False`, `opaque_plate: bool = True` (dataclass fields with defaults, placed after `image_point`).
+- JSON per-code gains `"inverted"` and `"opaque_plate"` booleans (all fixtures regenerated so every JSON carries them).
+- `common::CodeTruth` gains `pub inverted: bool, pub opaque_plate: bool`.
+- New scenarios: `inv_00..05` (inverted, opaque), `trans_00..05` (normal polarity, transparent), `invtrans_00..03` (inverted + transparent); all `dist_range=(0.5, 1.2)` so modules stay ≥5 px (the ink probes sit 1.9+ px from edges, safely past blur). Suite: 65 → **81** fixtures.
+
+- [ ] **Step 1: Update render.py**
+
+Replace `render_code` body's source/mask construction:
+
+```python
+def render_code(img, intr, r, t, modules, physical_size_m, levels,
+                inverted=False, opaque_plate=True):
+    """Draw one code into img (uint8 h×w), in place.
+
+    inverted: light modules on a dark plate (or on the background).
+    opaque_plate=False: paint only the modules — the quiet zone and light
+    cells are transparent, so the scene background shows through.
+    """
+    n = modules.shape[0]
+    total = n + 2 * QUIET_MODULES
+    ink = levels.white if inverted else levels.black
+    plate = levels.black if inverted else levels.white
+    dark = np.kron(modules, np.ones((MODULE_SRC_PX, MODULE_SRC_PX), bool))
+    q = QUIET_MODULES * MODULE_SRC_PX
+    if opaque_plate:
+        src = np.full((total * MODULE_SRC_PX, total * MODULE_SRC_PX),
+                      plate, np.uint8)
+        src[q:q + n * MODULE_SRC_PX, q:q + n * MODULE_SRC_PX][dark] = ink
+        mask_src = np.full(src.shape, 255, np.uint8)
+    else:
+        # Constant ink color; the alpha mask alone carries the module
+        # edges (un-premultiplied compositing, no plate-color bleed).
+        src = np.full((total * MODULE_SRC_PX, total * MODULE_SRC_PX),
+                      ink, np.uint8)
+        mask_src = np.zeros(src.shape, np.uint8)
+        mask_src[q:q + n * MODULE_SRC_PX, q:q + n * MODULE_SRC_PX][dark] = 255
+```
+
+and warp `mask_src` where the old code warped the constant-255 image (`borderValue=0` for the mask as before; keep the src warp's `borderValue=255`). Everything from `h_mat` on is unchanged except the mask source.
+
+- [ ] **Step 2: Add render tests (test_render.py)**
+
+```python
+def test_inverted_swaps_ink_and_plate():
+    intr, R, t, size = _frontal(distance=0.8)
+    img = np.full((intr.height, intr.width), 128, np.uint8)
+    modules = render.make_symbol("inv", version=1, ecc="m", mirrored=False)
+    render.render_code(img, intr, R, t, modules, size, render.Levels(),
+                       inverted=True)
+    c = render.corners_px(intr, R, t, size)
+    module_px = (c[1, 0] - c[0, 0]) / 21
+    fx = int(round(c[0, 0] + 3.5 * module_px))
+    fy = int(round(c[0, 1] + 3.5 * module_px))
+    assert img[fy, fx] > 180          # finder center now light ink
+    qx = int(round(c[0, 0] - 2.0 * module_px))
+    qy = int(round(c[0, 1] - 2.0 * module_px))
+    assert img[qy, qx] < 80           # quiet zone now dark plate
+
+
+def test_transparent_leaves_background_in_quiet_zone():
+    intr, R, t, size = _frontal(distance=0.8)
+    img = np.full((intr.height, intr.width), 128, np.uint8)
+    modules = render.make_symbol("trans", version=1, ecc="m", mirrored=False)
+    render.render_code(img, intr, R, t, modules, size, render.Levels(),
+                       opaque_plate=False)
+    c = render.corners_px(intr, R, t, size)
+    module_px = (c[1, 0] - c[0, 0]) / 21
+    fx = int(round(c[0, 0] + 3.5 * module_px))
+    fy = int(round(c[0, 1] + 3.5 * module_px))
+    assert img[fy, fx] < 80           # dark module ink still painted
+    qx = int(round(c[0, 0] - 2.0 * module_px))
+    qy = int(round(c[0, 1] - 2.0 * module_px))
+    assert img[qy, qx] == 128         # quiet zone untouched background
+    # Light cell inside the symbol is also background: module (1..? use the
+    # finder white ring at 1.5 modules in from TL, axis-aligned).
+    wx = int(round(c[0, 0] + 1.5 * module_px))
+    wy = int(round(c[0, 1] + 1.5 * module_px))
+    assert 100 < img[wy, wx] < 160
+```
+
+- [ ] **Step 3: scenarios.py — CodeSpec fields + blocks**
+
+Add to `CodeSpec` (after `image_point`): `inverted: bool = False`, `opaque_plate: bool = True`. Thread both through `_sample_code(..., inverted=False, opaque_plate=True)` into the built `CodeSpec`. Append after the combo block:
+
+```python
+    for i in range(6):  # inverted: light modules on dark plate
+        rng = _rng_for(seed, f"inv_{i:02d}")
+        add(f"inv_{i:02d}",
+            [_sample_code(rng, intr, f"inv_{i:02d}", 0, inverted=True,
+                          dist_range=(0.5, 1.3))], 0.6, 2.0)
+
+    for i in range(6):  # transparent: modules only, background quiet zone
+        rng = _rng_for(seed, f"trans_{i:02d}")
+        add(f"trans_{i:02d}",
+            [_sample_code(rng, intr, f"trans_{i:02d}", 0, opaque_plate=False,
+                          dist_range=(0.5, 1.2))], 0.6, 2.0)
+
+    for i in range(4):  # inverted + transparent
+        rng = _rng_for(seed, f"invtrans_{i:02d}")
+        add(f"invtrans_{i:02d}",
+            [_sample_code(rng, intr, f"invtrans_{i:02d}", 0, inverted=True,
+                          opaque_plate=False, dist_range=(0.5, 1.2))], 0.6, 2.0)
+```
+
+Payload lengths: `Q:invtrans_00:0` = 15 bytes — OVER v1-M capacity (14). These three blocks therefore pass `ecc="l"` (v1-L byte capacity 17) to `_sample_code`. Update the matrix-coverage test with the three new prefixes (6, 6, 4) and extend `test_far_and_near_distances_respect_spec`-style checks only if trivially applicable.
+
+- [ ] **Step 4: generate.py — record flags**
+
+Pass `code.inverted, code.opaque_plate` into `render.render_code(...)` and add to the per-code truth dict: `"inverted": code.inverted, "opaque_plate": code.opaque_plate`.
+
+- [ ] **Step 5: Regenerate and verify additivity**
+
+`cd tools/fixtures && .venv/bin/python generate.py --out ../../fixtures --seed 7` → 81 fixtures. Verify with git: all 65 pre-existing `.png`/`.luma` files byte-identical (only JSONs change — two added fields — plus 48 new files). Update `test_suite_is_complete` minimum to 81. If any pre-existing image file changed, STOP — the render change leaked into the opaque path.
+
+- [ ] **Step 6: Rust loader + smoke test polarity awareness**
+
+`CodeTruth` gains `pub inverted: bool, pub opaque_plate: bool`. Replace the ink assertions in `luma_pixels_match_ground_truth_ink`:
+
+```rust
+            let inside = v.get(...);   // unchanged probe positions
+            let outside = v.get(...);
+            // Non-inverted keeps the proven <110 bound (far_* modules are
+            // ~3.6 px; blur bleed rules out a tighter one). Inverted
+            // scenarios are all near (modules >=5.5 px), so >170 is safe.
+            if c.inverted {
+                assert!(inside > 170, "{}: inside={}", f.name, inside);
+            } else {
+                assert!(inside < 110, "{}: inside={}", f.name, inside);
+            }
+            match (c.opaque_plate, c.inverted) {
+                (true, false) => assert!(outside > 150, "{}: out={}", f.name, outside),
+                (true, true) => assert!(outside < 110, "{}: out={}", f.name, outside),
+                (false, _) => assert!(outside > 95 && outside < 165,
+                                      "{}: out={}", f.name, outside),
+            }
+```
+
+(Existing suite invariants — count ≥ 81 now, corners in-frame, module_size > 1.5 — unchanged.)
+
+- [ ] **Step 7: Full verification + commit**
+
+`pytest` (tools/fixtures): all pass including the two new render tests and updated matrix/sanity counts. `cargo test -p qrk-core`: 7/7. Commit code + regenerated fixtures: "feat: inverted and transparent-background fixture scenarios".
+
 ## Self-review notes
 
 - **Spec coverage (plan 1 scope = spec §6 items 0 and milestone 1):** camera model ✓ (Task 2), supersampled renderer with exact homography ✓ (Task 3), full scenario matrix incl. combos + version sweep with size scaling ✓ (Task 4), deterministic seeding ✓ (Tasks 4), committed suite ✓ (Task 5), independent-decoder sanity ✓ (Task 5), Rust contract ✓ (Tasks 1, 6). Later spec sections (detector, decode, refinement, UI, FFI) are Plans 2–5 by design.
