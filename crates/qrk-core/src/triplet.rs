@@ -1,16 +1,26 @@
 //! Groups verified finder-pattern candidates (Task 5's `FinderCandidate`)
 //! into triplets that plausibly form one QR code's three finder corners,
 //! and estimates the code's module dimension from the triplet's geometry.
-//! Every tolerance below is derived from QR geometry or the fixture
-//! suite's perspective envelope — see the Plan 2 Task 6 algorithm contract
-//! (task-6-brief.md) and task-6-report.md for the full derivations.
+//!
+//! Dimension estimation follows the amended Plan 2 Task 6 contract
+//! (recorded decision after the first gate run — see the plan's Task 6
+//! section): the scan-measured `FinderCandidate.module` is systematically
+//! biased by `1/cos(rotation)` (axis-aligned scan lines cross a rotated
+//! grid along a chord) and cannot represent per-axis perspective
+//! foreshortening, so the module is instead measured **along each leg**
+//! on the binarized image, per zxing's established
+//! `Detector.calculateModuleSize` approach. Every tolerance below is
+//! derived from QR geometry or the perspective envelope — never a value
+//! tuned against a fixture (Plan 2 "No overfitting").
 
 use crate::finder::FinderCandidate;
+use crate::tiles::TileGrid;
+use crate::LumaView;
 
 /// A grouped triplet, canonically ordered `tl`/`tr`/`bl` (cross product
 /// `(tr-tl)x(bl-tl) > 0` in y-down image coordinates — normal reading
-/// order), plus the dimension estimate derived from the triplet's leg
-/// lengths.
+/// order), plus the dimension estimate derived from per-leg module
+/// measurements.
 #[derive(Clone, Copy, Debug)]
 pub struct TripletCandidate {
     pub tl: [f64; 2],
@@ -46,18 +56,19 @@ const MAX_ABS_COS: f64 = 0.4;
 /// wrong-corner pairing.
 const MAX_LEG_IMBALANCE: f64 = 0.5;
 
-/// Pairwise finder module-size ratio must be at most this. A single QR
-/// code's three finders share one physical module size; under perspective
-/// the nearer finder can read larger than the farther one, but the
-/// fixture suite's steepest single-code perspective does not spread a
-/// genuine triple's module estimates beyond 1.5x. A larger spread is
-/// treated as evidence the three candidates come from different codes
+/// Pairwise finder scan-module-size ratio must be at most this. Per the
+/// amended contract this is a *coarse pre-filter only* (the scan module
+/// is rotation-biased; the authoritative module comes from the per-leg
+/// measurement below): a single QR code's three finders share one
+/// physical module size, and even under the suite's steepest perspective
+/// the scan estimates of a genuine triple do not spread beyond 1.5x. A
+/// larger spread is evidence the candidates come from different codes
 /// (cross-code noise in multi-code frames).
 const MAX_MODULE_RATIO: f64 = 1.5;
 
-/// The two per-leg dimension estimates (`round(leg/module) + 7`) from one
-/// triplet must agree within this many modules, or the legs are not both
-/// measuring the same code's side (mismatched/degenerate grouping).
+/// The two per-leg dimension estimates (`round(leg/module_leg) + 7`) from
+/// one triplet must agree within this many modules, or the legs are not
+/// both measuring the same code's side (mismatched/degenerate grouping).
 const MAX_DIM_DISAGREEMENT: i64 = 4;
 
 /// QR Model 2 dimension range: version 1..=40 -> `21 + 4*(v-1)` spans
@@ -115,10 +126,109 @@ fn snap_dimension(mean: f64) -> (i64, f64) {
     (snapped, (mean - snapped as f64).abs())
 }
 
-/// Evaluate one unordered candidate triple: polarity + module-ratio gate,
-/// corner identification, angle + leg-balance gate, canonical ordering,
-/// then the dimension estimate + its gates. `None` if any gate fails.
-fn try_group(a: FinderCandidate, b: FinderCandidate, c: FinderCandidate) -> Option<TripletCandidate> {
+fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
+}
+
+/// Walk the binarized line from `from` toward `to` (DDA, unit steps along
+/// the dominant axis — the same mild Bresenham variant zxing's
+/// `Detector.sizeOfBlackWhiteBlackRun` uses) and measure the
+/// ink(1.5)+space(1)+ink(1) crossing that starts at a finder's center:
+/// from inside the 3-module core (1.5 modules of ink from center to
+/// edge), through the 1-module light separator, through the 1-module dark
+/// ring, ending at the first sample past the ring — 3.5 modules of
+/// distance in total. Ink is polarity-aware against the tile thresholds:
+/// `(pixel < threshold) != inverted`.
+///
+/// Returns `Some(distance from `from` to the exit sample)` when the
+/// crossing completes; `None` when the walk leaves the image or reaches
+/// `to` first (a truncated walk — the caller applies the amendment's
+/// border correction).
+fn bwb_run(view: &LumaView, grid: &TileGrid, inverted: bool, from: [f64; 2], to: [f64; 2]) -> Option<f64> {
+    let (w, h) = (view.width() as isize, view.height() as isize);
+    let dx = to[0] - from[0];
+    let dy = to[1] - from[1];
+    let steps = dx.abs().max(dy.abs()).ceil() as usize;
+    if steps == 0 {
+        return None;
+    }
+    let sx = dx / steps as f64;
+    let sy = dy / steps as f64;
+    // state 0: in core ink; 1: in separator space; 2: in ring ink.
+    // zxing's transition test: states 0 and 2 scan ink, state 1 scans
+    // space; finding the "wrong color" advances the state, and leaving
+    // state 2 completes the crossing.
+    let mut state = 0u8;
+    for i in 0..=steps {
+        let x = from[0] + sx * i as f64;
+        let y = from[1] + sy * i as f64;
+        let (xi, yi) = (x.round() as isize, y.round() as isize);
+        if xi < 0 || yi < 0 || xi >= w || yi >= h {
+            return None; // truncated at the image border mid-crossing
+        }
+        let (xu, yu) = (xi as usize, yi as usize);
+        let ink = (view.get(xu, yu) < grid.threshold_at(xu, yu)) != inverted;
+        if (state == 1) == ink {
+            if state == 2 {
+                return Some(((x - from[0]).powi(2) + (y - from[1]).powi(2)).sqrt());
+            }
+            state += 1;
+        }
+    }
+    None // reached `to` without completing the crossing
+}
+
+/// zxing `Detector.sizeOfBlackWhiteBlackRunBothWays`: the crossing from
+/// `a` toward `b` (3.5 modules) plus the crossing from `a` directly away
+/// from `b` (another 3.5 modules) — 7 modules of distance in total. The
+/// paired sample-quantized walks overshoot the crossing by one sample
+/// between them (zxing: "middle pixel is double-counted this way;
+/// subtract 1"), hence the `- 1.0`. A walk truncated at the image border
+/// contributes its partner's value doubled instead (the amendment's zxing
+/// border correction); both truncated means this endpoint measures
+/// nothing.
+fn bwb_both(view: &LumaView, grid: &TileGrid, inverted: bool, a: [f64; 2], b: [f64; 2]) -> Option<f64> {
+    let toward = bwb_run(view, grid, inverted, a, b);
+    let away_target = [2.0 * a[0] - b[0], 2.0 * a[1] - b[1]];
+    let away = bwb_run(view, grid, inverted, a, away_target);
+    match (toward, away) {
+        (Some(t), Some(w)) => Some(t + w - 1.0),
+        (Some(t), None) => Some(2.0 * t - 1.0),
+        (None, Some(w)) => Some(2.0 * w - 1.0),
+        (None, None) => None,
+    }
+}
+
+/// zxing `Detector.calculateModuleSizeOneWay`: the module size along the
+/// leg `a`—`b`, as the mean of the 7-module both-ways crossings measured
+/// from each endpoint — `(bwb_both(a,b) + bwb_both(b,a)) / 14`. If one
+/// endpoint's measurement failed entirely, the other alone divided by 7
+/// (zxing's NaN fallback); both failed -> `None` (caller rejects the
+/// triple).
+fn leg_module(view: &LumaView, grid: &TileGrid, inverted: bool, a: [f64; 2], b: [f64; 2]) -> Option<f64> {
+    match (
+        bwb_both(view, grid, inverted, a, b),
+        bwb_both(view, grid, inverted, b, a),
+    ) {
+        (Some(x), Some(y)) => Some((x + y) / 14.0),
+        (Some(x), None) => Some(x / 7.0),
+        (None, Some(y)) => Some(y / 7.0),
+        (None, None) => None,
+    }
+}
+
+/// Evaluate one unordered candidate triple: image-free geometry gates
+/// (polarity, coarse scan-module ratio, corner identification, angle +
+/// leg-balance), canonical ordering, then per-leg module measurement on
+/// the binarized image and the dimension estimate + its gates. `None` if
+/// any gate fails.
+fn try_group(
+    view: &LumaView,
+    grid: &TileGrid,
+    a: FinderCandidate,
+    b: FinderCandidate,
+    c: FinderCandidate,
+) -> Option<TripletCandidate> {
     if a.inverted != b.inverted || b.inverted != c.inverted {
         return None;
     }
@@ -170,11 +280,15 @@ fn try_group(a: FinderCandidate, b: FinderCandidate, c: FinderCandidate) -> Opti
         std::mem::swap(&mut tr, &mut bl);
     }
 
-    let module = (a.module + b.module + c.module) / 3.0;
-    let leg_tr = ((tr[0] - tl[0]).powi(2) + (tr[1] - tl[1]).powi(2)).sqrt();
-    let leg_bl = ((bl[0] - tl[0]).powi(2) + (bl[1] - tl[1]).powi(2)).sqrt();
-    let dim_tr = (leg_tr / module).round() as i64 + 7;
-    let dim_bl = (leg_bl / module).round() as i64 + 7;
+    // Per-leg module (amended contract): measured along each leg on the
+    // binarized image, so in-plane rotation cancels (the walk direction
+    // rotates with the code) and perspective foreshortening is captured
+    // per axis.
+    let inverted = a.inverted;
+    let module_tr = leg_module(view, grid, inverted, tl, tr)?;
+    let module_bl = leg_module(view, grid, inverted, tl, bl)?;
+    let dim_tr = (dist(tl, tr) / module_tr).round() as i64 + 7;
+    let dim_bl = (dist(tl, bl) / module_bl).round() as i64 + 7;
     if (dim_tr - dim_bl).abs() > MAX_DIM_DISAGREEMENT {
         return None;
     }
@@ -188,23 +302,25 @@ fn try_group(a: FinderCandidate, b: FinderCandidate, c: FinderCandidate) -> Opti
         tl,
         tr,
         bl,
-        module,
+        module: (module_tr + module_bl) / 2.0,
         dimension: snapped as u32,
         snap_error,
-        inverted: a.inverted,
+        inverted,
     })
 }
 
 /// Groups `finders` into every plausible finder triplet: tests each
-/// unordered triple against [`try_group`]'s gates, then sorts survivors by
-/// ascending `snap_error` and caps the result at [`MAX_TRIPLETS`].
-pub fn group_triplets(finders: &[FinderCandidate]) -> Vec<TripletCandidate> {
+/// unordered triple against [`try_group`]'s gates (geometry first, then
+/// per-leg module measurement on the binarized `view`), then sorts
+/// survivors by ascending `snap_error` and caps the result at
+/// [`MAX_TRIPLETS`].
+pub fn group_triplets(view: &LumaView, grid: &TileGrid, finders: &[FinderCandidate]) -> Vec<TripletCandidate> {
     let n = finders.len();
     let mut out = Vec::new();
     for i in 0..n {
         for j in (i + 1)..n {
             for k in (j + 1)..n {
-                if let Some(t) = try_group(finders[i], finders[j], finders[k]) {
+                if let Some(t) = try_group(view, grid, finders[i], finders[j], finders[k]) {
                     out.push(t);
                 }
             }
@@ -219,28 +335,55 @@ pub fn group_triplets(finders: &[FinderCandidate]) -> Vec<TripletCandidate> {
 mod tests {
     use super::*;
     use crate::finder::FinderCandidate;
+    use crate::testpaint::{paint_finder, paint_finder_rotated};
 
     fn f(x: f64, y: f64) -> FinderCandidate {
         FinderCandidate { x, y, module: 4.0, inverted: false, hits: 3 }
     }
 
+    /// 220x220 light image with the axis-aligned v1 layout the accept-path
+    /// tests use: finder centers (100,100), (156,100), (100,156) at
+    /// 4px/module (top-left corners at center - 3.5*4 = 14).
+    fn v1_image() -> Vec<u8> {
+        let mut img = vec![225u8; 220 * 220];
+        for (ox, oy) in [(86, 86), (142, 86), (86, 142)] {
+            paint_finder(&mut img, 220, ox, oy, 4, 25, 225);
+        }
+        img
+    }
+
+    /// Flat light image for the pure-geometry reject tests: they
+    /// short-circuit in the image-free filters, so the content is never
+    /// sampled — the view/grid just have to exist.
+    fn flat_image() -> Vec<u8> {
+        vec![200u8; 64 * 64]
+    }
+
     #[test]
     fn groups_axis_aligned_v1() {
         // v1: n=21, leg = 14 modules = 56px.
-        let t = group_triplets(&[f(100.0, 100.0), f(156.0, 100.0), f(100.0, 156.0)]);
+        let img = v1_image();
+        let view = crate::LumaView::new(&img, 220, 220, 220).unwrap();
+        let grid = TileGrid::build(&view);
+        let t = group_triplets(&view, &grid, &[f(100.0, 100.0), f(156.0, 100.0), f(100.0, 156.0)]);
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].dimension, 21);
         assert_eq!(t[0].tl, [100.0, 100.0]);
         assert_eq!(t[0].tr, [156.0, 100.0]);
         assert_eq!(t[0].bl, [100.0, 156.0]);
         assert!(t[0].snap_error < 0.6);
+        // The per-leg measurement must recover the painted 4px module.
+        assert!((t[0].module - 4.0).abs() < 0.3, "module={}", t[0].module);
     }
 
     #[test]
     fn canonicalizes_mirrored_order() {
         // Same three points fed so the natural order is mirrored;
         // output must still satisfy the cross-product convention.
-        let t = group_triplets(&[f(100.0, 100.0), f(100.0, 156.0), f(156.0, 100.0)]);
+        let img = v1_image();
+        let view = crate::LumaView::new(&img, 220, 220, 220).unwrap();
+        let grid = TileGrid::build(&view);
+        let t = group_triplets(&view, &grid, &[f(100.0, 100.0), f(100.0, 156.0), f(156.0, 100.0)]);
         assert_eq!(t.len(), 1);
         let (tl, tr, bl) = (t[0].tl, t[0].tr, t[0].bl);
         let cross = (tr[0] - tl[0]) * (bl[1] - tl[1])
@@ -250,18 +393,38 @@ mod tests {
 
     #[test]
     fn rejects_mixed_polarity_and_bad_geometry() {
+        let img = flat_image();
+        let view = crate::LumaView::new(&img, 64, 64, 64).unwrap();
+        let grid = TileGrid::build(&view);
         let mut inv = f(156.0, 100.0);
         inv.inverted = true;
-        assert!(group_triplets(&[f(100.0, 100.0), inv, f(100.0, 156.0)]).is_empty());
+        assert!(group_triplets(&view, &grid, &[f(100.0, 100.0), inv, f(100.0, 156.0)]).is_empty());
         // Collinear points: no ~90° corner.
-        assert!(group_triplets(&[f(0.0, 0.0), f(50.0, 0.0), f(100.0, 0.0)]).is_empty());
+        assert!(group_triplets(&view, &grid, &[f(0.0, 0.0), f(50.0, 0.0), f(100.0, 0.0)]).is_empty());
         // Legs too unbalanced (14 vs 40 modules).
-        assert!(group_triplets(&[f(0.0, 0.0), f(56.0, 0.0), f(0.0, 160.0)]).is_empty());
+        assert!(group_triplets(&view, &grid, &[f(0.0, 0.0), f(56.0, 0.0), f(0.0, 160.0)]).is_empty());
     }
 
     #[test]
     fn rotated_45_still_groups() {
-        let t = group_triplets(&[
+        // The whole v1 code rotated 45° in-plane: the finder squares
+        // rotate with the code, so the bwb walks (which run along the
+        // legs, i.e. along the rotated grid axes) must still measure
+        // ~4px/module — exactly the 1/cos(rotation) bias the amendment
+        // removes from the old scan-module approach.
+        let (w, h) = (400usize, 400usize);
+        let mut img = vec![225u8; w * h];
+        let ang = std::f64::consts::FRAC_PI_4;
+        for center in [
+            [200.0, 200.0],
+            [200.0 + 39.6, 200.0 + 39.6],
+            [200.0 - 39.6, 200.0 + 39.6],
+        ] {
+            paint_finder_rotated(&mut img, w, center, 4.0, ang, 25, 225);
+        }
+        let view = crate::LumaView::new(&img, w, h, w).unwrap();
+        let grid = TileGrid::build(&view);
+        let t = group_triplets(&view, &grid, &[
             f(200.0, 200.0),
             f(200.0 + 39.6, 200.0 + 39.6),
             f(200.0 - 39.6, 200.0 + 39.6),

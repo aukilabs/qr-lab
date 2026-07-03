@@ -4,6 +4,8 @@ mod consts;
 mod finder;
 mod homography;
 mod luma;
+#[cfg(test)]
+mod testpaint;
 mod tiles;
 mod triplet;
 

@@ -357,23 +357,9 @@ mod tests {
         assert_eq!(normal.len(), 2);
     }
 
-    /// Paint an axis-aligned finder pattern (7x7 modules, scale px/module)
-    /// at (ox, oy) into a light background.
-    fn paint_finder(img: &mut [u8], w: usize, ox: usize, oy: usize,
-                    scale: usize, ink: u8, bg_ring: u8) {
-        for my in 0..7 {
-            for mx in 0..7 {
-                let dark = my == 0 || my == 6 || mx == 0 || mx == 6
-                    || ((2..=4).contains(&mx) && (2..=4).contains(&my));
-                let v = if dark { ink } else { bg_ring };
-                for py in 0..scale {
-                    for px in 0..scale {
-                        img[(oy + my * scale + py) * w + ox + mx * scale + px] = v;
-                    }
-                }
-            }
-        }
-    }
+    // Painting helper promoted to a shared cfg(test) module when the
+    // triplet.rs accept-path tests started needing it too.
+    use crate::testpaint::paint_finder;
 
     #[test]
     fn detects_synthetic_finder_both_polarities() {

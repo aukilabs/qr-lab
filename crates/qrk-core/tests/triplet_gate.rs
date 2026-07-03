@@ -13,7 +13,9 @@ fn every_code_yields_a_matching_triplet() {
     for fx in common::load_all() {
         let view = fx.view();
         let grid = TileGrid::build(&view);
-        let trips = group_triplets(&find_finders(&view, &grid));
+        // Call site updated for the amended contract's signature (per-leg
+        // module measurement needs the binarized image).
+        let trips = group_triplets(&view, &grid, &find_finders(&view, &grid));
         for c in &fx.codes {
             let exp = common::expected_finder_centers(c);
             let tol = c.module_size_px.max(2.0);
