@@ -51,6 +51,14 @@ def test_version_sweep_scales_physical_size_for_module_px():
     assert versions[0] == 1 and versions[-1] == 40
 
 
+def test_every_code_fits_in_frame():
+    import camera
+    intr = camera.Intrinsics.default()
+    for s in scenarios.build_all(seed=7):
+        for code in s.codes:
+            assert scenarios._fits(intr, code), (s.name, code.payload)
+
+
 def test_generate_cli_writes_fixture_triplet(tmp_path):
     subprocess.run(
         [sys.executable, "generate.py", "--out", str(tmp_path),

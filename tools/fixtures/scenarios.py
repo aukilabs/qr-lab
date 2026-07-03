@@ -151,16 +151,34 @@ def build_all(seed: int):
         rng = _rng_for(seed, name)
         n = v * 4 + 17
         dist = 0.9
-        size = 5.0 * n * dist / intr.fx  # target ~5 px/module
+        # 5 px/module target, shrunk until the quiet-zone corners fit
+        # in-frame — large versions (v30+) cannot reach 5 px/module in
+        # 720p, especially under random in-plane rotation.
+        size = 5.0 * n * dist / intr.fx
         payload = f"QRK:{name}:" + "x" * max(0, (v * v) // 2)
-        add(name, [CodeSpec(
-            payload=payload, version=v,
-            ecc=["l", "m", "q", "h"][i % 4], mirrored=False,
-            physical_size_m=size, distance_m=dist,
-            tilt_deg=float(rng.uniform(0, 10)),
-            tilt_azimuth_deg=float(rng.uniform(0, 360)),
-            inplane_deg=float(rng.uniform(0, 360)),
-            image_point=(intr.cx, intr.cy))], 0.6, 2.0)
+        tilt_deg = float(rng.uniform(0, 10))
+        tilt_azimuth_deg = float(rng.uniform(0, 360))
+        inplane_deg = float(rng.uniform(0, 360))
+
+        def make(size_m):
+            return CodeSpec(
+                payload=payload, version=v,
+                ecc=["l", "m", "q", "h"][i % 4], mirrored=False,
+                physical_size_m=size_m, distance_m=dist,
+                tilt_deg=tilt_deg,
+                tilt_azimuth_deg=tilt_azimuth_deg,
+                inplane_deg=inplane_deg,
+                image_point=(intr.cx, intr.cy))
+
+        code = make(size)
+        for _ in range(100):
+            if _fits(intr, code):
+                break
+            size *= 0.9
+            code = make(size)
+        else:
+            raise RuntimeError(f"could not fit {name} in-frame")
+        add(name, [code], 0.6, 2.0)
 
     for i in range(4):  # mirrored
         rng = _rng_for(seed, f"mirror_{i:02d}")
