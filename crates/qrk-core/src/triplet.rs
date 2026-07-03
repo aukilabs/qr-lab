@@ -66,10 +66,26 @@ const MAX_LEG_IMBALANCE: f64 = 0.5;
 /// (cross-code noise in multi-code frames).
 const MAX_MODULE_RATIO: f64 = 1.5;
 
-/// The two per-leg dimension estimates (`round(leg/module_leg) + 7`) from
-/// one triplet must agree within this many modules, or the legs are not
+/// Floor of the noise-scaled leg-agreement bound (see [`dim_agree_tol`]):
+/// the two per-leg dimension estimates must agree within
+/// `max(4, 2*(dim_mean-7)/(7*module_mean))` modules, or the legs are not
 /// both measuring the same code's side (mismatched/degenerate grouping).
-const MAX_DIM_DISAGREEMENT: i64 = 4;
+const MIN_DIM_AGREE_TOL: f64 = 4.0;
+
+/// Noise-scaled leg-agreement bound — the plan's second recorded Task 6
+/// amendment: the fixed ≤4 bound is provably exceeded by pure DDA
+/// quantization noise at large dimensions / small modules. Derivation:
+/// ±1 px quantization at each end of a 7-module BWB crossing gives a
+/// per-leg module error of `δm ≈ 2/14 px`; a leg spans `n − 7` modules,
+/// so the per-leg dimension noise is `≈ (n−7)·δm/module =
+/// (n−7)/(7·module)`; two independent legs disagree by up to twice that,
+/// hence the factor 2. False triples that survive the leg-balance ≤0.5
+/// filter disagree by roughly an order of magnitude more, so the gate
+/// keeps its discriminative purpose; the [21,177] and mod-4 snap gates
+/// are unchanged.
+fn dim_agree_tol(dim_mean: f64, module_mean: f64) -> f64 {
+    (2.0 * (dim_mean - 7.0) / (7.0 * module_mean)).max(MIN_DIM_AGREE_TOL)
+}
 
 /// QR Model 2 dimension range: version 1..=40 -> `21 + 4*(v-1)` spans
 /// `[21, 177]` (the QR spec).
@@ -289,10 +305,11 @@ fn try_group(
     let module_bl = leg_module(view, grid, inverted, tl, bl)?;
     let dim_tr = (dist(tl, tr) / module_tr).round() as i64 + 7;
     let dim_bl = (dist(tl, bl) / module_bl).round() as i64 + 7;
-    if (dim_tr - dim_bl).abs() > MAX_DIM_DISAGREEMENT {
+    let mean = (dim_tr + dim_bl) as f64 / 2.0;
+    let module_mean = (module_tr + module_bl) / 2.0;
+    if (dim_tr - dim_bl).abs() as f64 > dim_agree_tol(mean, module_mean) {
         return None;
     }
-    let mean = (dim_tr + dim_bl) as f64 / 2.0;
     let (snapped, snap_error) = snap_dimension(mean);
     if !(MIN_DIMENSION..=MAX_DIMENSION).contains(&snapped) {
         return None;
@@ -302,7 +319,7 @@ fn try_group(
         tl,
         tr,
         bl,
-        module: (module_tr + module_bl) / 2.0,
+        module: module_mean,
         dimension: snapped as u32,
         snap_error,
         inverted,
