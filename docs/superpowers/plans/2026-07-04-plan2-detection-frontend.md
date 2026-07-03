@@ -603,7 +603,14 @@ fn every_ground_truth_finder_is_detected() {
 - Produces: `pub struct TripletCandidate { pub tl: [f64; 2], pub tr: [f64; 2], pub bl: [f64; 2], pub module: f64, pub dimension: u32, pub snap_error: f64, pub inverted: bool }`
   `pub fn group_triplets(finders: &[FinderCandidate]) -> Vec<TripletCandidate>`
 
-**Algorithm contract:** for every unordered candidate triple with equal `inverted` flags and pairwise module ratio ≤ 1.5: identify the corner finder = the one whose two legs have the smallest `|cos|` of the between-leg angle; require `|cos| ≤ 0.4` and leg balance `|1 − a/b| ≤ 0.5`. Order the other two so the cross product `(tr−tl) × (bl−tl) > 0` (image coords, y down — normal reading order; a mirrored code yields the swap, which downstream decode resolves via mirrored retry, so DO NOT reject the other sign: swap into canonical order instead). Dimension per leg: `round(leg_len/module) + 7`; legs must agree within 4; mean → snap to nearest ≡1 (mod 4); `snap_error = |mean − snapped|`; require snapped ∈ [21, 177]. `module` = mean of the three finders'. Sort output by `snap_error` ascending. Cap output at 64 triplets.
+**Algorithm contract (amended — recorded decision after the first gate run):** the original contract derived dimension from the scan-measured `FinderCandidate.module`, which is systematically biased by `1/cos(rotation)` (axis-aligned scan lines cross a rotated grid along a chord; measured 1.10–1.31× on rotated fixtures) and cannot represent per-axis perspective foreshortening at 45° tilt. Fix per established practice (zxing `Detector.calculateModuleSize`): measure module **along each leg**.
+
+`group_triplets(view: &LumaView, grid: &TileGrid, finders: &[FinderCandidate]) -> Vec<TripletCandidate>`:
+1. Geometry filters (image-free, as before): equal `inverted`, pairwise scan-module ratio ≤ 1.5 (coarse pre-filter only), corner finder = smallest `|cos|` of between-leg angle, `|cos| ≤ 0.4`, leg balance `|1 − a/b| ≤ 0.5`, canonical order via cross product (mirrored → swap, never reject).
+2. Per-leg module (zxing semantics): `bwb(A→B)` = walk the binarized line (DDA, polarity-aware ink test vs tile thresholds) from finder center A toward B, measuring the ink(1.5)+space(1)+ink(1) crossing = 3.5 modules of distance; `bwb_both(A,B)` = that walk plus the same walk from A directly away from B (another 3.5 modules) — 7 modules total; `module_leg = (bwb_both(A,B) + bwb_both(B,A)) / 14`. A walk truncated by the image border contributes its partner's doubled value (zxing's border correction).
+3. `dimension_leg = round(dist/module_leg) + 7`; legs agree within 4; mean → snap ≡1 (mod 4); `snap_error`; snapped ∈ [21,177]. `TripletCandidate.module` = mean of the two leg modules. Sort by `snap_error` ascending, cap 64.
+
+Unit tests paint synthetic finder patterns into small images (shared test helper) for the accept paths; pure-geometry reject tests need no image.
 
 - [ ] **Step 1: Unit tests** (in `triplet.rs`)
 
