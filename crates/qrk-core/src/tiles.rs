@@ -61,6 +61,19 @@ impl TileGrid {
         let base = (y / TILE) * self.tiles_x;
         self.skip[base..base + self.tiles_x].iter().all(|&s| s)
     }
+
+    /// Export this grid's per-tile thresholds/skip mask for [`crate::Trace`].
+    /// `pub(crate)` rather than making `threshold`/`skip` public fields —
+    /// only the debug-trace path needs read access to them.
+    #[cfg(feature = "debug-trace")]
+    pub(crate) fn to_trace(&self) -> crate::trace::TileTrace {
+        crate::trace::TileTrace {
+            tiles_x: self.tiles_x,
+            tiles_y: self.tiles_y,
+            thresholds: self.threshold.clone(),
+            skip: self.skip.clone(),
+        }
+    }
 }
 
 #[cfg(test)]

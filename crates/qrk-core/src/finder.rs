@@ -85,6 +85,7 @@ pub(crate) fn match_row(bits: impl Iterator<Item = bool>, out: &mut Vec<RunHit>)
 
 /// A verified, possibly-merged finder-pattern candidate.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct FinderCandidate {
     pub x: f64,
     pub y: f64,

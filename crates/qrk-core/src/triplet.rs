@@ -22,6 +22,7 @@ use crate::LumaView;
 /// order), plus the dimension estimate derived from per-leg module
 /// measurements.
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct TripletCandidate {
     pub tl: [f64; 2],
     pub tr: [f64; 2],
