@@ -37,14 +37,27 @@ pub struct Detections {
 ///
 /// On `wasm32` targets `std::time::Instant::now()` compiles but panics at
 /// runtime ("time not implemented on this platform" on
-/// wasm32-unknown-unknown), so there the clock is a zero-field struct and
-/// every stage reports 0 ns — callers measure wall time host-side (the
-/// debug UI uses JS `performance.now()`; a follow-up can wire it through
-/// web-sys). Everywhere else it wraps `Instant`.
+/// wasm32-unknown-unknown), so there the clock instead reads
+/// `js_sys::Date::now()` — a millisecond-resolution `f64` timestamp backed
+/// by JS `Date.now()`, available in both window and worker global scopes
+/// without reaching for `web-sys::Performance` (which would need
+/// target-specific plumbing to fetch the right global in each context).
+/// This keeps the wasm dependency surface to one tiny crate (`js-sys`,
+/// already pulled in transitively by `wasm-bindgen`) at the cost of
+/// precision: `Date.now()` only resolves to ~1ms, so fast stages (the
+/// triplets stage in particular, often sub-millisecond) commonly report
+/// 0ns on wasm even though real work happened. Recorded decision: if
+/// µs-scale precision is later needed, swap this arm to
+/// `web-sys::Performance::now()` (sub-ms resolution) — that requires
+/// resolving the global scope in both window and worker contexts, which is
+/// why it wasn't the first choice here. Everywhere else this wraps
+/// `Instant`.
 #[derive(Clone, Copy, Debug)]
 pub struct StageClock {
     #[cfg(not(target_arch = "wasm32"))]
     start: Instant,
+    #[cfg(target_arch = "wasm32")]
+    start_ms: f64,
 }
 
 impl StageClock {
@@ -54,10 +67,13 @@ impl StageClock {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             start: Instant::now(),
+            #[cfg(target_arch = "wasm32")]
+            start_ms: js_sys::Date::now(),
         }
     }
 
-    /// Nanoseconds since [`StageClock::start`] (always 0 on `wasm32`).
+    /// Nanoseconds since [`StageClock::start`] (ms-resolution on `wasm32` —
+    /// see the [`StageClock`] doc comment).
     #[must_use]
     pub fn elapsed_ns(self) -> u64 {
         #[cfg(not(target_arch = "wasm32"))]
@@ -66,7 +82,16 @@ impl StageClock {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            0
+            let delta_ms = js_sys::Date::now() - self.start_ms;
+            // Guard against a negative delta (clock adjustments, or a
+            // same-millisecond read landing a float epsilon below start) —
+            // elapsed time is never negative, so clamp to 0 rather than
+            // wrapping through `as u64`.
+            if delta_ms <= 0.0 {
+                0
+            } else {
+                (delta_ms * 1e6) as u64
+            }
         }
     }
 }
