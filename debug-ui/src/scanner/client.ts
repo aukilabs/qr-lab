@@ -133,7 +133,19 @@ export class ScannerClient {
 
   private start(pending: PendingScan): void {
     this.inFlight = pending;
-    const buffer = pending.rgba.buffer as ArrayBuffer;
+    const { rgba } = pending;
+    // Transferring rgba.buffer directly hands the worker the *entire*
+    // underlying ArrayBuffer, not just this view's slice of it. That's
+    // correct (and zero-copy) for the common case — a typed array that
+    // owns its whole buffer — but would silently ship extra/wrong bytes if
+    // `rgba` were ever a subarray view (nonzero byteOffset or a shorter
+    // byteLength), which the worker has no way to detect from a bare
+    // ArrayBuffer. Copy only the view's bytes in that case.
+    const buffer = (
+      rgba.byteOffset === 0 && rgba.byteLength === rgba.buffer.byteLength
+        ? rgba.buffer
+        : rgba.buffer.slice(rgba.byteOffset, rgba.byteOffset + rgba.byteLength)
+    ) as ArrayBuffer;
     const message: ScanRequestMessage = {
       type: "scan",
       id: pending.id,

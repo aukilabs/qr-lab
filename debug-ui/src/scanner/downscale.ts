@@ -19,6 +19,9 @@ export function downscaleRgba(
   maxDim: number,
 ): { rgba: Uint8ClampedArray; width: number; height: number } {
   const longest = Math.max(w, h);
+  // longest <= maxDim (identity) also covers longest === 0, which would
+  // otherwise divide by zero below and propagate NaN into the output
+  // dimensions — degenerate w/h has nothing sensible to downscale anyway.
   if (maxDim <= 0 || longest <= maxDim) {
     return { rgba, width: w, height: h };
   }

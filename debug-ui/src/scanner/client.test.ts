@@ -105,6 +105,30 @@ describe("ScannerClient", () => {
     expect(outcome.result.trace).toBeNull();
   });
 
+  it("transfers only the view's bytes when rgba is a subarray of a larger buffer", async () => {
+    const worker = new FakeWorker();
+    const client = new ScannerClient(worker);
+    worker.emit({ type: "ready" });
+    await client.init();
+
+    // A 2x2 RGBA view (16 bytes) living in the middle of a much larger
+    // buffer, at a nonzero byteOffset — e.g. one tile of a shared frame
+    // buffer. Mark the view's bytes distinctly from the surrounding noise
+    // so a wrong offset/length would be caught even if byteLength matched
+    // by coincidence.
+    const backing = new Uint8ClampedArray(64).fill(0xaa);
+    const view = new Uint8ClampedArray(backing.buffer, 20, 2 * 2 * 4);
+    view.fill(0x42);
+
+    client.scan(view, 2, 2, { maxDim: 0, withTrace: false });
+
+    const req = worker.posted[0]!;
+    const sent = new Uint8Array(req.message.rgba as ArrayBuffer);
+    expect(sent.byteLength).toBe(16);
+    expect(Array.from(sent)).toEqual(new Array(16).fill(0x42));
+    expect(req.transfer).toEqual([req.message.rgba]);
+  });
+
   it("rejects with the worker-reported error on ok: false", async () => {
     const worker = new FakeWorker();
     const client = new ScannerClient(worker);
