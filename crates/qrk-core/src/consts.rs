@@ -1,7 +1,6 @@
 //! Pinned detection constants. Every value must state a principled
 //! derivation (QR geometry or established practice) — never a value tuned
 //! to make a fixture pass (see Plan 2 "No overfitting" constraint).
-#![allow(dead_code)] // consumed from Task 3 (tiles.rs) onward; remove then.
 
 /// Tile edge for local min/max thresholding (AprilTag's tile-extrema
 /// scheme, scaled to full working resolution). Thresholds are drawn from
@@ -20,4 +19,5 @@ pub const CONTRAST_FLOOR: u8 = 12;
 /// Scan every 2nd row: a finder is 7 modules tall and modules must be
 /// ≥2px to be decodable, so the smallest real finder spans ≥14 rows —
 /// step 2 guarantees ≥7 chances to hit its 1:1:3:1:1 cross-section.
+#[allow(dead_code)] // consumed from Task 5 onward; remove then.
 pub const ROW_STEP: usize = 2;
