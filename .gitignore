@@ -1,0 +1,22 @@
+# Node
+node_modules/
+
+# Rust
+target/
+
+# Android build artifacts
+**/android/.cxx/
+**/android/build/
+**/android/.gradle/
+
+# iOS build artifacts
+**/ios/build/
+**/ios/Pods/
+
+# Python
+__pycache__/
+.venv/
+
+# Misc
+.DS_Store
+*.log
