@@ -24,3 +24,12 @@ versions pinned in `requirements.txt`. Byte-determinism (same seed →
 byte-identical output) is only guaranteed with those pinned versions —
 newer numpy/opencv/segno releases can change rounding or encoding
 behavior and produce different bytes even with the same seed.
+
+## Real captures (`fixtures/real/`)
+
+Real photos (PNG committed; `.luma`/`.json` are generated, gitignored — they
+carry no ground truth and are NOT part of the golden gate suite). Regenerate
+the scanner-readable pair for a photo with cv2 (grayscale read → raw bytes +
+`{name,width,height,codes:[]}` JSON), then explore with:
+
+    cargo run --release -p qrk-core --example scan_debug -- real/real_2 1280

@@ -20,3 +20,7 @@ __pycache__/
 # Misc
 .DS_Store
 *.log
+
+# Real-photo captures: luma/json regenerable from PNG (see tools/fixtures/README.md)
+fixtures/real/*.luma
+fixtures/real/*.json
