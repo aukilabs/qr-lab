@@ -45,11 +45,12 @@ fn suite_dir() -> PathBuf {
 
 pub fn load(name: &str) -> Fixture {
     let dir = suite_dir();
-    let meta: Meta = serde_json::from_str(
-        &fs::read_to_string(dir.join(format!("{name}.json"))).unwrap(),
-    )
-    .unwrap();
-    let luma = fs::read(dir.join(format!("{name}.luma"))).unwrap();
+    let json_text = fs::read_to_string(dir.join(format!("{name}.json")))
+        .unwrap_or_else(|e| panic!("{name}.json: {e}"));
+    let meta: Meta =
+        serde_json::from_str(&json_text).unwrap_or_else(|e| panic!("{name}.json: {e}"));
+    let luma = fs::read(dir.join(format!("{name}.luma")))
+        .unwrap_or_else(|e| panic!("{name}.luma: {e}"));
     assert_eq!(luma.len(), meta.width * meta.height, "{name}: luma size");
     Fixture {
         name: meta.name,
