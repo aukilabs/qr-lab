@@ -6,13 +6,7 @@ mod common;
 #[allow(unused_imports)]
 use qrk_core::{find_finders, LumaView, PerspectiveTransform, TileGrid};
 
-fn expected_centers(c: &common::CodeTruth) -> [[f64; 2]; 3] {
-    let n = (4 * c.version + 17) as f64;
-    let h = PerspectiveTransform::square_to_quad(c.corners_px);
-    let f = 3.5 / n;
-    let g = (n - 3.5) / n;
-    [h.map(f, f), h.map(g, f), h.map(f, g)]
-}
+use common::expected_finder_centers as expected_centers;
 
 #[test]
 fn every_ground_truth_finder_is_detected() {
