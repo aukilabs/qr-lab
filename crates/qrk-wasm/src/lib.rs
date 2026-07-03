@@ -9,10 +9,20 @@ use wasm_bindgen::prelude::*;
 
 /// Serializable envelope returned to JS: the detection result, plus the
 /// optional debug trace when the caller asked for it.
+///
+/// `pub` (rather than private or `pub(crate)`) and `#[doc(hidden)]` so
+/// `tests/envelope_snapshot.rs` — a separate integration-test crate that
+/// only sees this crate's public API — can construct and serialize this
+/// *exact* struct instead of hand-rolling a lookalike. That keeps the
+/// debug UI's cross-language contract snapshot (Plan 3 Task 1) from ever
+/// diverging from what `scan_rgba` actually sends over the wire: if this
+/// struct's shape changes, both the wasm binding and the snapshot test
+/// change together.
 #[derive(Serialize)]
-struct WasmResult {
-    detections: Detections,
-    trace: Option<Trace>,
+#[doc(hidden)]
+pub struct WasmResult {
+    pub detections: Detections,
+    pub trace: Option<Trace>,
 }
 
 /// Scan one RGBA frame and return a `WasmResult` (via `serde-wasm-bindgen`)
