@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use qrk_core::LumaView;
+use qrk_core::{LumaView, PerspectiveTransform};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -61,6 +61,25 @@ pub fn load(name: &str) -> Fixture {
         luma,
         codes: meta.codes,
     }
+}
+
+/// Ground-truth pixel centers of a code's three finder patterns (TL, TR,
+/// BL), derived by mapping the finder-center points in the unit square
+/// (module coordinates, 3.5 modules in from each relevant edge — the
+/// center of a 7x7-module finder) through the code's known
+/// square-to-quad homography. Shared by `finder_gate.rs` (per-finder
+/// match) and `triplet_gate.rs` (per-triplet match) — each integration
+/// test binary compiles `common` independently, so a helper unused by a
+/// given binary (e.g. `fixtures_smoke.rs`, which uses neither gate) would
+/// otherwise warn dead_code there; same treatment as `CodeTruth` above.
+#[allow(dead_code)]
+pub fn expected_finder_centers(c: &CodeTruth) -> [[f64; 2]; 3] {
+    let n = (4 * c.version + 17) as f64;
+    let h = PerspectiveTransform::square_to_quad(c.corners_px)
+        .expect("ground-truth quad is never degenerate");
+    let f = 3.5 / n;
+    let g = (n - 3.5) / n;
+    [h.map(f, f), h.map(g, f), h.map(f, g)]
 }
 
 pub fn load_all() -> Vec<Fixture> {

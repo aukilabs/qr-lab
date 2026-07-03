@@ -61,6 +61,16 @@ impl<'a> LumaView<'a> {
     }
 }
 
+pub fn luma_from_rgba(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
+    assert_eq!(rgba.len(), width * height * 4, "rgba buffer size mismatch");
+    rgba.chunks_exact(4)
+        .map(|p| {
+            ((77 * p[0] as u32 + 150 * p[1] as u32 + 29 * p[2] as u32 + 128)
+                >> 8) as u8
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +120,18 @@ mod tests {
             LumaView::new(&[0; 16], 0, 3, 4),
             Err(LumaError::EmptyDimensions)
         ));
+    }
+
+    #[test]
+    fn rgba_conversion_bt601() {
+        let rgba = [255, 255, 255, 255,  0, 0, 0, 255,  255, 0, 0, 255];
+        let y = luma_from_rgba(&rgba, 3, 1);
+        assert_eq!(y, vec![255, 0, 77]); // (77*255+128)>>8 = 77
+    }
+
+    #[test]
+    #[should_panic]
+    fn rgba_wrong_len_panics() {
+        luma_from_rgba(&[0; 10], 3, 1);
     }
 }
