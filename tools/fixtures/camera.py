@@ -2,8 +2,10 @@
 
 Coordinate conventions:
 - Camera frame: x right, y down, z forward (into the scene).
-- Plane (code) frame: x right, y down within the symbol, z = plane normal
-  pointing toward the camera side; points on the code are (X, Y, 0).
+- Plane (code) frame: x right, y down within the symbol; points on the code
+  are (X, Y, 0). Under the frontal pose R = I the plane's +z aligns with the
+  camera's +z (away from the camera); code content lives at Z = 0, so the
+  normal's sign is never consumed — facing is guaranteed by tilt < 90°.
 - Image: pixel centers at integer coordinates; x right, y down.
 """
 from dataclasses import dataclass
