@@ -1,6 +1,7 @@
 # Node
 node_modules/
 debug-ui/dist/
+debug-ui/src/wasm/
 
 # Rust
 target/
