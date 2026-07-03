@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod consts;
+mod finder;
 mod homography;
 mod luma;
 mod tiles;
