@@ -19,5 +19,4 @@ pub const CONTRAST_FLOOR: u8 = 12;
 /// Scan every 2nd row: a finder is 7 modules tall and modules must be
 /// ≥2px to be decodable, so the smallest real finder spans ≥14 rows —
 /// step 2 guarantees ≥7 chances to hit its 1:1:3:1:1 cross-section.
-#[allow(dead_code)] // consumed from Task 5 onward; remove then.
 pub const ROW_STEP: usize = 2;
