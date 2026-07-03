@@ -659,7 +659,7 @@ git commit -m "feat: supersampled QR plane renderer with exact homography"
       "camera": {"fx": 1004.71, "fy": 1004.71, "cx": 639.5, "cy": 359.5},
       "blur_sigma": 0.8, "noise_sigma": 2.0, "seed": 12345,
       "codes": [{
-        "payload": "QRK:far_00:0", "version": 1, "ecc": "m",
+        "payload": "Q:far_00:0", "version": 1, "ecc": "m",
         "mirrored": false, "physical_size_m": 0.15, "distance_m": 1.8,
         "tilt_deg": 10.0, "tilt_azimuth_deg": 200.0, "inplane_deg": 74.0,
         "module_size_px": 3.9,
