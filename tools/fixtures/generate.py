@@ -22,7 +22,7 @@ def render_fixture(spec, intr):
         modules = render.make_symbol(code.payload, code.version, code.ecc,
                                      code.mirrored)
         render.render_code(img, intr, r, t, modules, code.physical_size_m,
-                           render.Levels())
+                           render.Levels(), code.inverted, code.opaque_plate)
         corners = render.corners_px(intr, r, t, code.physical_size_m)
         n = modules.shape[0]
         module_px = float(np.linalg.norm(corners[1] - corners[0]) / n)
@@ -35,6 +35,7 @@ def render_fixture(spec, intr):
             "inplane_deg": code.inplane_deg,
             "module_size_px": module_px,
             "corners_px": [[float(x), float(y)] for x, y in corners],
+            "inverted": code.inverted, "opaque_plate": code.opaque_plate,
         })
 
     if spec.blur_sigma > 0:

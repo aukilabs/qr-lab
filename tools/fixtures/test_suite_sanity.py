@@ -19,7 +19,7 @@ def suite():
 
 def test_suite_is_complete(suite):
     names = [p.stem for p in suite]
-    assert len(names) >= 65
+    assert len(names) >= 81
     for stem in names:
         assert (SUITE / f"{stem}.png").exists()
         assert (SUITE / f"{stem}.luma").exists()

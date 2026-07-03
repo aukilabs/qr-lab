@@ -15,6 +15,8 @@ pub struct CodeTruth {
     pub mirrored: bool,
     pub module_size_px: f64,
     pub corners_px: [[f64; 2]; 4],
+    pub inverted: bool,
+    pub opaque_plate: bool,
 }
 
 #[derive(Deserialize)]

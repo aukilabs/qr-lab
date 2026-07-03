@@ -49,6 +49,43 @@ def test_render_code_paints_dark_finder_and_light_quiet_zone():
     assert img[5, 5] == 128
 
 
+def test_inverted_swaps_ink_and_plate():
+    intr, R, t, size = _frontal(distance=0.8)
+    img = np.full((intr.height, intr.width), 128, np.uint8)
+    modules = render.make_symbol("inv", version=1, ecc="m", mirrored=False)
+    render.render_code(img, intr, R, t, modules, size, render.Levels(),
+                       inverted=True)
+    c = render.corners_px(intr, R, t, size)
+    module_px = (c[1, 0] - c[0, 0]) / 21
+    fx = int(round(c[0, 0] + 3.5 * module_px))
+    fy = int(round(c[0, 1] + 3.5 * module_px))
+    assert img[fy, fx] > 180          # finder center now light ink
+    qx = int(round(c[0, 0] - 2.0 * module_px))
+    qy = int(round(c[0, 1] - 2.0 * module_px))
+    assert img[qy, qx] < 80           # quiet zone now dark plate
+
+
+def test_transparent_leaves_background_in_quiet_zone():
+    intr, R, t, size = _frontal(distance=0.8)
+    img = np.full((intr.height, intr.width), 128, np.uint8)
+    modules = render.make_symbol("trans", version=1, ecc="m", mirrored=False)
+    render.render_code(img, intr, R, t, modules, size, render.Levels(),
+                       opaque_plate=False)
+    c = render.corners_px(intr, R, t, size)
+    module_px = (c[1, 0] - c[0, 0]) / 21
+    fx = int(round(c[0, 0] + 3.5 * module_px))
+    fy = int(round(c[0, 1] + 3.5 * module_px))
+    assert img[fy, fx] < 80           # dark module ink still painted
+    qx = int(round(c[0, 0] - 2.0 * module_px))
+    qy = int(round(c[0, 1] - 2.0 * module_px))
+    assert img[qy, qx] == 128         # quiet zone untouched background
+    # Light cell inside the symbol is also background: module (1..? use the
+    # finder white ring at 1.5 modules in from TL, axis-aligned).
+    wx = int(round(c[0, 0] + 1.5 * module_px))
+    wy = int(round(c[0, 1] + 1.5 * module_px))
+    assert 100 < img[wy, wx] < 160
+
+
 def test_render_is_antialiased_at_edges():
     # A tilted render must produce intermediate gray values along the
     # module-region border (supersampling evidence).

@@ -21,6 +21,8 @@ class CodeSpec:
     tilt_azimuth_deg: float
     inplane_deg: float
     image_point: tuple
+    inverted: bool = False
+    opaque_plate: bool = True
 
 
 @dataclass(frozen=True)
@@ -58,7 +60,7 @@ def _fits(intr, code: CodeSpec) -> bool:
 
 def _sample_code(rng, intr, name, idx, *, version=1, ecc="m", mirrored=False,
                  size=0.15, dist_range=(0.5, 1.4), tilt_range=(0.0, 20.0),
-                 inplane=None, tilt=None):
+                 inplane=None, tilt=None, inverted=False, opaque_plate=True):
     for _ in range(200):
         code = CodeSpec(
             payload=f"Q:{name}:{idx}",
@@ -71,6 +73,7 @@ def _sample_code(rng, intr, name, idx, *, version=1, ecc="m", mirrored=False,
                          if inplane is None else inplane),
             image_point=(float(rng.uniform(250, intr.width - 250)),
                          float(rng.uniform(180, intr.height - 180))),
+            inverted=inverted, opaque_plate=opaque_plate,
         )
         if _fits(intr, code):
             return code
@@ -192,5 +195,26 @@ def build_all(seed: int):
         add(f"combo_{i:02d}",
             [_sample_code(rng, intr, f"combo_{i:02d}", 0, tilt=45.0,
                           dist_range=(1.5, 1.8), size=0.18)], 0.8, 2.5)
+
+    for i in range(6):  # inverted: light modules on dark plate
+        rng = _rng_for(seed, f"inv_{i:02d}")
+        add(f"inv_{i:02d}",
+            [_sample_code(rng, intr, f"inv_{i:02d}", 0, ecc="l",
+                          inverted=True,
+                          dist_range=(0.5, 1.3))], 0.6, 2.0)
+
+    for i in range(6):  # transparent: modules only, background quiet zone
+        rng = _rng_for(seed, f"trans_{i:02d}")
+        add(f"trans_{i:02d}",
+            [_sample_code(rng, intr, f"trans_{i:02d}", 0, ecc="l",
+                          opaque_plate=False,
+                          dist_range=(0.5, 1.2))], 0.6, 2.0)
+
+    for i in range(4):  # inverted + transparent
+        rng = _rng_for(seed, f"invtrans_{i:02d}")
+        add(f"invtrans_{i:02d}",
+            [_sample_code(rng, intr, f"invtrans_{i:02d}", 0, ecc="l",
+                          inverted=True,
+                          opaque_plate=False, dist_range=(0.5, 1.2))], 0.6, 2.0)
 
     return specs

@@ -3,7 +3,7 @@ mod common;
 #[test]
 fn suite_loads_and_ground_truth_is_sane() {
     let fixtures = common::load_all();
-    assert!(fixtures.len() >= 65, "got {}", fixtures.len());
+    assert!(fixtures.len() >= 81, "got {}", fixtures.len());
 
     let mut multi_max = 0;
     for f in &fixtures {
@@ -46,8 +46,20 @@ fn luma_pixels_match_ground_truth_ink() {
                 (tl[0] - dir[0] * m).round() as usize,
                 (tl[1] - dir[1] * m).round() as usize,
             );
-            assert!(inside < 110, "{}: inside={}", f.name, inside);
-            assert!(outside > 150, "{}: outside={}", f.name, outside);
+            // Non-inverted keeps the proven <110 bound (far_* modules are
+            // ~3.6 px; blur bleed rules out a tighter one). Inverted
+            // scenarios are all near (modules >=5.5 px), so >170 is safe.
+            if c.inverted {
+                assert!(inside > 170, "{}: inside={}", f.name, inside);
+            } else {
+                assert!(inside < 110, "{}: inside={}", f.name, inside);
+            }
+            match (c.opaque_plate, c.inverted) {
+                (true, false) => assert!(outside > 150, "{}: out={}", f.name, outside),
+                (true, true) => assert!(outside < 110, "{}: out={}", f.name, outside),
+                (false, _) => assert!(outside > 95 && outside < 165,
+                                      "{}: out={}", f.name, outside),
+            }
         }
     }
 }

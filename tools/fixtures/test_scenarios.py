@@ -12,7 +12,8 @@ def test_matrix_covers_spec_scenarios():
     names = [s.name for s in specs]
     for prefix, minimum in [("far_", 8), ("near_", 8), ("rot_", 12),
                             ("tilt45_", 8), ("multi_", 8), ("ver_", 13),
-                            ("mirror_", 4)]:
+                            ("mirror_", 4), ("inv_", 6), ("trans_", 6),
+                            ("invtrans_", 4)]:
         assert sum(n.startswith(prefix) for n in names) >= minimum, prefix
 
 
