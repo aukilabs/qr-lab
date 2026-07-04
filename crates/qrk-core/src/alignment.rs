@@ -155,7 +155,12 @@ pub(crate) struct AlignmentGrid {
 
 /// `true` iff lattice node `(i, j)` (0-indexed into a `coords` of length
 /// `n`) is one of the three finder-pattern corners.
-fn is_finder_corner(i: usize, j: usize, n: usize) -> bool {
+///
+/// `pub(crate)` (not private): Task 4's `sample.rs` needs this same
+/// three-corner test to decide whether a region's tiling anchor is a real
+/// alignment-pattern node or a finder corner, and re-deriving it there
+/// would risk the two definitions drifting apart.
+pub(crate) fn is_finder_corner(i: usize, j: usize, n: usize) -> bool {
     match (i, j) {
         (0, 0) => true,
         (0, col) if col == n - 1 => true,

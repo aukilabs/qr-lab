@@ -50,3 +50,20 @@ pub const ROW_STEP: usize = 2;
 /// pattern has no neighboring real pattern to collide with at all, so
 /// their nominal `6 -> coord` gap, sometimes < 16, doesn't apply here.)
 pub const ALIGNMENT_PROBE_HALF_MODULES: f64 = 2.25;
+
+/// Sample-out-of-image tolerance (Plan 4's Global Constraints, transcribed
+/// verbatim): a candidate whose sampling grid would read more than this
+/// fraction of modules outside the source image is rejected before decode —
+/// a border-clamped read would otherwise silently repeat an edge pixel's
+/// value instead of surfacing that the candidate's geometry runs off-frame.
+/// 2% ≈ one clipped quiet-zone-adjacent row on a v1 (21×21 = 441 modules;
+/// one full row is `21/441 ≈ 4.8%`, so 2% catches a *partial* row/column
+/// clipping before it grows into a whole one). `sample.rs`'s `sample_grid`
+/// computes and returns `oob_fraction`; `decode.rs` (Task 5) applies this
+/// threshold.
+// Not yet read anywhere: `decode.rs` (Plan 4 Task 5), the caller that
+// applies this threshold, doesn't exist yet — matching `version.rs`'s /
+// `alignment.rs`'s own precedent of an explicit, commented dead-code
+// allowance for a piece landing ahead of its consumer.
+#[allow(dead_code)]
+pub(crate) const MAX_OOB_FRACTION: f64 = 0.02;

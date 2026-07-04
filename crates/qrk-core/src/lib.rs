@@ -6,6 +6,7 @@ mod consts;
 mod finder;
 mod homography;
 mod luma;
+mod sample;
 mod scanner;
 #[cfg(test)]
 mod testpaint;
