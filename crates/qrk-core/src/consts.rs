@@ -173,3 +173,19 @@ pub(crate) const BR_ANCHOR_POSITIONS: [f64; 2] = [2.0, 5.0];
 /// over-reject, refinement returns `None`, and the caller keeps the
 /// pre-Task-5b parallelogram fallback — a no-regression outcome.
 pub(crate) const BR_ANCHOR_FILTER_TOL_MODULES: f64 = 0.75;
+
+/// Unsharp-mask strength for `bitmatrix.rs`'s `decode_sharpen` (Plan 4B Fix
+/// B — real-video-capture robustness): `v' = v + K*(v - mean(available
+/// N/S/E/W neighbors))`.
+///
+/// Provenance: AprilTag's `quad_decode.c` `decode_sharpening` default (the
+/// cited prior-art unsharp-mask pass this round transcribes), chosen there
+/// to counter exactly the inter-module blur crosstalk this fix targets
+/// (area-averaging sampling over a blurred sensor image pulls a module's
+/// read toward its neighbors' values — sharpening pushes it back). Kept at
+/// the cited default rather than tuned against any fixture: the
+/// investigation measured this default cutting the frame-167 probe's
+/// bit-error count from 8 to 6-7 (combined with the reference threshold
+/// below), and per this task's gate-failure protocol no other K value may
+/// be tried without reporting it.
+pub(crate) const SHARPEN_K: f32 = 0.25;

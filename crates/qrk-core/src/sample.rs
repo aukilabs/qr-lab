@@ -63,7 +63,7 @@ use crate::homography::PerspectiveTransform;
 use crate::tiles::TileGrid;
 use crate::trace::SampleRegionTrace;
 use crate::triplet::TripletCandidate;
-use crate::version::sample_module_ink;
+use crate::version::{sample_module_gray, sample_module_ink};
 use crate::LumaView;
 
 /// One tile of a sampled grid: the half-open module rectangle it covers —
@@ -113,6 +113,16 @@ pub(crate) struct SampledGrid {
     /// when this exceeds `consts::MAX_OOB_FRACTION` — this file only
     /// measures and reports it.
     pub oob_fraction: f64,
+    /// Raw per-module gray value (0..255, widened to `f32`) alongside every
+    /// module `bits` binarized — Plan 4B Fix B's evidence for the
+    /// reference-threshold + sharpening decode round `decode.rs` runs when
+    /// the tile-threshold `bits` fail rqrr. Row-major `dim*dim`
+    /// (`grays[y*dim+x]`, matching `BitMatrix`'s own `(x,y)` convention),
+    /// `f32::NAN` marking an out-of-image sample (same modules `bits`
+    /// records as `false`/`oob_fraction`-counted). Transient: never
+    /// serialized into any trace, cheap at `dim^2` floats (max 177^2 ≈ 125K
+    /// = 500KB at v40, one buffer per attempt, freed with this struct).
+    pub grays: Vec<f32>,
 }
 
 /// Build the module-space source quad and image-space destination quad for
@@ -762,14 +772,14 @@ pub(crate) fn sample_grid(
     };
 
     let mut bits = BitMatrix::new(dim);
+    let mut grays = vec![f32::NAN; dim * dim];
     let mut oob = 0u64;
     for region in &regions {
         let [x0, y0, x1, y1] = region.module_rect;
         for y in y0..y1 {
             for x in x0..x1 {
-                let ink = sample_module_ink(
-                    view, grid, &region.transform, dimension, x as f64 + 0.5, y as f64 + 0.5, t.inverted,
-                );
+                let (mx, my) = (x as f64 + 0.5, y as f64 + 0.5);
+                let ink = sample_module_ink(view, grid, &region.transform, dimension, mx, my, t.inverted);
                 match ink {
                     Some(v) => bits.set(x as usize, y as usize, v),
                     None => {
@@ -777,11 +787,14 @@ pub(crate) fn sample_grid(
                         bits.set(x as usize, y as usize, false);
                     }
                 }
+                if let Some(gray) = sample_module_gray(view, &region.transform, dimension, mx, my) {
+                    grays[y as usize * dim + x as usize] = gray;
+                }
             }
         }
     }
     let oob_fraction = oob as f64 / (dim * dim) as f64;
-    Some(SampledGrid { bits, regions, oob_fraction })
+    Some(SampledGrid { bits, regions, oob_fraction, grays })
 }
 
 #[cfg(test)]

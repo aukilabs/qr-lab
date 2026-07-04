@@ -29,3 +29,7 @@ __pycache__/
 # Real-photo captures: luma/json regenerable from PNG (see tools/fixtures/README.md)
 fixtures/real/*.luma
 fixtures/real/*.json
+# Real-capture source videos: kept locally only; the frame PNGs extracted
+# from them (e.g. fixtures/real/video_f167.png) are the committed
+# regression anchors (see tools/fixtures/README.md's real-captures section).
+fixtures/real/domain-data-mp4/

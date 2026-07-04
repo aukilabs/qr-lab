@@ -33,3 +33,9 @@ the scanner-readable pair for a photo with cv2 (grayscale read → raw bytes +
 `{name,width,height,codes:[]}` JSON), then explore with:
 
     cargo run --release -p qrk-core --example scan_debug -- real/real_2 1280
+
+Video workflow: source videos live locally in `fixtures/real/domain-data-mp4/`
+(gitignored); extract a frame of interest with ffmpeg to a PNG (e.g.
+`ffmpeg -i <video> -vf "select=eq(n\,167)" -vframes 1 video_f167.png`), commit
+the PNG as the regression anchor, then explore it via the `decode_photo`
+example or pin it in `decode_gate.rs`'s real-capture section.

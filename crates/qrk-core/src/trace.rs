@@ -101,35 +101,34 @@ pub struct Trace {
     /// "attempted" — proximity-deduped-away and already-consumed-finder
     /// triplets produce no entry).
     pub attempts: Vec<DecodeAttemptTrace>,
-    /// The last attempted candidate's alignment-pattern search results
-    /// (empty for a v1 candidate, which has no alignment patterns at all —
-    /// see [`AlignmentTraceEntry`]'s doc). "Last attempted" per the plan's
-    /// literal contract — NOT necessarily the same candidate `bits` (below)
-    /// or `Detections.codes` describe: in a multi-triplet frame the LAST
-    /// attempt run can be a different, unrelated, and possibly-FAILED
-    /// candidate from whichever one(s) actually decoded (e.g. a spurious
-    /// finder-noise triplet attempted after the real code already decoded).
-    /// A debug-UI consumer overlaying `alignment`/`sample_regions` next to
-    /// `bits`/decoded-payload data should not assume they describe the same
-    /// physical code — see `debug-ui/src/overlays/layers/{alignment,
-    /// samplegrid}.ts`'s own doc comments for the same caveat. (A narrower,
-    /// fixed footgun: an attempt that bails out at the `invalid_dimension`
-    /// check — before ever reaching alignment/sampling — is excluded from
-    /// updating this field, so it can no longer blank an earlier real
-    /// decode's trace down to empty; see
-    /// `decode::AttemptResult::reached_geometry_stage`.)
+    /// This frame's alignment-pattern search results (empty for a v1
+    /// candidate, which has no alignment patterns at all — see
+    /// [`AlignmentTraceEntry`]'s doc) — see
+    /// [`crate::decode::DecodeTraceData`]'s doc for the full selection
+    /// rule (Plan 4B Fix A, trace honesty). Summary: when any candidate
+    /// decoded this frame, this is THAT candidate's alignment search (so it
+    /// always agrees with `bits` and `Detections.codes`' own last entry);
+    /// otherwise it's the FIRST attempt run this frame — canonical
+    /// (unrotated) corner roles, never a rotation retry, never a later
+    /// candidate. Pre-Fix-A this field tracked "last attempted" instead,
+    /// which — after a failed candidate's corner-role rotation retries —
+    /// was frequently a wrong-role attempt whose geometry pointed away from
+    /// the real code, misleading the debug UI on every failed frame; see
+    /// `debug-ui/src/overlays/layers/{alignment,samplegrid}.ts`'s own doc
+    /// comments for the debug-UI-facing version of this same contract.
     pub alignment: Vec<AlignmentTraceEntry>,
-    /// The last attempted candidate's sample regions — same "last
-    /// attempted, not last decoded" caveat as `alignment` above (they
-    /// always describe the SAME candidate as each other, just not
-    /// necessarily the same one as `bits`).
+    /// This frame's sample regions — same selection rule as `alignment`
+    /// above (they always describe the SAME candidate as each other, and,
+    /// on a decode, the same one as `bits` too — see
+    /// [`crate::decode::DecodeTraceData`]'s doc).
     pub sample_regions: Vec<SampleRegionTrace>,
-    /// The last successfully decoded candidate's sampled bit matrix (`None`
-    /// if nothing decoded this frame) — unlike `alignment`/`sample_regions`
-    /// above, this one tracks "last DECODED", so it always agrees with
-    /// `Detections.codes`' own last entry (see
-    /// `debug-ui/src/overlays/layers/bits.ts`'s doc for how the debug UI
-    /// relies on that specific agreement).
+    /// The most recently decoded candidate's sampled bit matrix (`None` if
+    /// nothing decoded this frame) — unchanged by Fix A: this always
+    /// tracked "last DECODED", so it always agrees with `Detections.codes`'
+    /// own last entry (see `debug-ui/src/overlays/layers/bits.ts`'s doc for
+    /// how the debug UI relies on that specific agreement) — Fix A instead
+    /// brought `alignment`/`sample_regions` INTO agreement with this field
+    /// whenever anything decodes.
     pub bits: Option<BitsTrace>,
 }
 

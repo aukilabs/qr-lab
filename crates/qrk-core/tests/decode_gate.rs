@@ -8,6 +8,10 @@
 //!    downscaled to max-dim 1280 with a test-local copy of the production
 //!    NN formula): `real_1` decodes >=2 codes including both pinned R8.HR
 //!    payloads; `real_2` decodes exactly the pinned R8.HR payload.
+//!    `fixtures/real/video_f167.png` (Plan 4B: frame 167 of a real store-
+//!    walkthrough video, `dmt_recording_2026-01-23_11-33-44.mp4` — the
+//!    frame the Fix A/B investigation used as its worked example) decodes
+//!    its pinned payload at the same working max-dim 1280.
 //! 3. Arbitration: on `multi_*` fixtures the decoded-code count equals the
 //!    ground-truth code count (no spurious extras) and every finder
 //!    candidate is consumed by at most one decoded code.
@@ -245,6 +249,36 @@ fn gate_2_real_captures_decode_pinned_payloads() {
         payloads2,
         vec![YLXFAP],
         "real_2: expected exactly [{YLXFAP:?}], got {payloads2:?}"
+    );
+}
+
+/// Plan 4B: real-video-capture robustness gate. Frame 167 of
+/// `dmt_recording_2026-01-23_11-33-44.mp4` (a real store-walkthrough
+/// video) — the same sticker as the neighboring frame 171, which already
+/// decoded pre-Plan-4B, but frame 167's tile-threshold bits alone carry 12
+/// scattered errors against the RS-validated truth (root-cause
+/// investigation), too many for v1-L to correct. Fix A (trace honesty) is
+/// not directly observable via `detect()`'s return value (it only changes
+/// what a `Trace` records on top of the same decode), so this gate pins
+/// Fix B (the reference-threshold + sharpening decode round) end to end:
+/// this must decode at the same working max-dim (1280) the rest of this
+/// gate uses, exactly like `real_1`/`real_2` above.
+#[test]
+fn gate_2b_video_frame167_decodes_at_working_resolution() {
+    const R8HR: &str = "HTTPS://R8.HR/6EQ44PPYZJN";
+
+    let (luma, w, h) = load_real_capture("video_f167");
+    let view = LumaView::new(&luma, w, h, w).unwrap();
+    let det = detect(&view);
+    let payloads: Vec<&str> = det.codes.iter().map(|c| c.payload.as_str()).collect();
+    println!("video_f167 @{w}x{h}: decoded {} code(s): {payloads:?}", det.codes.len());
+    // Exact (same pattern as `real_2` above): the frame decodes exactly
+    // this one code today — pin that, so a future spurious extra decode
+    // fails loudly instead of slipping past a mere `contains` check.
+    assert_eq!(
+        payloads,
+        vec![R8HR],
+        "video_f167: expected exactly [{R8HR:?}], got {payloads:?}"
     );
 }
 
