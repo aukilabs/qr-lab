@@ -12,9 +12,11 @@
 //! 1. **Timing cross-check** (only when the *current* estimate is `<= 41`
 //!    modules — [`crate::version::count_timing_transitions`]'s formula is
 //!    only meaningful there; v>=7's own version-info bits are authoritative
-//!    instead, see step 2): adopt the timing-derived dimension when it's
-//!    within +/-2 modules of the current estimate, else keep the estimate
-//!    and merely record the timing reading in the attempt trace.
+//!    instead, see step 2): adopt the timing-derived dimension — snapped to
+//!    the QR dimension lattice first, see the inline note at the check —
+//!    when it's within +/-2 modules of the current estimate, else keep the
+//!    estimate and merely record the raw timing reading in the attempt
+//!    trace.
 //! 2. **Version-info bits** (only once the dimension implies `version >=
 //!    7`): [`crate::version::read_version_bits`] BCH-decodes the redundant
 //!    version-info blocks; per the plan's recorded `ver_12_v40` finding this
@@ -23,15 +25,13 @@
 //!
 //! Between the two, a defensive bounds check rejects a dimension whose
 //! implied version would fall outside `1..=40` — [`crate::alignment::alignment_coords`]
-//! panics on an out-of-range version, and the only realistic way to reach
-//! one here is the timing cross-check nudging an already-small (v1) estimate
-//! down by its full +/-2 tolerance (e.g. triplet estimate 21, timing reading
-//! 19 or 20 both imply version 0). This is not expected to trigger on any
-//! real fixture (a clean v1 render's timing reading exactly reproduces 21),
-//! but a real camera frame's noise makes it reachable in principle, and
-//! silently corrupting `dimension` into something `alignment_coords` panics
-//! on would take down the whole scan. Rejected here as a normal (traced)
-//! failed attempt instead.
+//! panics on an out-of-range version. With the timing reading snapped to
+//! the QR dimension lattice (see the inline note at the check) the timing
+//! stage can no longer produce an out-of-range value itself, so this guard
+//! is purely defensive against future refactors — but silently corrupting
+//! `dimension` into something `alignment_coords` panics on would take down
+//! the whole scan, so an out-of-range value is still rejected here as a
+//! normal (traced) failed attempt rather than assumed impossible.
 //!
 //! After the dimension settles: alignment patterns are located, the grid is
 //! sampled, and [`crate::bitmatrix::decode_bits`] runs (with its own
@@ -43,7 +43,9 @@ use crate::alignment::{locate_alignment_patterns, AnchorSlot};
 use crate::bitmatrix::decode_bits;
 use crate::consts::{MAX_DECODE_ATTEMPTS, MAX_OOB_FRACTION};
 use crate::finder::FinderCandidate;
-use crate::sample::{provisional_transform, sample_grid};
+use crate::sample::{
+    needs_refined_br, provisional_transform, refine_fourth_corner, sample_grid, EdgeFitMode,
+};
 use crate::scanner::StageClock;
 use crate::tiles::TileGrid;
 use crate::triplet::TripletCandidate;
@@ -129,6 +131,14 @@ pub struct DecodeAttemptTrace {
     /// Fraction of sampled modules that fell outside the source image
     /// (`0.0` if sampling wasn't reached).
     pub oob_fraction: f64,
+    /// `true` when this attempt sampled through an image-derived 4th
+    /// corner from [`crate::sample::refine_fourth_corner`] (Plan 4 Task 5b)
+    /// instead of the parallelogram extrapolation — i.e. no BR alignment
+    /// anchor existed AND the edge-tracing refinement succeeded. Recorded
+    /// as its own field (the brief left the choice of "extend outcome or
+    /// add a bool" open) so trace consumers can filter on it without
+    /// string-parsing `outcome`.
+    pub refined_corner: bool,
     /// `"decoded"` on success (see [`decode_candidates`]'s cross-check note
     /// for the one case where it carries an appended discrepancy message
     /// instead of the bare string), else a short failure reason.
@@ -241,9 +251,34 @@ fn attempt_candidate(
         if let Some(transitions) = count_timing_transitions(view, grid, t, &transform) {
             let timing_dim = transitions + 13;
             timing_check = Some(timing_dim);
-            if (timing_dim as i64 - dimension as i64).abs() <= 2 && timing_dim != dimension {
-                dimension = timing_dim;
-                transform = provisional_transform(t, dimension);
+            // A raw timing reading is a transition count, unconstrained by
+            // the QR dimension lattice (21, 25, 29, ... — always == 1 mod
+            // 4), so it must be snapped to the nearest lattice value before
+            // it may replace `dimension` (zxing `Detector.computeDimension`
+            // does the same snap on its module-counting estimate; adopting
+            // a raw 23 would build an invalid 23x23 grid that can never
+            // decode — an actual bug caught by the Task 5b gate run on
+            // `tilt45_02`, whose timing walk misread 21 as 23). A reading
+            // exactly between two lattice values (raw == 3 mod 4, e.g. 23)
+            // snaps ambiguously — zxing rejects that case outright, and so
+            // does this. Note the arithmetic consequence: on the lattice,
+            // any change is a multiple of 4, so the brief's +/-2 adoption
+            // tolerance means the snapped reading can only ever *confirm*
+            // the estimate — the timing check is a cross-check, and the
+            // version-info bits (below) remain the only dimension override,
+            // exactly their respective roles in the plan.
+            let rem = (timing_dim as i64 - 21).rem_euclid(4);
+            let snapped = match rem {
+                0 => Some(timing_dim as i64),
+                1 => Some(timing_dim as i64 - 1),
+                3 => Some(timing_dim as i64 + 1),
+                _ => None, // equidistant between two lattice values
+            };
+            if let Some(snapped) = snapped {
+                if (snapped - dimension as i64).abs() <= 2 && snapped != dimension as i64 {
+                    dimension = snapped as u32;
+                    transform = provisional_transform(t, dimension);
+                }
             }
         }
     }
@@ -264,6 +299,7 @@ fn attempt_candidate(
                 alignment_found: 0,
                 alignment_total: 0,
                 oob_fraction: 0.0,
+                refined_corner: false,
                 outcome: "invalid_dimension".to_string(),
             },
             code: None,
@@ -300,120 +336,145 @@ fn attempt_candidate(
         .filter(|s| matches!(s, AnchorSlot::Found(_)))
         .count() as u32;
 
-    let corners = [
-        transform.map(0.0, 0.0),
-        transform.map(1.0, 0.0),
-        transform.map(1.0, 1.0),
-        transform.map(0.0, 1.0),
-    ];
-
     let sample_decode_clock = StageClock::start();
-    let sampled = match sample_grid(view, grid, t, dimension, &alignment) {
-        Some(s) => s,
-        None => {
-            timings.sample_decode_ns += sample_decode_clock.elapsed_ns();
-            return AttemptResult {
-                trace: DecodeAttemptTrace {
-                    triplet_index,
-                    dimension_est,
-                    dimension_final: dimension,
-                    timing_check,
-                    version_bits,
-                    alignment_found,
-                    alignment_total,
-                    oob_fraction: 0.0,
-                    outcome: "sample_transform_degenerate".to_string(),
-                },
-                code: None,
-            };
+
+    // One sample+decode round for a given (optional) refined BR corner.
+    // Returns the round's outcome string, oob_fraction, corners (from the
+    // FINAL transform: the single region's own transform when sampling ran
+    // through one region — v1/no-AP, the Task 5b refined rebuild, and the
+    // classic single-AP case — else the whole-grid provisional, since the
+    // multi-region tiling has no single whole-grid transform), and the
+    // decoded payload on success.
+    let run_round = |refined_br: Option<[f64; 2]>| -> (String, f64, [[f64; 2]; 4], Option<crate::bitmatrix::DecodedPayload>) {
+        let fallback_corners = [
+            transform.map(0.0, 0.0),
+            transform.map(1.0, 0.0),
+            transform.map(1.0, 1.0),
+            transform.map(0.0, 1.0),
+        ];
+        let sampled = match sample_grid(view, grid, t, dimension, &alignment, refined_br) {
+            Some(s) => s,
+            None => return ("sample_transform_degenerate".to_string(), 0.0, fallback_corners, None),
+        };
+        let corner_transform = if sampled.regions.len() == 1 {
+            &sampled.regions[0].transform
+        } else {
+            &transform
+        };
+        let corners = [
+            corner_transform.map(0.0, 0.0),
+            corner_transform.map(1.0, 0.0),
+            corner_transform.map(1.0, 1.0),
+            corner_transform.map(0.0, 1.0),
+        ];
+        if sampled.oob_fraction > MAX_OOB_FRACTION {
+            return (
+                format!("oob_fraction {:.4} exceeds {:.4}", sampled.oob_fraction, MAX_OOB_FRACTION),
+                sampled.oob_fraction,
+                corners,
+                None,
+            );
+        }
+        match decode_bits(&sampled.bits) {
+            Ok(payload) => {
+                // Cross-check consistency (Global Constraints, transcribed):
+                // decode_bits' own version comes from the bit matrix it was
+                // handed, which is exactly `dimension`-sized, so in practice
+                // this can never actually disagree — QR dimension<->version
+                // is a bijection (`dimension = 17 + 4*version`), and rqrr
+                // derives its reported version from the grid size it was
+                // given, not by re-reading version-info bits at decode time.
+                // Checked anyway, defensively: if it ever did disagree,
+                // decode_bits' RS-validated fields are what DecodedCode
+                // carries, with the discrepancy recorded in the trace
+                // rather than silently dropped.
+                let outcome = if payload.version == version {
+                    "decoded".to_string()
+                } else {
+                    format!(
+                        "decoded (dimension mismatch: sampled grid implied v{version}, \
+                         decode_bits returned v{})",
+                        payload.version
+                    )
+                };
+                (outcome, sampled.oob_fraction, corners, Some(payload))
+            }
+            Err(e) => (format!("{e:?}"), sampled.oob_fraction, corners, None),
         }
     };
 
-    if sampled.oob_fraction > MAX_OOB_FRACTION {
-        timings.sample_decode_ns += sample_decode_clock.elapsed_ns();
-        return AttemptResult {
-            trace: DecodeAttemptTrace {
-                triplet_index,
-                dimension_est,
-                dimension_final: dimension,
-                timing_check,
-                version_bits,
-                alignment_found,
-                alignment_total,
-                oob_fraction: sampled.oob_fraction,
-                outcome: format!(
-                    "oob_fraction {:.4} exceeds {:.4}",
-                    sampled.oob_fraction, MAX_OOB_FRACTION
-                ),
-            },
-            code: None,
-        };
-    }
+    // First round: the Task 5 behavior — parallelogram / single-AP
+    // anchored sampling, exactly as previously gated.
+    let (mut outcome, mut oob_fraction, mut corners, mut payload) = run_round(None);
+    let mut refined_corner = false;
 
-    let decode_result = decode_bits(&sampled.bits);
-    timings.sample_decode_ns += sample_decode_clock.elapsed_ns();
-
-    match decode_result {
-        Ok(payload) => {
-            // Cross-check consistency (Global Constraints, transcribed):
-            // decode_bits' own version comes from the bit matrix it was
-            // handed, which is exactly `dimension`-sized, so in practice
-            // this can never actually disagree — QR dimension<->version is
-            // a bijection (`dimension = 17 + 4*version`), and rqrr derives
-            // its reported version from the grid size it was given, not by
-            // re-reading version-info bits at decode time. Checked anyway,
-            // defensively: if it ever did disagree, decode_bits' RS-
-            // validated fields are what DecodedCode carries, with the
-            // discrepancy recorded in the trace rather than silently
-            // dropped.
-            let outcome = if payload.version == version {
-                "decoded".to_string()
-            } else {
-                format!(
-                    "decoded (dimension mismatch: sampled grid implied v{version}, \
-                     decode_bits returned v{})",
-                    payload.version
-                )
+    // Task 5b: only when that round fails Reed-Solomon decode AND the
+    // alignment search produced no BR anchor at all (v1 always; higher
+    // versions whose probes all missed), estimate the 4th corner from the
+    // image and retry once. Trying the parallelogram FIRST is deliberate:
+    // (a) it preserves the previously gated behavior wherever it already
+    // worked — the edge-fit refinement carries its own localization noise
+    // (measured 0.1-0.5 modules of BR-corner error across the golden
+    // fixtures) and must not displace a near-exact parallelogram on the
+    // frontal cases it was never needed for — and (b) `decode_bits` is
+    // RS-validated, so retry-on-failure can never turn a good decode into
+    // a wrong one. Runs under the sample_decode timing bucket (it is
+    // sampling-geometry work, interleaved per attempt like the rest), and
+    // only on the failure path, so the common already-decoding path never
+    // pays for it.
+    if payload.is_none() && needs_refined_br(&alignment) {
+        // Two robust edge-fit estimators with complementary failure
+        // domains (see `sample::EdgeFitMode`), each RS-validated — a wrong
+        // corner estimate can only fail the retry, never mis-decode.
+        let mut tried: Option<[f64; 2]> = None;
+        for mode in [EdgeFitMode::AnchorLine, EdgeFitMode::OuterHull] {
+            let Some(rc) = refine_fourth_corner(view, grid, t, dimension, &transform, mode) else {
+                continue;
             };
-            AttemptResult {
-                trace: DecodeAttemptTrace {
-                    triplet_index,
-                    dimension_est,
-                    dimension_final: dimension,
-                    timing_check,
-                    version_bits,
-                    alignment_found,
-                    alignment_total,
-                    oob_fraction: sampled.oob_fraction,
-                    outcome,
-                },
-                code: Some(DecodedCode {
-                    payload: payload.payload,
-                    payload_bytes: payload.payload_bytes,
-                    version: payload.version,
-                    ecc: payload.ecc,
-                    mirrored: payload.mirrored,
-                    dimension,
-                    corners,
-                    inverted: t.inverted,
-                    finder_indices: t.finder_indices,
-                }),
+            // Skip the second decode when both estimators agree (within a
+            // tenth of a module — far below any error that could flip a
+            // sampled bit, so the retry would be byte-identical).
+            if let Some(prev) = tried {
+                let d2 = (rc[0] - prev[0]).powi(2) + (rc[1] - prev[1]).powi(2);
+                if d2.sqrt() < 0.1 * t.module {
+                    continue;
+                }
+            }
+            tried = Some(rc);
+            let (r_outcome, r_oob, r_corners, r_payload) = run_round(Some(rc));
+            if r_payload.is_some() {
+                (outcome, oob_fraction, corners, payload) = (r_outcome, r_oob, r_corners, r_payload);
+                refined_corner = true;
+                break;
             }
         }
-        Err(e) => AttemptResult {
-            trace: DecodeAttemptTrace {
-                triplet_index,
-                dimension_est,
-                dimension_final: dimension,
-                timing_check,
-                version_bits,
-                alignment_found,
-                alignment_total,
-                oob_fraction: sampled.oob_fraction,
-                outcome: format!("{e:?}"),
-            },
-            code: None,
+    }
+    timings.sample_decode_ns += sample_decode_clock.elapsed_ns();
+
+    AttemptResult {
+        trace: DecodeAttemptTrace {
+            triplet_index,
+            dimension_est,
+            dimension_final: dimension,
+            timing_check,
+            version_bits,
+            alignment_found,
+            alignment_total,
+            oob_fraction,
+            refined_corner,
+            outcome,
         },
+        code: payload.map(|p| DecodedCode {
+            payload: p.payload,
+            payload_bytes: p.payload_bytes,
+            version: p.version,
+            ecc: p.ecc,
+            mirrored: p.mirrored,
+            dimension,
+            corners,
+            inverted: t.inverted,
+            finder_indices: t.finder_indices,
+        }),
     }
 }
 
@@ -424,12 +485,14 @@ fn attempt_candidate(
 /// of a triplet's own geometry already lives on the [`TripletCandidate`]
 /// itself.
 ///
-/// Returns the decoded codes, one [`DecodeAttemptTrace`] per triplet
-/// actually attempted (proximity-deduped-away triplets and triplets skipped
-/// because their finders were already consumed produce no trace entry —
-/// they were never really "attempted"), and the accumulated per-stage
-/// timing totals (see [`DecodeTimings`]'s doc for why this is a 3-tuple
-/// rather than the brief's literal 2-tuple).
+/// Returns the decoded codes, one [`DecodeAttemptTrace`] per attempt
+/// actually run — a triplet contributes up to 3 consecutive entries, one
+/// per corner-role rotation tried (all sharing its `triplet_index`, in
+/// rotation order 0..3; see the rotation note in the loop below), while
+/// proximity-deduped-away triplets and triplets skipped because their
+/// finders were already consumed produce no trace entry at all — and the
+/// accumulated per-stage timing totals (see [`DecodeTimings`]'s doc for
+/// why this is a 3-tuple rather than the brief's literal 2-tuple).
 pub(crate) fn decode_candidates(
     view: &LumaView,
     grid: &TileGrid,
@@ -442,24 +505,57 @@ pub(crate) fn decode_candidates(
     let mut attempts = Vec::new();
     let mut attempts_run = 0usize;
 
-    for idx in dedup_triplet_indices(triplets) {
-        if attempts_run >= MAX_DECODE_ATTEMPTS {
-            break;
-        }
+    'candidates: for idx in dedup_triplet_indices(triplets) {
         let t = &triplets[idx];
         if t.finder_indices.iter().any(|&i| consumed[i]) {
             continue;
         }
-        attempts_run += 1;
 
-        let result = attempt_candidate(view, grid, idx, t, &mut timings);
-        if let Some(code) = result.code {
-            for &i in &t.finder_indices {
-                consumed[i] = true;
+        // Attempt the candidate's three cyclic corner-role rotations, best
+        // (detected) assignment first. `triplet::try_group` picks the TL
+        // corner as the most-perpendicular *image-space* angle — a
+        // heuristic that steep perspective can fool (observed on
+        // `tilt45_04`: the detected roles were one cyclic rotation off,
+        // making the sampled matrix a 90-degree-rotated read that can
+        // never decode). Each rotation is a full, capped, traced attempt —
+        // this is exactly the "3 triplet permutations" already budgeted in
+        // `MAX_DECODE_ATTEMPTS`'s pinned provenance (4 codes x 3
+        // permutations x 2 headroom). Rotations after the first only run
+        // when the previous one failed; `decode_bits` is RS-validated, so
+        // a wrong rotation can never decode into a wrong payload. Cyclic
+        // rotations preserve the tl/tr/bl cross-product orientation
+        // convention, so the rotated candidate is still canonical.
+        for rotation in 0..3 {
+            if attempts_run >= MAX_DECODE_ATTEMPTS {
+                break 'candidates;
             }
-            codes.push(code);
+            let rotated = if rotation == 0 {
+                *t
+            } else {
+                let mut r = *t;
+                let (p, i) = ([t.tl, t.tr, t.bl], t.finder_indices);
+                let k = rotation; // shift roles: new_tl = old[(0+k)%3], ...
+                r.tl = p[k % 3];
+                r.tr = p[(k + 1) % 3];
+                r.bl = p[(k + 2) % 3];
+                r.finder_indices = [i[k % 3], i[(k + 1) % 3], i[(k + 2) % 3]];
+                r
+            };
+            attempts_run += 1;
+
+            let result = attempt_candidate(view, grid, idx, &rotated, &mut timings);
+            let decoded = result.code.is_some();
+            if let Some(code) = result.code {
+                for &i in &rotated.finder_indices {
+                    consumed[i] = true;
+                }
+                codes.push(code);
+            }
+            attempts.push(result.trace);
+            if decoded {
+                break;
+            }
         }
-        attempts.push(result.trace);
     }
 
     (codes, attempts, timings)
@@ -701,7 +797,9 @@ mod tests {
         let (codes, attempts, _timings) =
             decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t));
         assert!(codes.is_empty());
-        assert_eq!(attempts.len(), 1);
+        // One attempt per corner-role rotation (all fail), each rejected
+        // by the OOB gate before decode.
+        assert_eq!(attempts.len(), 3);
         assert!(attempts[0].outcome.starts_with("oob_fraction"), "{}", attempts[0].outcome);
     }
 
@@ -725,8 +823,9 @@ mod tests {
         let (codes, attempts, _timings) =
             decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t));
         assert!(codes.is_empty());
-        assert_eq!(attempts.len(), 1);
-        assert_ne!(attempts[0].outcome, "decoded");
+        // One attempt per corner-role rotation, all failing cleanly.
+        assert_eq!(attempts.len(), 3);
+        assert!(attempts.iter().all(|a| a.outcome != "decoded"));
     }
 
     #[test]
@@ -756,5 +855,107 @@ mod tests {
             decode_candidates(&view, &grid, &dummy_finders(total * 3), &triplets);
         assert!(codes.is_empty());
         assert_eq!(attempts.len(), MAX_DECODE_ATTEMPTS);
+    }
+
+    // --- Task 5b: image-derived 4th corner + corner-role rotation ---
+
+    /// The keystone (trapezoid) quad `sample.rs`'s own AP-superiority test
+    /// established: top edge narrowed to `narrow` of the bottom edge's
+    /// width. At `narrow = 0.90` a v1's finder-only parallelogram
+    /// reconstruction measurably fails bit-for-bit (recorded in
+    /// `sample.rs`'s test docs since Task 4), making it exactly the
+    /// synthetic case Task 5b's refinement must rescue.
+    fn keystone_quad(dim: usize, scale: f64, narrow: f64, img_side: usize) -> [[f64; 2]; 4] {
+        let side = dim as f64 * scale;
+        let margin = (img_side as f64 - side) / 2.0;
+        let cx = img_side as f64 / 2.0;
+        let top_half = side / 2.0 * narrow;
+        let bottom_half = side / 2.0;
+        let (y0, y1) = (margin, margin + side);
+        [
+            [cx - top_half, y0],
+            [cx + top_half, y0],
+            [cx + bottom_half, y1],
+            [cx - bottom_half, y1],
+        ]
+    }
+
+    #[test]
+    fn refined_corner_rescues_v1_keystone_that_defeats_the_parallelogram() {
+        let version = 1i16;
+        let dim = 17 + 4 * version as usize;
+        let scale = 4.0;
+        let img_side = ((dim as f64 * scale) * std::f64::consts::SQRT_2 + 40.0).ceil() as usize;
+        let quad = keystone_quad(dim, scale, 0.90, img_side);
+        let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
+        let code = qrcode::QrCode::with_version(
+            b"KEYSTONE", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+        )
+        .unwrap();
+        assert_eq!(code.width(), dim);
+        let img = render_module_grid_transformed(
+            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+        );
+        let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
+        let grid = TileGrid::build(&view);
+
+        let t = triplet_from_transform(&transform, dim, dim as u32);
+        let (codes, attempts, _timings) =
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t));
+        assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
+        assert_eq!(codes[0].payload, "KEYSTONE");
+        // The decode must have come through the image-derived corner — the
+        // whole point of Task 5b — not the parallelogram fallback (which
+        // this keystone is pinned to defeat).
+        let decoded_attempt = attempts.iter().find(|a| a.outcome.starts_with("decoded")).unwrap();
+        assert!(
+            decoded_attempt.refined_corner,
+            "expected the refined-corner path, got: {decoded_attempt:?}"
+        );
+    }
+
+    #[test]
+    fn rotated_corner_roles_still_decode_via_rotation_retry() {
+        // A clean v1 render, but the triplet handed in with its corner
+        // roles cyclically rotated (tl<-tr<-bl<-tl) — the mis-assignment
+        // `triplet::try_group`'s most-perpendicular-corner heuristic
+        // produces under steep perspective (observed on the `tilt45_04`
+        // fixture). The rotation retry in `decode_candidates` must recover
+        // it, at the cost of extra traced attempts for the failed
+        // rotation(s).
+        let version = 1i16;
+        let dim = 17 + 4 * version as usize;
+        let scale = 4.0;
+        let (quad, img_side) = axis_aligned_quad(dim, scale, 4.0);
+        let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
+        let code = qrcode::QrCode::with_version(
+            b"ROTROLE", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+        )
+        .unwrap();
+        let img = render_module_grid_transformed(
+            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+        );
+        let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
+        let grid = TileGrid::build(&view);
+
+        let good = triplet_from_transform(&transform, dim, dim as u32);
+        let mut rotated = good;
+        // One cyclic rotation off: what try_group would emit if it picked
+        // the wrong corner as TL (orientation-preserving, so still a
+        // canonically valid triplet).
+        rotated.tl = good.tr;
+        rotated.tr = good.bl;
+        rotated.bl = good.tl;
+        rotated.finder_indices = [1, 2, 0];
+
+        let (codes, attempts, _timings) =
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&rotated));
+        assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
+        assert_eq!(codes[0].payload, "ROTROLE");
+        assert!(
+            attempts.len() > 1,
+            "the mis-assigned rotation must have produced at least one failed attempt first"
+        );
+        assert_eq!(attempts.last().unwrap().outcome, "decoded");
     }
 }
