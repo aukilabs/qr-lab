@@ -62,15 +62,49 @@ pub const ALIGNMENT_PROBE_HALF_MODULES: f64 = 2.25;
 /// computes and returns `oob_fraction`; `decode.rs` applies this threshold.
 pub(crate) const MAX_OOB_FRACTION: f64 = 0.02;
 
-/// Candidate cap for `decode.rs`'s per-frame arbitration loop (Plan 4's
-/// Global Constraints, transcribed verbatim): `4 codes/frame worst case * 3
-/// triplet permutations/code * 2 headroom = 24`. A "triplet permutation"
-/// here is the observed failure mode from multi-code fixtures where more
-/// than one finder triple can plausibly group around the same handful of
-/// real finders before proximity dedup and consumption prune them — capping
-/// total attempts bounds worst-case per-frame decode work even when a scene
-/// is unusually cluttered with finder-like noise.
-pub(crate) const MAX_DECODE_ATTEMPTS: usize = 24;
+/// Per-frame round budget for `decode.rs`'s arbitration loop (Plan 5 Task 6,
+/// replacing the old `MAX_DECODE_ATTEMPTS` attempt-counted cap — see the
+/// plan's Global Constraints and Plan 4's recorded follow-up (c) for the
+/// full history). Same provenance chain, extended by one more factor:
+/// `4 codes/frame worst case * 3 triplet permutations/code * 2 headroom * 3
+/// geometry rounds/attempt = 72`.
+///
+/// The first three factors are Plan 4's original `MAX_DECODE_ATTEMPTS`
+/// derivation, unchanged: a "triplet permutation" is the observed failure
+/// mode from multi-code fixtures where more than one finder triple can
+/// plausibly group around the same handful of real finders before
+/// proximity dedup and consumption prune them.
+///
+/// The new `* 3` factor is why the cap moved from attempts to rounds:
+/// `decode_candidates` counts one attempt as one corner-role rotation of
+/// one triplet (`attempt_candidate`'s single call), but since Plan 4 Task
+/// 5b + Plan 4B Fix B, a single attempt internally runs up to 3 "geometry
+/// rounds" — one `sample_grid`+`decode_bits` cycle each, tagged
+/// `parallelogram`/`anchor_line`/`outer_hull` in
+/// [`crate::decode::DecodeAttemptTrace::rounds`] — when the first
+/// (parallelogram) round fails and no alignment-pattern anchor was found
+/// (`sample::needs_refined_br`). A round counts as ONE unit of budget
+/// regardless of whether Fix B's reference-threshold retry also ran inside
+/// it: that retry is one extra `decode_bits` (rqrr) call on the SAME
+/// sampled grays, no resampling — real, but strictly cheaper than a whole
+/// additional round, and "a round is a sampling cycle" keeps the budget's
+/// unit simple and honest (the retry's extra rqrr-call cost is absorbed
+/// into the per-round budget rather than tracked as its own thing). So
+/// budgeting attempts at their old worst-case cost (3 rounds each) instead
+/// of a flat 1 reproduces the exact old worst-case total work
+/// (`24 attempts * 3 rounds = 72`), while an attempt that only needs 1
+/// round (the common case — most decodes succeed on the first round, and a
+/// non-decoding v7+ candidate with a located alignment pattern never enters
+/// the Task 5b retry loop at all) now correctly costs only 1 unit instead
+/// of being charged for headroom it never uses — letting MORE cheap
+/// attempts run per frame before the budget binds, exactly the fixtures'
+/// everyday case (see `tests/decode_trace_gate.rs`'s
+/// `round_budget_never_binds_on_the_golden_fixture_suite`). The budget is
+/// checked once per attempt, before it runs (not
+/// mid-attempt), so the hard worst case is a small, bounded overrun: up to
+/// 2 extra rounds beyond 72 if the very last attempt let through costs the
+/// maximum 3.
+pub(crate) const MAX_DECODE_ROUNDS: usize = 72;
 
 /// Number of boundary probes per edge for `sample.rs`'s
 /// `refine_fourth_corner` (Plan 4 Task 5b). Line-fit noise scales as

@@ -1,10 +1,19 @@
 //! Loads a golden fixture (`fixtures/<name>.json` + `.luma`), runs
-//! [`qrk_core::detect`], and prints per-stage timings plus every finder
-//! and triplet found. Usage:
+//! [`qrk_core::scan`] (Plan 5 Task 6: switched from `detect` so the printed
+//! timings actually cover the post-Plan-5 pipeline, including the
+//! `refine_ns` stage — `detect` never refines, so that field would always
+//! read zero), and prints per-stage timings plus every finder and triplet
+//! found. Usage:
 //!
 //! ```sh
 //! cargo run -p qrk-core --example scan_fixture -- near_00
 //! ```
+//!
+//! `max_working_dim: 0` (no downscale) + `refine: true`: these fixtures are
+//! already at their intended working resolution, so this measures the same
+//! detection path `detect` would, plus refinement against the (identical)
+//! source view — `source_scale` stays `1.0`, matching `detect`'s implicit
+//! behavior, so this is a pure superset of what the example printed before.
 //!
 //! Examples build with `[dev-dependencies]` available (unlike the library
 //! crate itself), so this reuses `serde`/`serde_json` directly rather than
@@ -15,7 +24,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use qrk_core::{detect, LumaView};
+use qrk_core::{scan, LumaView, ScanOptions};
 use serde::Deserialize;
 
 /// Only the fixture-schema fields this example needs (see
@@ -47,17 +56,19 @@ fn main() {
     let view = LumaView::new(&luma, meta.width, meta.height, meta.width)
         .unwrap_or_else(|e| panic!("{name}: invalid LumaView: {e:?}"));
 
-    let det = detect(&view);
+    let opts = ScanOptions { max_working_dim: 0, refine: true };
+    let det = scan(&view, &opts);
 
     println!("fixture: {name} ({}x{})", meta.width, meta.height);
     println!(
-        "timings (us): tiles={} finders={} triplets={} version={} alignment={} sample_decode={}",
+        "timings (us): tiles={} finders={} triplets={} version={} alignment={} sample_decode={} refine={}",
         det.timings.tiles_ns / 1_000,
         det.timings.finders_ns / 1_000,
         det.timings.triplets_ns / 1_000,
         det.timings.version_ns / 1_000,
         det.timings.alignment_ns / 1_000,
         det.timings.sample_decode_ns / 1_000,
+        det.timings.refine_ns / 1_000,
     );
     println!("finders: {}", det.finders.len());
     println!("triplets: {}", det.triplets.len());
@@ -70,8 +81,9 @@ fn main() {
     println!("codes: {}", det.codes.len());
     for (i, c) in det.codes.iter().enumerate() {
         println!(
-            "  [{i}] payload={:?} version={} ecc={} mirrored={} dimension={} inverted={}",
+            "  [{i}] payload={:?} version={} ecc={} mirrored={} dimension={} inverted={} refined_corners={}",
             c.payload, c.version, c.ecc, c.mirrored, c.dimension, c.inverted,
+            c.refined_corners.is_some(),
         );
     }
 }
