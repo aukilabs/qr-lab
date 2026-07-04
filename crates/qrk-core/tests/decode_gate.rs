@@ -521,3 +521,94 @@ fn plan5_gate3_img4832_decodes_at_source_resolution() {
         det.triplets.len()
     );
 }
+
+/// Downscale-ACTIVE refinement sanity (Plan 5 Task 4 follow-up, controller
+/// request): every other refinement test in the suite — `refine.rs`'s
+/// synthetic gates, `refine_gate.rs`'s fixture gate, and the e2e smoke
+/// above — runs with `source == working` (`sx = sy = 1`), so the
+/// working→source per-axis corner lift inside `refine_corners` (`working_px
+/// / s` per axis) was exercised only by unit-level tests until now. This
+/// runs the ONE fixture where a real downscale genuinely happens
+/// (`IMG_4832`, 4032x3024 source -> working max-dim 1280) with `refine:
+/// true`, end to end through `scan()`.
+///
+/// No corner ground truth exists for this photo (a hand-held real capture
+/// — the plan's recorded limitation for all real fixtures), so this is a
+/// SANITY BRACKET, not an accuracy gate: refinement must produce corners
+/// that (a) exist, (b) land inside the source image, and (c) each sit
+/// within 3 SOURCE MODULES of its corresponding source-scaled coarse
+/// corner. 3 modules is a wide, non-tuned bracket: the coarse corners
+/// themselves are decode-surviving geometry (a grid misplaced by ~half a
+/// module stops RS-decoding — the same argument `refine.rs`'s perturbed
+/// gate pins at ±0.3 module), and refinement's whole probe reach is
+/// ±1.5 modules around the coarse edge plus the outlier-capped fit, so a
+/// refined corner drifting 3+ modules from coarse could only mean the
+/// per-axis lift itself is broken (e.g. the pre-fix width-scalar bug Task
+/// 2 measured at ~0.75px would still pass; a swapped/inverted axis, off-
+/// by-scale, or px/module confusion would fail by a wide margin).
+///
+/// The coarse->source conversion below uses the public width-pinned
+/// `Detections::source_scale` for BOTH axes rather than the internal
+/// per-axis ratios (not exposed); the height axis's rounding slack is at
+/// most half a source pixel (see `source_scale`'s doc) — negligible
+/// against the 3-module bracket.
+#[test]
+fn plan5_refine_downscale_active_sanity_on_img4832() {
+    let (luma, w, h) = load_real_capture_source("IMG_4832");
+    let view = LumaView::new(&luma, w, h, w).unwrap();
+    let det = scan(&view, &ScanOptions { max_working_dim: 1280, refine: true });
+    assert!(
+        det.source_scale < 1.0,
+        "IMG_4832 must actually downscale for this test to exercise anything \
+         (source_scale = {})",
+        det.source_scale
+    );
+
+    let refined_codes: Vec<_> = det.codes.iter().filter(|c| c.refined_corners.is_some()).collect();
+    assert!(
+        !refined_codes.is_empty(),
+        "IMG_4832 @ working 1280 + refine: expected >=1 decoded code with refined_corners Some, \
+         got {} decoded code(s), none refined: {:?}",
+        det.codes.len(),
+        det.codes.iter().map(|c| c.payload.as_str()).collect::<Vec<_>>()
+    );
+
+    for code in &refined_codes {
+        let refined = code.refined_corners.unwrap();
+        // Coarse corners lifted working -> source px (see the doc comment
+        // on the width-pinned approximation).
+        let coarse_source: [[f64; 2]; 4] =
+            code.corners.map(|[x, y]| [x / det.source_scale, y / det.source_scale]);
+        // Source px per module, from the coarse quad's own top edge.
+        let top = [
+            coarse_source[1][0] - coarse_source[0][0],
+            coarse_source[1][1] - coarse_source[0][1],
+        ];
+        let module_src_px =
+            (top[0] * top[0] + top[1] * top[1]).sqrt() / code.dimension as f64;
+        let bracket = 3.0 * module_src_px;
+
+        for i in 0..4 {
+            let [rx, ry] = refined[i];
+            assert!(
+                rx >= 0.0 && ry >= 0.0 && rx <= (w - 1) as f64 && ry <= (h - 1) as f64,
+                "{:?} corner {i}: refined [{rx:.2}, {ry:.2}] outside source bounds {w}x{h}",
+                code.payload
+            );
+            let d = ((rx - coarse_source[i][0]).powi(2) + (ry - coarse_source[i][1]).powi(2))
+                .sqrt();
+            println!(
+                "IMG_4832 refine sanity: {:?} corner {i}: |refined - coarse_source| = {d:.3}px \
+                 (bracket {bracket:.3}px = 3 modules @ {module_src_px:.3}px/module)",
+                code.payload
+            );
+            assert!(
+                d <= bracket,
+                "{:?} corner {i}: refined [{rx:.2}, {ry:.2}] is {d:.2}px from its source-scaled \
+                 coarse corner {:?} — beyond the 3-source-module ({bracket:.2}px) sanity bracket",
+                code.payload,
+                coarse_source[i]
+            );
+        }
+    }
+}

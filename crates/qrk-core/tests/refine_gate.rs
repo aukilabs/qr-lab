@@ -73,20 +73,24 @@
 //! (mean ~0.01-0.03px, see the printed table) — direct empirical
 //! confirmation of the geometric argument above, not a tuned fix.
 //!
-//! # Gates
+//! # Gate (LOCKED — controller decision, 2026-07-04)
 //!
-//! - HARD (Plan 5 Global Constraints gate 2): per-prefix mean corner error
-//!   <= 0.10px on `near_`, `rot_`, `ver_`. A matched code with
-//!   `refined_corners == None` counts as an outright failure on ANY prefix
-//!   (not just these three) — a `None` cannot satisfy any finite bound, so
-//!   exempting the loose-gated prefixes from this would just let a total
-//!   refinement failure hide inside a wide sanity ceiling.
-//! - MEASURED-THEN-LOCKED (first green run): `far_`, `tilt45_`, `combo_`,
-//!   `trans_`, `inv_`, `invtrans_`, `mirror_`, `multi_` are only asserted
-//!   against a loose 0.5px mean sanity ceiling for this commit — see
-//!   TODO(locked-values) below. The full measured table is printed and
-//!   reported to the controller, which locks the real per-prefix bars in a
-//!   follow-up commit once reviewed.
+//! Per-prefix mean corner error <= 0.10px, UNIFORMLY across ALL prefixes.
+//!
+//! The plan's measured-then-locked protocol ran its course: the first
+//! green run's per-prefix table (embedded near the assertion as a
+//! reference comment) showed every prefix — including the non-nominal
+//! `far_`/`tilt45_`/`combo_`/`trans_`/`inv_`/`invtrans_`/`mirror_`/
+//! `multi_` set the plan left to be measured first — landing at
+//! 0.008-0.039px mean, i.e. 2.5-12x inside the nominal prefixes' own
+//! 0.10px bar. The controller's recorded lock decision: extend the SAME
+//! 0.10px pose-quality budget to every prefix (a principled bound shared
+//! with the plan's nominal gate), rather than locking the exact measured
+//! values (which would over-fit the gate to one generator seed's noise
+//! floor).
+//!
+//! A matched code with `refined_corners == None` counts as an outright
+//! failure on ANY prefix — a `None` cannot satisfy any finite bound.
 
 mod common;
 
@@ -133,17 +137,10 @@ fn corner_error(a: [f64; 2], b: [f64; 2]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
-/// HARD-gated prefixes: nominal poses with no pathology the plan expects
-/// to defeat refinement (frontal-ish `near_`, in-plane-only `rot_`, mild
-/// `ver_` tilt sweep across every version).
-const HARD_GATED_PREFIXES: [&str; 3] = ["near", "rot", "ver"];
-
-/// Loose sanity ceiling for every other prefix, for THIS commit only —
-/// TODO(locked-values): replace with the measured-then-locked per-prefix
-/// bars once the controller reviews this run's printed table (Plan 5
-/// Global Constraints gate 2's measured-then-locked protocol).
-const SANITY_CEILING_PX: f64 = 0.5;
-const HARD_CEILING_PX: f64 = 0.10;
+/// The locked, uniform per-prefix mean bound (see the module doc's "Gate
+/// (LOCKED)" section for the controller's recorded decision and the
+/// measured reference table near the assertion below).
+const MEAN_CEILING_PX: f64 = 0.10;
 
 #[derive(Default)]
 struct PrefixStats {
@@ -240,38 +237,35 @@ fn fixture_accuracy_gate() {
         }
     }
 
-    for prefix in HARD_GATED_PREFIXES {
-        let Some(s) = stats.get(prefix) else {
-            hard_failures.push(format!("{prefix}: no fixtures found for a HARD-gated prefix"));
-            continue;
-        };
-        let mean = s.mean();
-        // `mean.is_finite()` guards `NaN` (an empty `errors` set — no code
-        // for this prefix ever reached a valid refinement) explicitly
-        // failing rather than silently comparing false either way.
-        let ok = mean.is_finite() && mean <= HARD_CEILING_PX;
-        if !ok {
-            hard_failures.push(format!(
-                "{prefix}: HARD gate mean {mean:.4}px exceeds {HARD_CEILING_PX}px (max {:.4}px, {} codes)",
-                s.max(),
-                s.codes
-            ));
-        }
-    }
-
+    // Reference table from the first green run (2026-07-04, the run the
+    // controller's uniform-0.10px lock decision was based on) — kept here
+    // so future drift is visible in review even while a regression stays
+    // under the gate. Source px, all matched codes' 4 corners pooled:
+    //
+    //   prefix     fixtures   codes    mean_px     max_px  none_fail
+    //   combo             4       4     0.0239     0.0725          0
+    //   far               8       8     0.0152     0.0541          0
+    //   inv               6       6     0.0075     0.0162          0
+    //   invtrans          4       4     0.0176     0.0646          0
+    //   mirror            4       4     0.0227     0.0646          0
+    //   multi             8      20     0.0176     0.1058          0
+    //   near              8       8     0.0119     0.0602          0
+    //   rot              12      12     0.0218     0.0845          0
+    //   tilt45            8       8     0.0388     0.2262          0
+    //   trans             6       6     0.0226     0.0744          0
+    //   ver              13      13     0.0191     0.0877          0
     for (prefix, s) in &stats {
-        if HARD_GATED_PREFIXES.contains(&prefix.as_str()) {
-            continue;
-        }
-        if s.errors.is_empty() {
-            continue; // nothing decoded/refined for this prefix at all
-        }
         let mean = s.mean();
-        let ok = mean.is_finite() && mean <= SANITY_CEILING_PX;
+        // `mean.is_finite()` makes `NaN` (an empty `errors` set — no code
+        // for this prefix ever reached a valid refinement) explicitly fail
+        // rather than silently comparing false either way. Every prefix in
+        // the suite has decodable codes (decode_gate.rs gate 1), so an
+        // empty set here means refinement collapsed wholesale.
+        let ok = mean.is_finite() && mean <= MEAN_CEILING_PX;
         if !ok {
             hard_failures.push(format!(
-                "{prefix}: loose sanity ceiling mean {mean:.4}px exceeds {SANITY_CEILING_PX}px \
-                 (max {:.4}px, {} codes) — TODO(locked-values) once reviewed",
+                "{prefix}: mean {mean:.4}px exceeds the locked {MEAN_CEILING_PX}px bound \
+                 (max {:.4}px, {} codes)",
                 s.max(),
                 s.codes
             ));
