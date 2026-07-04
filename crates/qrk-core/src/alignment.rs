@@ -24,6 +24,7 @@
 use crate::consts::ALIGNMENT_PROBE_HALF_MODULES;
 use crate::homography::PerspectiveTransform;
 use crate::tiles::TileGrid;
+use crate::trace::AlignmentTraceEntry;
 use crate::version::sample_module_ink;
 use crate::LumaView;
 
@@ -148,6 +149,45 @@ pub(crate) struct AlignmentGrid {
     /// index and `j` the column index, is the indexing contract it must
     /// use.
     pub found: Vec<AnchorSlot>,
+    /// Same row-major indexing as `found`: the position
+    /// [`predict_position`] computed for this slot before the concentric
+    /// probe ran (or, for a `FinderCorner` slot, `predict_position`'s
+    /// naive provisional-transform projection of that slot's own lattice
+    /// coordinate — never a real search result, but harmless: Task 6's
+    /// trace consumer, [`AlignmentGrid::to_trace_entries`], skips
+    /// finder-corner slots entirely). Plan 4 Task 6's debug-UI overlay
+    /// input — recorded unconditionally (cheap: at most `7x7` entries)
+    /// rather than gated behind a trace flag, matching
+    /// `decode::DecodeAttemptTrace`'s own "always build it, let the
+    /// caller decide whether to keep it" precedent.
+    pub predicted: Vec<[f64; 2]>,
+}
+
+impl AlignmentGrid {
+    /// This grid's search results as Task 6's flat, finder-corner-excluded
+    /// trace entries — see [`AlignmentTraceEntry`]'s doc for why corners
+    /// are skipped.
+    pub(crate) fn to_trace_entries(&self) -> Vec<AlignmentTraceEntry> {
+        let n = self.coords.len();
+        let mut out = Vec::with_capacity((n * n).saturating_sub(3));
+        for i in 0..n {
+            for j in 0..n {
+                if is_finder_corner(i, j, n) {
+                    continue;
+                }
+                let found = match self.found[i * n + j] {
+                    AnchorSlot::Found(p) => Some(p),
+                    AnchorSlot::Missing => None,
+                    AnchorSlot::FinderCorner => unreachable!(
+                        "(i, j) = ({i}, {j}) is a FinderCorner slot but wasn't matched by \
+                         is_finder_corner above — the two have gone out of sync"
+                    ),
+                };
+                out.push(AlignmentTraceEntry { predicted: self.predicted[i * n + j], found });
+            }
+        }
+        out
+    }
 }
 
 /// `true` iff lattice node `(i, j)` (0-indexed into a `coords` of length
@@ -350,9 +390,10 @@ pub(crate) fn locate_alignment_patterns(
     let coords = alignment_coords(version).to_vec();
     let n = coords.len();
     let mut found = vec![AnchorSlot::Missing; n * n];
+    let mut predicted = vec![[0.0, 0.0]; n * n];
     if n == 0 {
         // v1: no alignment patterns at all.
-        return AlignmentGrid { coords, found };
+        return AlignmentGrid { coords, found, predicted };
     }
     for &(ci, cj) in &[(0usize, 0usize), (0, n - 1), (n - 1, 0)] {
         found[ci * n + cj] = AnchorSlot::FinderCorner;
@@ -361,17 +402,24 @@ pub(crate) fn locate_alignment_patterns(
     let dim = 17 + 4 * version; // ISO 18004 dimension formula.
     for i in 0..n {
         for j in 0..n {
+            // Computed for every slot, including finder corners, so
+            // `predicted` stays a dense `n x n` lattice matching `found`'s
+            // own indexing (see the field doc) — cheap (a handful of
+            // `provisional.map` calls at worst) and it's the same value
+            // `predict_position` would derive for a corner anyway, since
+            // raster order has already resolved every dependency it needs
+            // regardless of whether this particular slot gets searched.
+            let p = predict_position(&found, &coords, i, j, n, dim, provisional);
+            predicted[i * n + j] = p;
             if is_finder_corner(i, j, n) {
                 continue;
             }
-            let predicted = predict_position(&found, &coords, i, j, n, dim, provisional);
-            found[i * n + j] =
-                recenter_alignment_pattern(view, grid, provisional, dim, predicted, inverted)
-                    .map(AnchorSlot::Found)
-                    .unwrap_or(AnchorSlot::Missing);
+            found[i * n + j] = recenter_alignment_pattern(view, grid, provisional, dim, p, inverted)
+                .map(AnchorSlot::Found)
+                .unwrap_or(AnchorSlot::Missing);
         }
     }
-    AlignmentGrid { coords, found }
+    AlignmentGrid { coords, found, predicted }
 }
 
 #[cfg(test)]

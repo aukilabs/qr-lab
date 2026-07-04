@@ -26,7 +26,14 @@ describe("tripletsLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], timings: { tiles_ns: 0, finders_ns: 0, triplets_ns: 0 } },
+      detections: { finders: [], triplets: [], codes: [], timings: {
+        tiles_ns: 0,
+        finders_ns: 0,
+        triplets_ns: 0,
+        version_ns: 0,
+        alignment_ns: 0,
+        sample_decode_ns: 0,
+      } },
       trace: null,
     };
     tripletsLayer.draw(ctx);
@@ -48,9 +55,18 @@ describe("tripletsLayer", () => {
             dimension: 21,
             snap_error: 0.4,
             inverted: false,
+            finder_indices: [0, 1, 2],
           },
         ],
-        timings: { tiles_ns: 0, finders_ns: 0, triplets_ns: 0 },
+        codes: [],
+        timings: {
+        tiles_ns: 0,
+        finders_ns: 0,
+        triplets_ns: 0,
+        version_ns: 0,
+        alignment_ns: 0,
+        sample_decode_ns: 0,
+      },
       },
       trace: null,
     };
@@ -82,12 +98,21 @@ describe("tripletsLayer", () => {
       dimension: 21,
       snap_error: 0.1,
       inverted: false,
+      finder_indices: [0, 1, 2] as [number, number, number],
     };
     ctx.scan = {
       detections: {
         finders: [],
         triplets: [triplet, { ...triplet, tl: [200, 200] }],
-        timings: { tiles_ns: 0, finders_ns: 0, triplets_ns: 0 },
+        codes: [],
+        timings: {
+        tiles_ns: 0,
+        finders_ns: 0,
+        triplets_ns: 0,
+        version_ns: 0,
+        alignment_ns: 0,
+        sample_decode_ns: 0,
+      },
       },
       trace: null,
     };

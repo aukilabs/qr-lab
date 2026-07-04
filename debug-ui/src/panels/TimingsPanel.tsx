@@ -78,7 +78,8 @@ function drawSparkline(ctx: CanvasRenderingContext2D, values: readonly number[])
 }
 
 /**
- * Table of per-stage detection timings (tiles/finders/triplets, from
+ * Table of per-stage detection timings (tiles/finders/triplets plus the
+ * Plan 4 decode-stage totals version/alignment/sample+decode, from
  * `detections.timings` — real wasm `StageClock` measurements as of Plan 3
  * Task 5, ms-resolution via `js_sys::Date::now()`) plus worker wall time
  * and main-thread round-trip time, each with a 60-sample rolling
@@ -101,6 +102,18 @@ export function TimingsPanel({ sample, sampleId }: TimingsPanelProps) {
       { label: "tiles", buffer: new RollingBuffer(), format: formatNs, pick: (s) => s.timings.tiles_ns },
       { label: "finders", buffer: new RollingBuffer(), format: formatNs, pick: (s) => s.timings.finders_ns },
       { label: "triplets", buffer: new RollingBuffer(), format: formatNs, pick: (s) => s.timings.triplets_ns },
+      // Plan 4 Task 6: the three decode-stage totals `decode::DecodeTimings`
+      // accumulates across every attempt in the frame (see that struct's
+      // doc for why they're summed rather than per-stage-phase like the
+      // three above).
+      { label: "version", buffer: new RollingBuffer(), format: formatNs, pick: (s) => s.timings.version_ns },
+      { label: "alignment", buffer: new RollingBuffer(), format: formatNs, pick: (s) => s.timings.alignment_ns },
+      {
+        label: "sample+decode",
+        buffer: new RollingBuffer(),
+        format: formatNs,
+        pick: (s) => s.timings.sample_decode_ns,
+      },
       { label: "worker wall", buffer: new RollingBuffer(), format: formatMs, pick: (s) => s.wallMs },
       { label: "round trip", buffer: new RollingBuffer(), format: formatMs, pick: (s) => s.roundTripMs },
     ],

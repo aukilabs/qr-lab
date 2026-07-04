@@ -26,7 +26,14 @@ describe("tilesLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], timings: { tiles_ns: 0, finders_ns: 0, triplets_ns: 0 } },
+      detections: { finders: [], triplets: [], codes: [], timings: {
+        tiles_ns: 0,
+        finders_ns: 0,
+        triplets_ns: 0,
+        version_ns: 0,
+        alignment_ns: 0,
+        sample_decode_ns: 0,
+      } },
       trace: null,
     };
     tilesLayer.draw(ctx);
@@ -37,8 +44,23 @@ describe("tilesLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], timings: { tiles_ns: 0, finders_ns: 0, triplets_ns: 0 } },
-      trace: { tiles: null, finders: [], triplets: [] },
+      detections: { finders: [], triplets: [], codes: [], timings: {
+        tiles_ns: 0,
+        finders_ns: 0,
+        triplets_ns: 0,
+        version_ns: 0,
+        alignment_ns: 0,
+        sample_decode_ns: 0,
+      } },
+      trace: {
+        tiles: null,
+        finders: [],
+        triplets: [],
+        attempts: [],
+        alignment: [],
+        sample_regions: [],
+        bits: null,
+      },
     };
     tilesLayer.draw(ctx);
     expect(fake.calls).toHaveLength(0);
@@ -49,11 +71,22 @@ describe("tilesLayer", () => {
     const ctx = baseContext(fake);
     // 2x1 tile grid: tile 0 kept, tile 1 skipped.
     ctx.scan = {
-      detections: { finders: [], triplets: [], timings: { tiles_ns: 0, finders_ns: 0, triplets_ns: 0 } },
+      detections: { finders: [], triplets: [], codes: [], timings: {
+        tiles_ns: 0,
+        finders_ns: 0,
+        triplets_ns: 0,
+        version_ns: 0,
+        alignment_ns: 0,
+        sample_decode_ns: 0,
+      } },
       trace: {
         tiles: { tiles_x: 2, tiles_y: 1, thresholds: [100, 150], skip: [false, true] },
         finders: [],
         triplets: [],
+        attempts: [],
+        alignment: [],
+        sample_regions: [],
+        bits: null,
       },
     };
     tilesLayer.draw(ctx);
@@ -71,11 +104,22 @@ describe("tilesLayer", () => {
     const ctx = baseContext(fake);
     ctx.view = { scale: 2, tx: 10, ty: 5 };
     ctx.scan = {
-      detections: { finders: [], triplets: [], timings: { tiles_ns: 0, finders_ns: 0, triplets_ns: 0 } },
+      detections: { finders: [], triplets: [], codes: [], timings: {
+        tiles_ns: 0,
+        finders_ns: 0,
+        triplets_ns: 0,
+        version_ns: 0,
+        alignment_ns: 0,
+        sample_decode_ns: 0,
+      } },
       trace: {
         tiles: { tiles_x: 1, tiles_y: 1, thresholds: [80], skip: [false] },
         finders: [],
         triplets: [],
+        attempts: [],
+        alignment: [],
+        sample_regions: [],
+        bits: null,
       },
     };
     tilesLayer.draw(ctx);

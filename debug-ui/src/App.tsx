@@ -22,8 +22,12 @@ import { useImageSource } from "./media/useImageSource";
 import { lumaAt } from "./media/luma";
 import { workingScaleFor } from "./media/scaling";
 import { useVideoSource, type VideoFrame } from "./media/useVideoSource";
+import { alignmentLayer } from "./overlays/layers/alignment";
+import { bitsLayer } from "./overlays/layers/bits";
+import { decodedLayer } from "./overlays/layers/decoded";
 import { findersLayer } from "./overlays/layers/finders";
 import { groundtruthLayer } from "./overlays/layers/groundtruth";
+import { samplegridLayer } from "./overlays/layers/samplegrid";
 import { tilesLayer } from "./overlays/layers/tiles";
 import { tripletsLayer } from "./overlays/layers/triplets";
 import { parseGroundTruth, type GroundTruthCode } from "./overlays/groundtruth-types";
@@ -47,7 +51,16 @@ import { Viewport } from "./viewport/Viewport";
  * lifecycle of its own — layer enable/disable state living here rather than
  * in React state is `registry.ts`'s own design (see its doc comment), and a
  * single shared instance means toggle state survives a dev-mode remount. */
-const overlayRegistry = createRegistry([tilesLayer, findersLayer, tripletsLayer, groundtruthLayer]);
+const overlayRegistry = createRegistry([
+  tilesLayer,
+  findersLayer,
+  tripletsLayer,
+  groundtruthLayer,
+  alignmentLayer,
+  samplegridLayer,
+  bitsLayer,
+  decodedLayer,
+]);
 
 interface ScanState {
   result: ScanResult;

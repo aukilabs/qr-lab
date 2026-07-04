@@ -65,8 +65,9 @@ required to pick up new Rust code while `npm run dev` keeps running.
                   ScannerClient.scan()  →  scanner/worker.ts (Web Worker)
                        │                     scan_rgba() from qrk-wasm
                        ▼
-                  ScanResult { detections: { finders, triplets, timings },
-                               trace: { tiles, finders, triplets } | null }
+                  ScanResult { detections: { finders, triplets, codes, timings },
+                               trace: { tiles, finders, triplets, attempts,
+                                        alignment, sample_regions, bits } | null }
                        │
           ┌────────────┼─────────────────────┐
           ▼            ▼                     ▼
@@ -77,8 +78,9 @@ required to pick up new Rust code while `npm run dev` keeps running.
     overlay)       workingScale)
                        ▲
                        │ registered once, module scope
-                tilesLayer, findersLayer,
-                tripletsLayer, groundtruthLayer
+                tilesLayer, findersLayer, tripletsLayer,
+                groundtruthLayer, alignmentLayer,
+                samplegridLayer, bitsLayer, decodedLayer
                 (overlays/layers/*.ts)
                        ▲
                 LayerPanel (checkboxes mirror
@@ -113,10 +115,11 @@ Key modules:
 
 ## Add an overlay layer (5-step recipe)
 
-Follow this to add a new debug overlay for a future detection stage (e.g. a
-homography/pose or decoded-payload layer in Plan 4+). Concretely reproduces
-what `overlays/layers/tiles.ts`/`finders.ts`/`triplets.ts`/`groundtruth.ts`
-already do — read one of those alongside this list.
+Follow this to add a new debug overlay for a future detection stage (Plan 4
+Task 6 added `alignment.ts`/`samplegrid.ts`/`bits.ts`/`decoded.ts` for the
+decode pipeline's own stages this same way — read one of those, or the
+original `tiles.ts`/`finders.ts`/`triplets.ts`/`groundtruth.ts`, alongside
+this list).
 
 1. **Extend the contract, if the new stage needs new envelope fields.**
    Add the field(s) to the Rust `WasmResult`/`Trace`/`Detections` types,
@@ -148,7 +151,8 @@ already do — read one of those alongside this list.
    asserting exact draw-call sequences.
 
 3. **Register it** in `App.tsx`'s module-scope `createRegistry([...])` call
-   (currently `[tilesLayer, findersLayer, tripletsLayer, groundtruthLayer]`).
+   (currently `[tilesLayer, findersLayer, tripletsLayer, groundtruthLayer,
+   alignmentLayer, samplegridLayer, bitsLayer, decodedLayer]`).
    Registration order is draw order (later entries draw on top) and
    `LayerPanel`'s checkbox order.
 

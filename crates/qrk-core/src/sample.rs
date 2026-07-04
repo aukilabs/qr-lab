@@ -61,6 +61,7 @@ use crate::consts::{
 };
 use crate::homography::PerspectiveTransform;
 use crate::tiles::TileGrid;
+use crate::trace::SampleRegionTrace;
 use crate::triplet::TripletCandidate;
 use crate::version::sample_module_ink;
 use crate::LumaView;
@@ -73,6 +74,29 @@ use crate::LumaView;
 pub(crate) struct SampleRegion {
     pub module_rect: [u32; 4],
     pub transform: PerspectiveTransform,
+}
+
+impl SampleRegion {
+    /// This region's Task 6 trace form: `module_rect` verbatim, plus the
+    /// image-pixel quad its four module-rect corners map to through its
+    /// own `transform` — corner quads, not per-module points, per the
+    /// plan's trace-compactness constraint (the debug UI reconstructs the
+    /// module grid from `BitsTrace`'s packed words via its own TS
+    /// homography port). `dimension` is the whole candidate's module
+    /// dimension (needed to normalize `module_rect`'s raw module-space
+    /// corners into the `[0,1]` unit square `transform.map` expects — see
+    /// this file's module doc's "Anchor / coordinate conventions").
+    pub(crate) fn to_trace(&self, dimension: u32) -> SampleRegionTrace {
+        let dimf = dimension as f64;
+        let [x0, y0, x1, y1] = self.module_rect;
+        let quad = [
+            self.transform.map(x0 as f64 / dimf, y0 as f64 / dimf),
+            self.transform.map(x1 as f64 / dimf, y0 as f64 / dimf),
+            self.transform.map(x1 as f64 / dimf, y1 as f64 / dimf),
+            self.transform.map(x0 as f64 / dimf, y1 as f64 / dimf),
+        ];
+        SampleRegionTrace { module_rect: self.module_rect, quad }
+    }
 }
 
 /// The result of one [`sample_grid`] call.

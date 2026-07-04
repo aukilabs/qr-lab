@@ -146,10 +146,20 @@ pub fn detect_with(view: &LumaView, mut trace: Option<&mut Trace>) -> Detections
 
     // `decode_candidates` accumulates its own three-way stage-timing split
     // (see the module doc) since its sub-stages are interleaved per
-    // candidate rather than run as whole phases; `attempts` isn't threaded
-    // anywhere yet — `Trace` gains an `attempts` field in Plan 4 Task 6,
-    // which will record it the same way `record_triplets` does above.
-    let (codes, _attempts, decode_timings) = decode_candidates(view, &grid, &finders, &triplets);
+    // candidate rather than run as whole phases; `attempts` and the Task 6
+    // trace data (`decode_trace`) are recorded the same way
+    // `record_finders`/`record_triplets` are above — a copy only when a
+    // trace was actually requested.
+    let (codes, attempts, decode_timings, decode_trace) =
+        decode_candidates(view, &grid, &finders, &triplets, trace.is_some());
+    if let Some(t) = &mut trace {
+        t.record_attempts(&attempts);
+        t.record_alignment(&decode_trace.alignment);
+        t.record_sample_regions(&decode_trace.sample_regions);
+        if let Some(bits) = decode_trace.bits {
+            t.record_bits(bits);
+        }
+    }
 
     Detections {
         finders,

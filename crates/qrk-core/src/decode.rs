@@ -48,6 +48,7 @@ use crate::sample::{
 };
 use crate::scanner::StageClock;
 use crate::tiles::TileGrid;
+use crate::trace::{AlignmentTraceEntry, BitsTrace, SampleRegionTrace};
 use crate::triplet::TripletCandidate;
 use crate::version::{count_timing_transitions, read_version_bits};
 use crate::LumaView;
@@ -90,17 +91,11 @@ pub struct DecodedCode {
 /// One decode attempt's trace, whether it succeeded or failed — every
 /// triplet actually attempted (i.e. not skipped because its finders were
 /// already consumed, and not dropped by proximity dedup) gets exactly one
-/// of these.
-///
-/// Every attempt is recorded (`decode_candidates` returns a `Vec` of these)
-/// but nothing outside this module's own `#[cfg(test)]` tests reads a
-/// field back out yet — under the default (no `serde`) feature set that
-/// makes every field look "never read" to the dead-code lint. `Trace`
-/// gains an `attempts: Vec<DecodeAttemptTrace>` field in Plan 4 Task 6,
-/// which is this struct's real consumer; until then this is exempted here
-/// rather than piecemeal, matching `version.rs`/`alignment.rs`/`sample.rs`'s
-/// own precedent for a piece landing ahead of its consumer.
-#[allow(dead_code)]
+/// of these. `Trace::attempts` (Plan 4 Task 6) is this struct's real
+/// consumer: `decode_candidates` always builds its `Vec<DecodeAttemptTrace>`
+/// as part of its normal return contract (not gated behind any trace flag —
+/// the data is small), and `scanner.rs`'s `detect_with` records a copy into
+/// `Trace` when one was requested.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct DecodeAttemptTrace {
@@ -143,6 +138,76 @@ pub struct DecodeAttemptTrace {
     /// for the one case where it carries an appended discrepancy message
     /// instead of the bare string), else a short failure reason.
     pub outcome: String,
+    /// Per-round visibility into this attempt's sample+decode sub-pipeline
+    /// (final-review carried item: without this, a failed REFINED round —
+    /// one that ran a retry but still didn't decode — was invisible, since
+    /// `outcome` only ever reflected the FIRST (parallelogram) round or
+    /// whichever round actually decoded, silently dropping every failed
+    /// retry's own reason). One entry per round actually run, in order:
+    /// always starts with `"parallelogram:<tag>"`, followed by
+    /// `"anchor_line:<tag>"` and/or `"outer_hull:<tag>"` when Task 5b's
+    /// refined-corner retry ran (see the loop below for exactly when each
+    /// mode is skipped). `<tag>` is one of `"decoded"`, `"oob"`,
+    /// `"sample_transform_degenerate"`, or one of `"failed_format"` /
+    /// `"failed_version"` / `"failed_ecc"` / `"failed_content"` (one per
+    /// `crate::bitmatrix::DecodeFailure` variant — only `failed_ecc` is an
+    /// actual Reed-Solomon/error-correction rejection; the other three are
+    /// distinct failure classes with distinct root causes, so this trace
+    /// keeps them apart rather than collapsing them into one misleadingly
+    /// RS-flavored bucket) — see [`round_tag`]. Chosen over embedding this
+    /// into `outcome` itself
+    /// (the brief's alternative) to keep `outcome` a stable, single-reason
+    /// string for existing consumers (this module's own tests match on it
+    /// with `starts_with`/`==`) while still giving a trace consumer full
+    /// per-round detail as structured data instead of a string to parse.
+    pub rounds: Vec<String>,
+}
+
+/// Collapse a round's full `outcome` string down to one of
+/// [`DecodeAttemptTrace::rounds`]'s four stable tags, so a trace consumer
+/// can match on a fixed vocabulary instead of parsing arbitrary prose (the
+/// non-decoded outcome strings above are diagnostic text for a human, not a
+/// stable contract).
+fn round_tag(outcome: &str) -> &'static str {
+    if outcome.starts_with("decoded") {
+        "decoded"
+    } else if outcome.starts_with("oob_fraction") {
+        "oob"
+    } else if outcome == "sample_transform_degenerate" {
+        "sample_transform_degenerate"
+    } else {
+        // The only remaining source is `format!("{e:?}")` of a
+        // `crate::bitmatrix::DecodeFailure`, whose `{:?}` is exactly one of
+        // these four variant names (see that enum's doc). Matched by name
+        // rather than collapsed into one "failed_rs" bucket (an earlier,
+        // less precise version of this function did that): only `Ecc` is
+        // an actual Reed-Solomon/error-correction failure — `Format`/
+        // `Version` are BCH-protected *metadata* reads (a geometry/masking
+        // bug reads as a totally different failure than a real ECC
+        // overflow), and `Content` fires only after Reed-Solomon has
+        // already succeeded (the bug is in segment/UTF-8 parsing, not
+        // error correction at all) — a single "failed_rs" tag would point
+        // a trace consumer at the wrong subsystem for 3 of these 4 cases.
+        match outcome {
+            "Format" => "failed_format",
+            "Version" => "failed_version",
+            "Ecc" => "failed_ecc",
+            "Content" => "failed_content",
+            // Defensive: `decode_bits` only returns those four variants
+            // today, but a stable fallback beats a silent misclassification
+            // if that enum ever grows a new one.
+            _ => "failed_other",
+        }
+    }
+}
+
+/// This round's name for [`DecodeAttemptTrace::rounds`] — see
+/// `sample::EdgeFitMode`'s own doc for what each mode does.
+fn round_name(mode: EdgeFitMode) -> &'static str {
+    match mode {
+        EdgeFitMode::AnchorLine => "anchor_line",
+        EdgeFitMode::OuterHull => "outer_hull",
+    }
 }
 
 /// Per-attempt wall-clock totals accumulated across every attempted
@@ -223,22 +288,51 @@ fn dedup_triplet_indices(triplets: &[TripletCandidate]) -> Vec<usize> {
 }
 
 /// One attempt's outcome: either a successful decode (consuming its three
-/// finders) or a trace-only failure.
+/// finders) or a trace-only failure, plus (Plan 4 Task 6) the debug-trace
+/// data this attempt produced — built only when `want_trace` is set (see
+/// `attempt_candidate`'s own parameter), so a caller that isn't collecting
+/// a `Trace` at all (`detect()`, or `qrk-wasm`'s `with_trace: false`) never
+/// pays for the extra `Vec`/homography-projection work these three fields
+/// cost, on top of not keeping a copy of it.
 struct AttemptResult {
     trace: DecodeAttemptTrace,
     code: Option<DecodedCode>,
+    /// `true` unless this attempt bailed out before ever locating alignment
+    /// patterns (the `invalid_dimension` early return) — `decode_candidates`
+    /// only updates its "last attempted candidate" trace accumulators for
+    /// an attempt where this is `true`, so a later triplet's *trivial*
+    /// rejection (never reaching real geometry) can't blank out an earlier
+    /// candidate's real alignment/sample-region trace with empty data (a
+    /// found-during-review gap: v1's *legitimately* empty alignment array
+    /// still has `reached_geometry_stage = true`, so it is never confused
+    /// with this case).
+    reached_geometry_stage: bool,
+    /// This attempt's alignment-pattern search results, Task 6 trace form.
+    /// Empty when `!want_trace`, regardless of `reached_geometry_stage`.
+    alignment_trace: Vec<AlignmentTraceEntry>,
+    /// This attempt's sample regions, Task 6 trace form — from whichever
+    /// round produced `code`/`corners` (the FINAL round, same rule
+    /// `corners` itself already follows; see the module doc), so the two
+    /// stay geometrically consistent. Empty when `!want_trace`.
+    sample_regions_trace: Vec<SampleRegionTrace>,
+    /// `Some` iff this attempt decoded (`code.is_some()`) AND `want_trace`
+    /// was set — the sampled bit matrix behind that decode.
+    bits_trace: Option<BitsTrace>,
 }
 
 /// Run the full per-candidate pipeline for one triplet: dimension
 /// cross-checks, alignment, sampling, and `decode_bits`. See the module
 /// doc for the stage-by-stage contract. Accumulates elapsed time for each
-/// of the three stage buckets into `timings`.
+/// of the three stage buckets into `timings`. `want_trace` gates the Task 6
+/// debug-trace fields on the returned `AttemptResult` (see its doc) — pass
+/// `false` from any caller that isn't collecting a `Trace` at all.
 fn attempt_candidate(
     view: &LumaView,
     grid: &TileGrid,
     triplet_index: usize,
     t: &TripletCandidate,
     timings: &mut DecodeTimings,
+    want_trace: bool,
 ) -> AttemptResult {
     let dimension_est = t.dimension;
 
@@ -301,8 +395,13 @@ fn attempt_candidate(
                 oob_fraction: 0.0,
                 refined_corner: false,
                 outcome: "invalid_dimension".to_string(),
+                rounds: Vec::new(),
             },
             code: None,
+            reached_geometry_stage: false,
+            alignment_trace: Vec::new(),
+            sample_regions_trace: Vec::new(),
+            bits_trace: None,
         };
     }
 
@@ -335,17 +434,34 @@ fn attempt_candidate(
         .iter()
         .filter(|s| matches!(s, AnchorSlot::Found(_)))
         .count() as u32;
+    // Task 6: only built when a trace was actually requested (review
+    // finding: unconditionally building this — and the homography-heavy
+    // `sample_regions_trace`/`bits_trace` below — on every one of up to
+    // `MAX_DECODE_ATTEMPTS` attempts per frame is real, avoidable work on
+    // the untraced hot path `detect()`/`with_trace: false` take).
+    let alignment_trace =
+        if want_trace { alignment.to_trace_entries() } else { Vec::new() };
 
     let sample_decode_clock = StageClock::start();
 
+    // One sample+decode round's full result, including its Task 6 trace
+    // data (also always built — see `AttemptResult`'s doc).
+    struct RoundOutcome {
+        outcome: String,
+        oob_fraction: f64,
+        corners: [[f64; 2]; 4],
+        payload: Option<crate::bitmatrix::DecodedPayload>,
+        sample_regions_trace: Vec<SampleRegionTrace>,
+        bits_trace: Option<BitsTrace>,
+    }
+
     // One sample+decode round for a given (optional) refined BR corner.
-    // Returns the round's outcome string, oob_fraction, corners (from the
-    // FINAL transform: the single region's own transform when sampling ran
-    // through one region — v1/no-AP, the Task 5b refined rebuild, and the
-    // classic single-AP case — else the whole-grid provisional, since the
-    // multi-region tiling has no single whole-grid transform), and the
-    // decoded payload on success.
-    let run_round = |refined_br: Option<[f64; 2]>| -> (String, f64, [[f64; 2]; 4], Option<crate::bitmatrix::DecodedPayload>) {
+    // `corners`/`sample_regions_trace` come from the FINAL transform: the
+    // single region's own transform when sampling ran through one region —
+    // v1/no-AP, the Task 5b refined rebuild, and the classic single-AP case
+    // — else the whole-grid provisional, since the multi-region tiling has
+    // no single whole-grid transform.
+    let run_round = |refined_br: Option<[f64; 2]>| -> RoundOutcome {
         let fallback_corners = [
             transform.map(0.0, 0.0),
             transform.map(1.0, 0.0),
@@ -354,7 +470,16 @@ fn attempt_candidate(
         ];
         let sampled = match sample_grid(view, grid, t, dimension, &alignment, refined_br) {
             Some(s) => s,
-            None => return ("sample_transform_degenerate".to_string(), 0.0, fallback_corners, None),
+            None => {
+                return RoundOutcome {
+                    outcome: "sample_transform_degenerate".to_string(),
+                    oob_fraction: 0.0,
+                    corners: fallback_corners,
+                    payload: None,
+                    sample_regions_trace: Vec::new(),
+                    bits_trace: None,
+                }
+            }
         };
         let corner_transform = if sampled.regions.len() == 1 {
             &sampled.regions[0].transform
@@ -367,13 +492,20 @@ fn attempt_candidate(
             corner_transform.map(1.0, 1.0),
             corner_transform.map(0.0, 1.0),
         ];
+        let sample_regions_trace: Vec<SampleRegionTrace> = if want_trace {
+            sampled.regions.iter().map(|r| r.to_trace(dimension)).collect()
+        } else {
+            Vec::new()
+        };
         if sampled.oob_fraction > MAX_OOB_FRACTION {
-            return (
-                format!("oob_fraction {:.4} exceeds {:.4}", sampled.oob_fraction, MAX_OOB_FRACTION),
-                sampled.oob_fraction,
+            return RoundOutcome {
+                outcome: format!("oob_fraction {:.4} exceeds {:.4}", sampled.oob_fraction, MAX_OOB_FRACTION),
+                oob_fraction: sampled.oob_fraction,
                 corners,
-                None,
-            );
+                payload: None,
+                sample_regions_trace,
+                bits_trace: None,
+            };
         }
         match decode_bits(&sampled.bits) {
             Ok(payload) => {
@@ -397,16 +529,44 @@ fn attempt_candidate(
                         payload.version
                     )
                 };
-                (outcome, sampled.oob_fraction, corners, Some(payload))
+                let bits_trace = want_trace.then(|| BitsTrace {
+                    dim: sampled.bits.dim as u32,
+                    words: sampled.bits.words().to_vec(),
+                });
+                RoundOutcome {
+                    outcome,
+                    oob_fraction: sampled.oob_fraction,
+                    corners,
+                    payload: Some(payload),
+                    sample_regions_trace,
+                    bits_trace,
+                }
             }
-            Err(e) => (format!("{e:?}"), sampled.oob_fraction, corners, None),
+            Err(e) => RoundOutcome {
+                outcome: format!("{e:?}"),
+                oob_fraction: sampled.oob_fraction,
+                corners,
+                payload: None,
+                sample_regions_trace,
+                bits_trace: None,
+            },
         }
     };
 
     // First round: the Task 5 behavior — parallelogram / single-AP
     // anchored sampling, exactly as previously gated.
-    let (mut outcome, mut oob_fraction, mut corners, mut payload) = run_round(None);
+    let first = run_round(None);
+    let mut outcome = first.outcome;
+    let mut oob_fraction = first.oob_fraction;
+    let mut corners = first.corners;
+    let mut payload = first.payload;
+    let mut sample_regions_trace = first.sample_regions_trace;
+    let mut bits_trace = first.bits_trace;
     let mut refined_corner = false;
+    // Task 6: per-round outcome visibility (see `DecodeAttemptTrace::rounds`'s
+    // doc) — a round's tag is recorded here regardless of whether it goes
+    // on to win the attempt below.
+    let mut rounds = vec![format!("parallelogram:{}", round_tag(&outcome))];
 
     // Task 5b: only when that round fails Reed-Solomon decode AND the
     // alignment search produced no BR anchor at all (v1 always; higher
@@ -441,9 +601,15 @@ fn attempt_candidate(
                 }
             }
             tried = Some(rc);
-            let (r_outcome, r_oob, r_corners, r_payload) = run_round(Some(rc));
-            if r_payload.is_some() {
-                (outcome, oob_fraction, corners, payload) = (r_outcome, r_oob, r_corners, r_payload);
+            let r = run_round(Some(rc));
+            rounds.push(format!("{}:{}", round_name(mode), round_tag(&r.outcome)));
+            if r.payload.is_some() {
+                outcome = r.outcome;
+                oob_fraction = r.oob_fraction;
+                corners = r.corners;
+                payload = r.payload;
+                sample_regions_trace = r.sample_regions_trace;
+                bits_trace = r.bits_trace;
                 refined_corner = true;
                 break;
             }
@@ -463,7 +629,9 @@ fn attempt_candidate(
             oob_fraction,
             refined_corner,
             outcome,
+            rounds,
         },
+        reached_geometry_stage: true,
         code: payload.map(|p| DecodedCode {
             payload: p.payload,
             payload_bytes: p.payload_bytes,
@@ -475,6 +643,9 @@ fn attempt_candidate(
             inverted: t.inverted,
             finder_indices: t.finder_indices,
         }),
+        alignment_trace,
+        sample_regions_trace,
+        bits_trace,
     }
 }
 
@@ -490,20 +661,34 @@ fn attempt_candidate(
 /// per corner-role rotation tried (all sharing its `triplet_index`, in
 /// rotation order 0..3; see the rotation note in the loop below), while
 /// proximity-deduped-away triplets and triplets skipped because their
-/// finders were already consumed produce no trace entry at all — and the
+/// finders were already consumed produce no trace entry at all — the
 /// accumulated per-stage timing totals (see [`DecodeTimings`]'s doc for
-/// why this is a 3-tuple rather than the brief's literal 2-tuple).
+/// why this is a 3-tuple element rather than the brief's literal 2-tuple);
+/// and (Plan 4 Task 6) the frame-level trace data in [`DecodeTraceData`],
+/// built only when `want_trace` is set (pass `trace.is_some()` from
+/// `detect_with` — see [`AttemptResult`]'s doc for why this matters: the
+/// per-attempt trace data is otherwise-avoidable homography/allocation work
+/// on every one of up to [`MAX_DECODE_ATTEMPTS`] attempts).
 pub(crate) fn decode_candidates(
     view: &LumaView,
     grid: &TileGrid,
     finders: &[FinderCandidate],
     triplets: &[TripletCandidate],
-) -> (Vec<DecodedCode>, Vec<DecodeAttemptTrace>, DecodeTimings) {
+    want_trace: bool,
+) -> (Vec<DecodedCode>, Vec<DecodeAttemptTrace>, DecodeTimings, DecodeTraceData) {
     let mut timings = DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0 };
     let mut consumed = vec![false; finders.len()];
     let mut codes = Vec::new();
     let mut attempts = Vec::new();
     let mut attempts_run = 0usize;
+    // Task 6: overwritten on every attempt that reached real geometry
+    // (alignment/sample_regions — see `AttemptResult::reached_geometry_stage`'s
+    // doc for why a trivial `invalid_dimension` reject must NOT overwrite
+    // these) or on every successful decode (bits) — see `DecodeTraceData`'s
+    // doc for exactly which "last" each one tracks.
+    let mut last_alignment: Vec<AlignmentTraceEntry> = Vec::new();
+    let mut last_sample_regions: Vec<SampleRegionTrace> = Vec::new();
+    let mut last_bits: Option<BitsTrace> = None;
 
     'candidates: for idx in dedup_triplet_indices(triplets) {
         let t = &triplets[idx];
@@ -543,8 +728,26 @@ pub(crate) fn decode_candidates(
             };
             attempts_run += 1;
 
-            let result = attempt_candidate(view, grid, idx, &rotated, &mut timings);
+            let result = attempt_candidate(view, grid, idx, &rotated, &mut timings, want_trace);
             let decoded = result.code.is_some();
+            // "Last attempted candidate" (Task 6's `alignment`/`sample_regions`
+            // contract): overwritten every attempt that reached real
+            // geometry, success or failure — but NOT one that bailed out at
+            // the `invalid_dimension` check before ever locating alignment
+            // patterns (review finding: without this guard, a later
+            // trivially-rejected triplet would blank an earlier frame's
+            // real decode's alignment/sample-region trace down to empty).
+            if result.reached_geometry_stage {
+                last_alignment = result.alignment_trace;
+                last_sample_regions = result.sample_regions_trace;
+            }
+            // "Last SUCCESSFULLY decoded candidate" (Task 6's `bits`
+            // contract): only overwritten on a decode, so a later failed
+            // attempt/triplet can't blank out an earlier frame's actual
+            // decoded matrix.
+            if decoded {
+                last_bits = result.bits_trace;
+            }
             if let Some(code) = result.code {
                 for &i in &rotated.finder_indices {
                     consumed[i] = true;
@@ -558,7 +761,28 @@ pub(crate) fn decode_candidates(
         }
     }
 
-    (codes, attempts, timings)
+    let trace_data = DecodeTraceData {
+        alignment: last_alignment,
+        sample_regions: last_sample_regions,
+        bits: last_bits,
+    };
+    (codes, attempts, timings, trace_data)
+}
+
+/// Frame-level Plan 4 Task 6 trace data [`decode_candidates`] hands back
+/// alongside its usual `(codes, attempts, timings)` — kept as a separate
+/// return element (not folded into `DecodeTimings`, which is purely
+/// numeric) so `scanner.rs`'s `detect_with` can feed each field straight
+/// into the matching `Trace::record_*` call.
+pub(crate) struct DecodeTraceData {
+    /// The last attempted candidate's alignment-pattern search results
+    /// (success or failure — see [`AttemptResult`]'s doc).
+    pub alignment: Vec<AlignmentTraceEntry>,
+    /// The last attempted candidate's sample regions.
+    pub sample_regions: Vec<SampleRegionTrace>,
+    /// The last successfully decoded candidate's sampled bit matrix, if
+    /// anything decoded this frame.
+    pub bits: Option<BitsTrace>,
 }
 
 #[cfg(test)]
@@ -682,8 +906,8 @@ mod tests {
         let grid = TileGrid::build(&view);
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
-        let (codes, attempts, _timings) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t));
+        let (codes, attempts, _timings, ..) =
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
         assert_eq!(attempts.len(), 1);
         assert_eq!(attempts[0].outcome, "decoded");
         assert_eq!(codes.len(), 1);
@@ -723,8 +947,8 @@ mod tests {
 
         let wrong_est_dim = dim - 4; // v39's dimension (173), one version step short of the true v40 (177).
         let t = triplet_from_transform(&transform, dim, wrong_est_dim as u32);
-        let (codes, attempts, _timings) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t));
+        let (codes, attempts, _timings, ..) =
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
         assert_eq!(attempts.len(), 1, "{attempts:?}");
         assert_eq!(attempts[0].dimension_est, wrong_est_dim as u32);
         assert_eq!(attempts[0].dimension_final, dim as u32);
@@ -764,8 +988,8 @@ mod tests {
         better.snap_error = 0.1;
         let triplets = [worse, better];
 
-        let (codes, attempts, _timings) =
-            decode_candidates(&view, &grid, &dummy_finders(3), &triplets);
+        let (codes, attempts, _timings, ..) =
+            decode_candidates(&view, &grid, &dummy_finders(3), &triplets, false);
         assert_eq!(codes.len(), 1, "expected exactly one decode, no spurious duplicate");
         assert_eq!(attempts.len(), 1, "the duplicate must be deduped away before attempting");
         assert_eq!(attempts[0].triplet_index, 1, "the lower-snap_error (index 1) survivor must be the one attempted");
@@ -794,8 +1018,8 @@ mod tests {
         let grid = TileGrid::build(&view);
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
-        let (codes, attempts, _timings) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t));
+        let (codes, attempts, _timings, ..) =
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
         assert!(codes.is_empty());
         // One attempt per corner-role rotation (all fail), each rejected
         // by the OOB gate before decode.
@@ -820,8 +1044,8 @@ mod tests {
             inverted: false,
             finder_indices: [0, 1, 2],
         };
-        let (codes, attempts, _timings) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t));
+        let (codes, attempts, _timings, ..) =
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
         assert!(codes.is_empty());
         // One attempt per corner-role rotation, all failing cleanly.
         assert_eq!(attempts.len(), 3);
@@ -851,8 +1075,8 @@ mod tests {
                 finder_indices: [i * 3, i * 3 + 1, i * 3 + 2],
             })
             .collect();
-        let (codes, attempts, _timings) =
-            decode_candidates(&view, &grid, &dummy_finders(total * 3), &triplets);
+        let (codes, attempts, _timings, ..) =
+            decode_candidates(&view, &grid, &dummy_finders(total * 3), &triplets, false);
         assert!(codes.is_empty());
         assert_eq!(attempts.len(), MAX_DECODE_ATTEMPTS);
     }
@@ -900,8 +1124,8 @@ mod tests {
         let grid = TileGrid::build(&view);
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
-        let (codes, attempts, _timings) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t));
+        let (codes, attempts, _timings, ..) =
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "KEYSTONE");
         // The decode must have come through the image-derived corner — the
@@ -911,6 +1135,26 @@ mod tests {
         assert!(
             decoded_attempt.refined_corner,
             "expected the refined-corner path, got: {decoded_attempt:?}"
+        );
+        // Task 6's carried-item fix: the FAILED parallelogram round (this
+        // keystone is pinned to defeat it) must stay visible in `rounds`
+        // instead of being silently overwritten by whichever refined round
+        // actually decoded — this is exactly the "failed refined rounds are
+        // invisible" gap the plan called out.
+        assert!(
+            decoded_attempt.rounds.len() >= 2,
+            "expected the failed parallelogram round plus at least one refined round, got: {:?}",
+            decoded_attempt.rounds
+        );
+        assert!(
+            decoded_attempt.rounds[0].starts_with("parallelogram:") && decoded_attempt.rounds[0] != "parallelogram:decoded",
+            "expected the first round to be a FAILED parallelogram attempt, got: {:?}",
+            decoded_attempt.rounds
+        );
+        assert!(
+            decoded_attempt.rounds.last().unwrap().ends_with(":decoded"),
+            "expected the last recorded round to be the one that actually decoded, got: {:?}",
+            decoded_attempt.rounds
         );
     }
 
@@ -948,8 +1192,8 @@ mod tests {
         rotated.bl = good.tl;
         rotated.finder_indices = [1, 2, 0];
 
-        let (codes, attempts, _timings) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&rotated));
+        let (codes, attempts, _timings, ..) =
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&rotated), false);
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "ROTROLE");
         assert!(
