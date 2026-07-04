@@ -193,8 +193,29 @@ describe("parseScanResult", () => {
 
   it("throws with a path when trace.bits.words has the wrong element type", () => {
     const raw = loadSnapshot() as any;
-    raw.trace.bits.words = ["not-a-number"];
+    // 21 entries so the length invariant (checked after element types)
+    // still holds — this case must fail on the ELEMENT type specifically.
+    raw.trace.bits.words = ["not-a-number", ...new Array(20).fill(0)];
     expect(() => parseScanResult(raw)).toThrowError(/trace\.bits\.words\[0\]/);
+  });
+
+  it("throws with a path when trace.bits.words violates the dim*ceil(dim/32) packing invariant", () => {
+    // Truncated words array (one word short of near_00's 21).
+    const raw = loadSnapshot() as any;
+    raw.trace.bits.words = raw.trace.bits.words.slice(0, -1);
+    expect(() => parseScanResult(raw)).toThrowError(/trace\.bits\.words.*21 packed words/);
+
+    // Padded words array (one extra word).
+    const raw2 = loadSnapshot() as any;
+    raw2.trace.bits.words = [...raw2.trace.bits.words, 0];
+    expect(() => parseScanResult(raw2)).toThrowError(/trace\.bits\.words.*21 packed words/);
+
+    // Consistency check: a dim crossing the 32-bit word boundary (v10:
+    // dim 57 -> 2 words/row -> 114 words) parses fine — the invariant is
+    // dim * ceil(dim/32), not dim itself.
+    const raw3 = loadSnapshot() as any;
+    raw3.trace.bits = { dim: 57, words: new Array(114).fill(0) };
+    expect(parseScanResult(raw3).trace?.bits?.words).toHaveLength(114);
   });
 
   it("throws with a path when trace.alignment has a malformed entry", () => {

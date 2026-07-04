@@ -956,7 +956,8 @@ mod tests {
         // pipeline stage would have to work with before any alignment
         // pattern has been located.
         let provisional = provisional_transform(&t, dim as u32);
-        let alignment = locate_alignment_patterns(&view, &tile_grid, &provisional, version as u32, false);
+        let alignment =
+            locate_alignment_patterns(&view, &tile_grid, &provisional, version as u32, false, false);
         let sampled = sample_grid(&view, &tile_grid, &t, dim as u32, &alignment, None)
             .unwrap_or_else(|| panic!("{label}: sample_grid returned None"));
         assert_bit_for_bit(&sampled.bits, &code, label);
@@ -1062,7 +1063,8 @@ mod tests {
         // whether triplet/alignment detection survives a cropped frame.
         let t = triplet_from_transform(&transform, dim);
         let provisional = provisional_transform(&t, dim as u32);
-        let alignment = locate_alignment_patterns(&view, &tile_grid, &provisional, version as u32, false);
+        let alignment =
+            locate_alignment_patterns(&view, &tile_grid, &provisional, version as u32, false, false);
         let sampled = sample_grid(&view, &tile_grid, &t, dim as u32, &alignment, None)
             .expect("sample_grid should still return a (bad) result, not None");
         assert!(

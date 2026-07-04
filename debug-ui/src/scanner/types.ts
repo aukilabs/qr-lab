@@ -435,10 +435,20 @@ function parseSampleRegionTraceArray(v: unknown, path: string): SampleRegionTrac
 
 function parseBitsTrace(v: unknown, path: string): BitsTrace {
   const obj = expectObject(v, path);
-  return {
-    dim: expectNumber(expectField(obj, "dim", path), joinPath(path, "dim")),
-    words: parseNumberArray(expectField(obj, "words", path), joinPath(path, "words")),
-  };
+  const dim = expectNumber(expectField(obj, "dim", path), joinPath(path, "dim"));
+  const words = parseNumberArray(expectField(obj, "words", path), joinPath(path, "words"));
+  // Enforce the packing invariant the BitsTrace type doc states (and that
+  // bits.ts's bitAt() unpacking silently assumes): row-major, ceil(dim/32)
+  // u32 words per row, dim rows. A truncated/padded words array would
+  // otherwise read as garbage modules instead of failing loudly here.
+  const expectedWords = dim * Math.max(1, Math.ceil(dim / 32));
+  if (words.length !== expectedWords) {
+    fail(
+      joinPath(path, "words"),
+      `expected dim * ceil(dim/32) = ${expectedWords} packed words for dim ${dim}, got ${words.length}`,
+    );
+  }
+  return { dim, words };
 }
 
 function parseBitsTraceOrNull(v: unknown, path: string): BitsTrace | null {

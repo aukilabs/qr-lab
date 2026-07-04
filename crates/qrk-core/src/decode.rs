@@ -424,7 +424,8 @@ fn attempt_candidate(
     let version = dimension.saturating_sub(17) / 4;
 
     let alignment_clock = StageClock::start();
-    let alignment = locate_alignment_patterns(view, grid, &transform, version, t.inverted);
+    let alignment =
+        locate_alignment_patterns(view, grid, &transform, version, t.inverted, want_trace);
     timings.alignment_ns += alignment_clock.elapsed_ns();
 
     let n = alignment.coords.len();

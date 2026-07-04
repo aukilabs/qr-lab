@@ -156,10 +156,12 @@ pub(crate) struct AlignmentGrid {
     /// coordinate — never a real search result, but harmless: Task 6's
     /// trace consumer, [`AlignmentGrid::to_trace_entries`], skips
     /// finder-corner slots entirely). Plan 4 Task 6's debug-UI overlay
-    /// input — recorded unconditionally (cheap: at most `7x7` entries)
-    /// rather than gated behind a trace flag, matching
-    /// `decode::DecodeAttemptTrace`'s own "always build it, let the
-    /// caller decide whether to keep it" precedent.
+    /// input — **only populated when [`locate_alignment_patterns`] was
+    /// called with `want_trace = true`** (review finding: `qrk-wasm`
+    /// compiles with `debug-trace` unconditionally, so an "always build
+    /// it" policy here would tax every untraced `scan_rgba` call with a
+    /// fresh `n x n` allocation plus the finder-corner `predict_position`
+    /// projections the location pass itself never needs); empty otherwise.
     pub predicted: Vec<[f64; 2]>,
 }
 
@@ -167,8 +169,19 @@ impl AlignmentGrid {
     /// This grid's search results as Task 6's flat, finder-corner-excluded
     /// trace entries — see [`AlignmentTraceEntry`]'s doc for why corners
     /// are skipped.
+    ///
+    /// Only meaningful when the grid was built with `want_trace = true`
+    /// (see [`AlignmentGrid::predicted`]'s doc) — the `debug_assert` below
+    /// catches a caller that forgot; in release a `predicted`-less grid
+    /// would panic on the indexing for any version with alignment
+    /// patterns, which is the correct loud failure for a contract breach
+    /// rather than silently emitting zeros.
     pub(crate) fn to_trace_entries(&self) -> Vec<AlignmentTraceEntry> {
         let n = self.coords.len();
+        debug_assert!(
+            n == 0 || self.predicted.len() == n * n,
+            "to_trace_entries called on an AlignmentGrid built without want_trace"
+        );
         let mut out = Vec::with_capacity((n * n).saturating_sub(3));
         for i in 0..n {
             for j in 0..n {
@@ -380,17 +393,26 @@ fn recenter_alignment_pattern(
 /// already-resolved neighbors or `provisional`, then re-center
 /// ([`recenter_alignment_pattern`]) with the concentric probe, recording
 /// [`AnchorSlot::Found`] or [`AnchorSlot::Missing`].
+///
+/// `want_trace` gates [`AlignmentGrid::predicted`] (Plan 4 Task 6's
+/// debug-overlay input): when `false` — every caller not collecting a
+/// `Trace` — `predicted` stays empty, no per-slot position is stored, and
+/// finder-corner slots skip `predict_position` entirely (the location pass
+/// itself never needs a corner's prediction; only the dense trace lattice
+/// does). This keeps the untraced hot path allocation- and
+/// projection-identical to the pre-Task-6 behavior.
 pub(crate) fn locate_alignment_patterns(
     view: &LumaView,
     grid: &TileGrid,
     provisional: &PerspectiveTransform,
     version: u32,
     inverted: bool,
+    want_trace: bool,
 ) -> AlignmentGrid {
     let coords = alignment_coords(version).to_vec();
     let n = coords.len();
     let mut found = vec![AnchorSlot::Missing; n * n];
-    let mut predicted = vec![[0.0, 0.0]; n * n];
+    let mut predicted = if want_trace { vec![[0.0, 0.0]; n * n] } else { Vec::new() };
     if n == 0 {
         // v1: no alignment patterns at all.
         return AlignmentGrid { coords, found, predicted };
@@ -402,17 +424,22 @@ pub(crate) fn locate_alignment_patterns(
     let dim = 17 + 4 * version; // ISO 18004 dimension formula.
     for i in 0..n {
         for j in 0..n {
-            // Computed for every slot, including finder corners, so
-            // `predicted` stays a dense `n x n` lattice matching `found`'s
-            // own indexing (see the field doc) — cheap (a handful of
-            // `provisional.map` calls at worst) and it's the same value
-            // `predict_position` would derive for a corner anyway, since
-            // raster order has already resolved every dependency it needs
-            // regardless of whether this particular slot gets searched.
-            let p = predict_position(&found, &coords, i, j, n, dim, provisional);
-            predicted[i * n + j] = p;
             if is_finder_corner(i, j, n) {
+                // The location pass never needs a finder corner's
+                // prediction — only the trace's dense `n x n` lattice does
+                // (see `AlignmentGrid::predicted`'s doc). It's the same
+                // value `predict_position` derives for any slot: raster
+                // order has already resolved every dependency it needs
+                // regardless of whether this particular slot gets searched.
+                if want_trace {
+                    predicted[i * n + j] =
+                        predict_position(&found, &coords, i, j, n, dim, provisional);
+                }
                 continue;
+            }
+            let p = predict_position(&found, &coords, i, j, n, dim, provisional);
+            if want_trace {
+                predicted[i * n + j] = p;
             }
             found[i * n + j] = recenter_alignment_pattern(view, grid, provisional, dim, p, inverted)
                 .map(AnchorSlot::Found)
@@ -555,10 +582,15 @@ mod tests {
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let tile_grid = TileGrid::build(&view);
 
-        let ag = locate_alignment_patterns(&view, &tile_grid, &transform, 7, false);
+        let ag = locate_alignment_patterns(&view, &tile_grid, &transform, 7, false, true);
         let n = ag.coords.len();
         assert_eq!(n, 3);
         assert_eq!(n * n - 3, 6, "v7 has 3^2 - 3 = 6 alignment patterns");
+        // want_trace = true: the dense predicted lattice must be populated
+        // and convertible to trace entries (one per searched slot; the
+        // *found* positions checked below are the precise geometric gate).
+        assert_eq!(ag.predicted.len(), n * n, "want_trace=true must populate predicted");
+        assert_eq!(ag.to_trace_entries().len(), n * n - 3);
 
         let half_module_px = 0.5 * scale;
         let mut checked = 0;
@@ -602,7 +634,11 @@ mod tests {
         let biased_quad = true_quad.map(|[x, y]| [x + bias, y + bias]);
         let biased_transform = PerspectiveTransform::square_to_quad(biased_quad).unwrap();
 
-        let ag = locate_alignment_patterns(&view, &tile_grid, &biased_transform, 7, false);
+        let ag = locate_alignment_patterns(&view, &tile_grid, &biased_transform, 7, false, false);
+        // want_trace = false (the untraced hot path): no predicted lattice
+        // may be allocated at all — the review-mandated gating this test
+        // pins alongside its main bias-recovery assertion.
+        assert!(ag.predicted.is_empty(), "want_trace=false must leave predicted empty");
         let n = ag.coords.len();
         let half_module_px = 0.5 * scale;
         let mut checked = 0;
