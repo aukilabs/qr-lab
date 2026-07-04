@@ -33,7 +33,7 @@ describe("findersLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
-      } },
+      }, source_scale: 1 },
       trace: null,
     };
     findersLayer.draw(ctx);
@@ -58,7 +58,8 @@ describe("findersLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
-      },
+        },
+        source_scale: 1,
       },
       trace: null,
     };
@@ -91,7 +92,8 @@ describe("findersLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
-      },
+        },
+        source_scale: 1,
       },
       trace: null,
     };

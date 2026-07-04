@@ -129,7 +129,8 @@
       "version_ns": 0,
       "alignment_ns": 0,
       "sample_decode_ns": 0
-    }
+    },
+    "source_scale": 1.0
   },
   "trace": {
     "tiles": {
@@ -7488,5 +7489,7 @@
         1284991
       ]
     }
-  }
+  },
+  "scan_width": 1280,
+  "scan_height": 720
 }

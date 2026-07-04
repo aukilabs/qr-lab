@@ -33,7 +33,7 @@ describe("tilesLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
-      } },
+      }, source_scale: 1 },
       trace: null,
     };
     tilesLayer.draw(ctx);
@@ -51,7 +51,7 @@ describe("tilesLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
-      } },
+      }, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],
@@ -78,7 +78,7 @@ describe("tilesLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
-      } },
+      }, source_scale: 1 },
       trace: {
         tiles: { tiles_x: 2, tiles_y: 1, thresholds: [100, 150], skip: [false, true] },
         finders: [],
@@ -111,7 +111,7 @@ describe("tilesLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
-      } },
+      }, source_scale: 1 },
       trace: {
         tiles: { tiles_x: 1, tiles_y: 1, thresholds: [80], skip: [false] },
         finders: [],

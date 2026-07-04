@@ -62,7 +62,7 @@ describe("bitsLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [code(AXIS_ALIGNED_QUAD)], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [code(AXIS_ALIGNED_QUAD)], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],
@@ -81,7 +81,7 @@ describe("bitsLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],
@@ -102,7 +102,7 @@ describe("bitsLayer", () => {
     // module_px = 20/2 = 10; view.scale=0.1 -> 1 screen px/module < 4.
     ctx.view = { scale: 0.1, tx: 0, ty: 0 };
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [code(AXIS_ALIGNED_QUAD)], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [code(AXIS_ALIGNED_QUAD)], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],
@@ -129,6 +129,7 @@ describe("bitsLayer", () => {
         // NOT use — only the last entry matters (see the layer's doc).
         codes: [code([[0, 0], [0, 0], [0, 0], [0, 0]]), code(AXIS_ALIGNED_QUAD)],
         timings: EMPTY_TIMINGS,
+        source_scale: 1,
       },
       trace: {
         tiles: null,

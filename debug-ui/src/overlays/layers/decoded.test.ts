@@ -61,6 +61,7 @@ describe("decodedLayer", () => {
         triplets: [],
         codes: [code({ payload: "Q:near_00:0", version: 1, ecc: "M", mirrored: false })],
         timings: EMPTY_TIMINGS,
+        source_scale: 1,
       },
       trace: null,
     };
@@ -83,6 +84,7 @@ describe("decodedLayer", () => {
         triplets: [],
         codes: [code({ version: 7, ecc: "Q", mirrored: true })],
         timings: EMPTY_TIMINGS,
+        source_scale: 1,
       },
       trace: null,
     };
@@ -96,7 +98,7 @@ describe("decodedLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: null,
     };
     decodedLayer.draw(ctx);
@@ -114,6 +116,7 @@ describe("decodedLayer", () => {
         ],
         codes: [],
         timings: EMPTY_TIMINGS,
+        source_scale: 1,
       },
       trace: {
         tiles: null,
@@ -172,7 +175,7 @@ describe("decodedLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],

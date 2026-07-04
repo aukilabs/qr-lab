@@ -47,6 +47,28 @@ pub struct Detections {
     pub triplets: Vec<TripletCandidate>,
     pub codes: Vec<DecodedCode>,
     pub timings: StageTimings,
+    /// Working-resolution ÷ source-resolution scale (Plan 5 Task 1):
+    /// `working_dim / source_dim`, always `<= 1` — the working view IS the
+    /// source, or a downscaled copy of it, never an upscaled one. `1.0` for
+    /// every `detect`/`detect_with`/`detect_traced` call (they never
+    /// downscale) and for any `scan`/`scan_traced` call whose
+    /// `ScanOptions::max_working_dim` didn't require a downscale.
+    ///
+    /// Direction, stated unambiguously since "scale" alone is ambiguous:
+    /// every OTHER field on this struct (and `DecodedCode::corners`) is in
+    /// WORKING px. To convert one of those coordinates to SOURCE px,
+    /// DIVIDE by this field: `source_px = working_px / source_scale`.
+    /// Equivalently, `working_px = source_px * source_scale`.
+    ///
+    /// Computed from the WIDTH axis specifically (`working_width /
+    /// source_width`) — `scan`'s downscale rounds width and height
+    /// independently (see `downscale_luma`'s doc comment), so for a
+    /// non-square image the height axis's own ratio can differ from this
+    /// by up to half a source pixel of rounding. This is the same
+    /// approximation the debug UI's pre-Plan-5 `workingScaleFor` already
+    /// made (`scanWidth / sourceWidth`, width only) — carried forward
+    /// rather than introduced here.
+    pub source_scale: f64,
 }
 
 /// Per-stage wall-clock timer behind [`StageTimings`].
@@ -173,6 +195,12 @@ pub fn detect_with(view: &LumaView, mut trace: Option<&mut Trace>) -> Detections
             alignment_ns: decode_timings.alignment_ns,
             sample_decode_ns: decode_timings.sample_decode_ns,
         },
+        // `detect`/`detect_with`/`detect_traced` never downscale — `view`
+        // IS the working view, so working == source. `scan`/`scan_traced`
+        // (`scan.rs`) call this same function on their own working view,
+        // then overwrite this with the real ratio when a downscale
+        // happened — see `scan_with`.
+        source_scale: 1.0,
     }
 }
 

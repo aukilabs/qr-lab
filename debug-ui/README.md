@@ -58,14 +58,17 @@ required to pick up new Rust code while `npm run dev` keeps running.
                              │
                              ▼
                        App.runScan(rgba, w, h)
-                       ├─ downscaleRgba (same call, same maxDim, twice:
-                       │    once posted to the worker, once for display —
-                       │    see App.tsx's module doc comment for why)
+                       ├─ downscaleRgba (display path only, since Plan 5:
+                       │    builds the Viewport bitmap; see App.tsx's
+                       │    module doc comment)
                        ▼
-                  ScannerClient.scan()  →  scanner/worker.ts (Web Worker)
-                       │                     scan_rgba() from qrk-wasm
+                  ScannerClient.scan(rgba, w, h, {maxDim, refine})
+                       →  scanner/worker.ts (Web Worker), full-res rgba
+                       │     scan_rgba() from qrk-wasm — luma + the NN
+                       │     downscale now happen in Rust (qrk_core::scan)
                        ▼
-                  ScanResult { detections: { finders, triplets, codes, timings },
+                  ScanResult { detections: { finders, triplets, codes,
+                                              timings, source_scale },
                                trace: { tiles, finders, triplets, attempts,
                                         alignment, sample_regions, bits } | null }
                        │

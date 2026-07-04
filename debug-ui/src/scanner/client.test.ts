@@ -76,6 +76,7 @@ function minimalScanResultJson(): unknown {
         alignment_ns: 0,
         sample_decode_ns: 0,
       },
+      source_scale: 1,
     },
     trace: null,
   };

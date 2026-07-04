@@ -57,6 +57,12 @@ export class WorkerInitTimeoutError extends Error {
 export interface ScanOptions {
   maxDim: number;
   withTrace: boolean;
+  /** Plumbing only as of Plan 5 Task 1 (see `qrk_core::ScanOptions::refine`
+   * — no refinement stage exists yet, so this has no effect on the
+   * result). Optional, defaulting to `false` in `start()`, so existing
+   * callers (e.g. `App.tsx`, which doesn't pass this yet) don't need to
+   * change. */
+  refine?: boolean;
 }
 
 export interface ScanOutcome {
@@ -74,6 +80,7 @@ interface ScanRequestMessage {
   height: number;
   maxDim: number;
   withTrace: boolean;
+  refine: boolean;
 }
 
 interface PendingScan {
@@ -211,6 +218,7 @@ export class ScannerClient {
       height: pending.height,
       maxDim: pending.opts.maxDim,
       withTrace: pending.opts.withTrace,
+      refine: pending.opts.refine ?? false,
     };
     this.worker.postMessage(message, [buffer]);
   }

@@ -16,12 +16,20 @@
 //! freshly generated JSON matches it byte-for-byte (modulo a trailing
 //! newline) — silent drift between Rust and TS fails this test.
 
-use qrk_core::{detect_with, LumaView, StageTimings, Trace};
+use qrk_core::{scan_traced, LumaView, ScanOptions, StageTimings, Trace};
 use qrk_wasm::WasmResult;
 use std::path::PathBuf;
 
 const WIDTH: usize = 1280;
 const HEIGHT: usize = 720;
+/// The debug UI's default working-resolution cap (`DEFAULT_RESOLUTION` in
+/// `debug-ui/src/panels/SourcePanel.tsx`) — near_00 is already exactly this
+/// wide, so `scan` takes the no-downscale branch (`source_scale == 1.0`,
+/// `scan_width`/`scan_height` == `WIDTH`/`HEIGHT`) and this snapshot's
+/// geometry is unchanged from the pre-Plan-5 `detect_with`-based version;
+/// the new top-level fields (`detections.source_scale`, `scan_width`,
+/// `scan_height`) are the only shape delta Plan 5 Task 1 introduces here.
+const MAX_WORKING_DIM: u32 = 1280;
 
 /// `crates/qrk-wasm` -> workspace root.
 fn workspace_root() -> PathBuf {
@@ -45,12 +53,13 @@ fn envelope_matches_committed_snapshot() {
         .unwrap_or_else(|e| panic!("building LumaView over {}: {e:?}", luma_path.display()));
 
     // Populate the trace (tiles/finders/triplets) via the same
-    // `detect_with(view, Some(&mut trace))` path `scan_rgba(with_trace:
+    // `scan_traced(view, &opts, &mut trace)` path `scan_rgba(with_trace:
     // true)` takes, so the snapshot carries the *populated* trace variant
     // — near_00 has real detections, so the TS types below get non-empty
     // array/struct shapes to check against, not just nulls.
     let mut trace = Trace::new();
-    let detections = detect_with(&view, Some(&mut trace));
+    let opts = ScanOptions { max_working_dim: MAX_WORKING_DIM, refine: false };
+    let detections = scan_traced(&view, &opts, &mut trace);
     // `StageTimings` is nondeterministic on every target this test could
     // run on: here (host, not wasm32) it's `Instant::now()` deltas, a
     // different number every run; on the real wasm32 target `StageClock`
@@ -66,9 +75,15 @@ fn envelope_matches_committed_snapshot() {
         timings: StageTimings::default(),
         ..detections
     };
+    // near_00 is exactly `MAX_WORKING_DIM` wide, so `scan` takes the
+    // no-downscale branch — `scan_width`/`scan_height` equal `WIDTH`/
+    // `HEIGHT` and `detections.source_scale` is `1.0` (visible in the
+    // committed JSON).
     let result = WasmResult {
         detections,
         trace: Some(trace),
+        scan_width: WIDTH as u32,
+        scan_height: HEIGHT as u32,
     };
 
     let generated = serde_json::to_string_pretty(&result).expect("serialize WasmResult");

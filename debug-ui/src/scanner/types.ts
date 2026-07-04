@@ -110,6 +110,14 @@ export interface Detections {
   triplets: TripletCandidate[];
   codes: DecodedCode[];
   timings: StageTimings;
+  /** Working-resolution ÷ source-resolution scale (Plan 5 Task 1), mirrors
+   * `qrk_core::Detections::source_scale`: `working_dim / source_dim`,
+   * always `<= 1`. `1.0` whenever `scan` didn't need to downscale. Every
+   * OTHER geometry field on `Detections` (and `DecodedCode.corners`) is in
+   * WORKING px — divide by this to get SOURCE px: `source_px = working_px
+   * / source_scale`. See the Rust field's doc comment for why this is
+   * computed from the width axis specifically. */
+  source_scale: number;
 }
 
 export interface TileTrace {
@@ -535,6 +543,10 @@ function parseDetections(v: unknown, path: string): Detections {
     timings: parseStageTimings(
       expectField(obj, "timings", path),
       joinPath(path, "timings"),
+    ),
+    source_scale: expectNumber(
+      expectField(obj, "source_scale", path),
+      joinPath(path, "source_scale"),
     ),
   };
 }
