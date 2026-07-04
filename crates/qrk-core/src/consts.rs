@@ -59,11 +59,15 @@ pub const ALIGNMENT_PROBE_HALF_MODULES: f64 = 2.25;
 /// 2% ≈ one clipped quiet-zone-adjacent row on a v1 (21×21 = 441 modules;
 /// one full row is `21/441 ≈ 4.8%`, so 2% catches a *partial* row/column
 /// clipping before it grows into a whole one). `sample.rs`'s `sample_grid`
-/// computes and returns `oob_fraction`; `decode.rs` (Task 5) applies this
-/// threshold.
-// Not yet read anywhere: `decode.rs` (Plan 4 Task 5), the caller that
-// applies this threshold, doesn't exist yet — matching `version.rs`'s /
-// `alignment.rs`'s own precedent of an explicit, commented dead-code
-// allowance for a piece landing ahead of its consumer.
-#[allow(dead_code)]
+/// computes and returns `oob_fraction`; `decode.rs` applies this threshold.
 pub(crate) const MAX_OOB_FRACTION: f64 = 0.02;
+
+/// Candidate cap for `decode.rs`'s per-frame arbitration loop (Plan 4's
+/// Global Constraints, transcribed verbatim): `4 codes/frame worst case * 3
+/// triplet permutations/code * 2 headroom = 24`. A "triplet permutation"
+/// here is the observed failure mode from multi-code fixtures where more
+/// than one finder triple can plausibly group around the same handful of
+/// real finders before proximity dedup and consumption prune them — capping
+/// total attempts bounds worst-case per-frame decode work even when a scene
+/// is unusually cluttered with finder-like noise.
+pub(crate) const MAX_DECODE_ATTEMPTS: usize = 24;

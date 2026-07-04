@@ -68,13 +68,67 @@
         "module": 7.166282527208455,
         "dimension": 21,
         "snap_error": 0.0,
-        "inverted": false
+        "inverted": false,
+        "finder_indices": [
+          6,
+          4,
+          5
+        ]
+      }
+    ],
+    "codes": [
+      {
+        "payload": "Q:near_00:0",
+        "payload_bytes": [
+          81,
+          58,
+          110,
+          101,
+          97,
+          114,
+          95,
+          48,
+          48,
+          58,
+          48
+        ],
+        "version": 1,
+        "ecc": "M",
+        "mirrored": false,
+        "dimension": 21,
+        "corners": [
+          [
+            458.46527777777777,
+            584.6215277777778
+          ],
+          [
+            409.44444444444446,
+            439.5694444444445
+          ],
+          [
+            552.4236111111111,
+            402.7673611111112
+          ],
+          [
+            601.4444444444443,
+            547.8194444444446
+          ]
+        ],
+        "inverted": false,
+        "finder_indices": [
+          6,
+          4,
+          5
+        ]
       }
     ],
     "timings": {
       "tiles_ns": 0,
       "finders_ns": 0,
-      "triplets_ns": 0
+      "triplets_ns": 0,
+      "version_ns": 0,
+      "alignment_ns": 0,
+      "sample_decode_ns": 0
     }
   },
   "trace": {
@@ -7354,7 +7408,12 @@
         "module": 7.166282527208455,
         "dimension": 21,
         "snap_error": 0.0,
-        "inverted": false
+        "inverted": false,
+        "finder_indices": [
+          6,
+          4,
+          5
+        ]
       }
     ]
   }

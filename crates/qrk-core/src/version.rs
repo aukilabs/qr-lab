@@ -27,13 +27,10 @@
 //! prose immediately qualifies it: "for this task take a
 //! `&PerspectiveTransform` argument").
 //!
-//! Task 5 (recorded, per the plan's file-structure section) wires this
-//! file's pub(crate) API into `decode.rs`'s per-candidate orchestration.
-//! Until then nothing outside this file's own `#[cfg(test)]` tests calls
-//! any of it, so the whole module (including its private helpers, which
-//! would otherwise each need their own `dead_code` suppression) is
-//! exempted here rather than piecemeal.
-#![allow(dead_code)]
+//! Task 5 (`decode.rs`'s per-candidate orchestration) wires this file's
+//! `pub(crate)` API in — the module-level `dead_code` exemption that used
+//! to live here (while nothing outside this file's own tests called any of
+//! it) is removed now that `decode.rs` is a real caller.
 
 use crate::homography::PerspectiveTransform;
 use crate::tiles::TileGrid;
@@ -490,6 +487,7 @@ mod tests {
             dimension: dim as u32,
             snap_error: 0.0,
             inverted: false,
+            finder_indices: [0, 1, 2],
         };
         let got = count_timing_transitions(&view, &grid, &t, &transform);
         assert_eq!(got, Some(dim as u32 - 13));
@@ -534,6 +532,7 @@ mod tests {
             dimension: dim as u32,
             snap_error: 0.0,
             inverted: false,
+            finder_indices: [0, 1, 2],
         };
         let got_timing = count_timing_transitions(&view, &grid, &t, &transform);
         assert_eq!(got_timing, Some(dim as u32 - 13));

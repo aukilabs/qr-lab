@@ -1,12 +1,19 @@
-//! Orchestrates the three detection stages — tile thresholding, finder
-//! scanning, triplet grouping — behind one `detect`/`detect_traced` entry
-//! point, and measures per-stage wall time with [`StageClock`] (here, not
-//! inside the stage functions themselves, so the stages stay
-//! measurement-free and reusable standalone).
+//! Orchestrates the detection + decode stages — tile thresholding, finder
+//! scanning, triplet grouping, then decode orchestration/arbitration —
+//! behind one `detect`/`detect_traced` entry point, and measures per-stage
+//! wall time with [`StageClock`]. The first three stages are measured from
+//! here, not inside the stage functions themselves, so they stay
+//! measurement-free and reusable standalone; `decode.rs`'s own three
+//! sub-stages (version cross-check, alignment, sample+decode) are
+//! interleaved per candidate rather than run as whole contiguous phases, so
+//! `decode_candidates` accumulates their `StageClock` totals itself and
+//! hands them back for `StageTimings` — see `decode::DecodeTimings`'s doc
+//! for why that's a deliberate deviation from this file's own convention.
 
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
+use crate::decode::{decode_candidates, DecodedCode};
 use crate::finder::{find_finders, FinderCandidate};
 use crate::tiles::TileGrid;
 use crate::trace::Trace;
@@ -14,22 +21,31 @@ use crate::triplet::{group_triplets, TripletCandidate};
 use crate::LumaView;
 
 /// Per-stage wall-clock time in nanoseconds, measured around each of the
-/// three `detect_traced` stage calls.
+/// `detect_traced` stage calls.
 #[derive(Clone, Copy, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct StageTimings {
     pub tiles_ns: u64,
     pub finders_ns: u64,
     pub triplets_ns: u64,
+    /// Timing cross-check + version-info-bits reading, summed across every
+    /// decode attempt in the frame.
+    pub version_ns: u64,
+    /// Alignment-pattern location, summed across every decode attempt.
+    pub alignment_ns: u64,
+    /// Grid sampling + `decode_bits`, summed across every decode attempt.
+    pub sample_decode_ns: u64,
 }
 
 /// One frame's detection result: every finder candidate, every grouped
-/// triplet, and the timings that produced them.
+/// triplet, every successfully decoded code, and the timings that produced
+/// them.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Detections {
     pub finders: Vec<FinderCandidate>,
     pub triplets: Vec<TripletCandidate>,
+    pub codes: Vec<DecodedCode>,
     pub timings: StageTimings,
 }
 
@@ -128,10 +144,25 @@ pub fn detect_with(view: &LumaView, mut trace: Option<&mut Trace>) -> Detections
         t.record_triplets(&triplets);
     }
 
+    // `decode_candidates` accumulates its own three-way stage-timing split
+    // (see the module doc) since its sub-stages are interleaved per
+    // candidate rather than run as whole phases; `attempts` isn't threaded
+    // anywhere yet — `Trace` gains an `attempts` field in Plan 4 Task 6,
+    // which will record it the same way `record_triplets` does above.
+    let (codes, _attempts, decode_timings) = decode_candidates(view, &grid, &finders, &triplets);
+
     Detections {
         finders,
         triplets,
-        timings: StageTimings { tiles_ns, finders_ns, triplets_ns },
+        codes,
+        timings: StageTimings {
+            tiles_ns,
+            finders_ns,
+            triplets_ns,
+            version_ns: decode_timings.version_ns,
+            alignment_ns: decode_timings.alignment_ns,
+            sample_decode_ns: decode_timings.sample_decode_ns,
+        },
     }
 }
 

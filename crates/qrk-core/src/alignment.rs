@@ -16,13 +16,10 @@
 //! ±[`crate::consts::ALIGNMENT_PROBE_HALF_MODULES`]-module concentric
 //! probe.
 //!
-//! Task 4 (`sample.rs`, not yet implemented) consumes [`AlignmentGrid`] as
-//! its anchor lookup for building per-region sampling transforms; Task 5
-//! (`decode.rs`) wires this file into the per-candidate pipeline. Until
-//! then nothing outside this file's own `#[cfg(test)]` tests calls any of
-//! it, so (matching `version.rs`'s precedent) the whole module is exempted
-//! from the dead-code lint here rather than piecemeal per function.
-#![allow(dead_code)]
+//! `sample.rs` consumes [`AlignmentGrid`] as its anchor lookup for building
+//! per-region sampling transforms; `decode.rs` (Task 5) wires this file into
+//! the per-candidate pipeline as a real caller, so the module-level
+//! `dead_code` exemption that used to live here is removed.
 
 use crate::consts::ALIGNMENT_PROBE_HALF_MODULES;
 use crate::homography::PerspectiveTransform;

@@ -49,7 +49,9 @@
 //! a finder corner by several modules' worth of projective error; pairing
 //! the finder's own true module coordinate with its own true image position
 //! is the only combination that is actually correct.
-#![allow(dead_code)]
+//!
+//! `decode.rs` (Task 5) is this file's real caller, so the module-level
+//! `dead_code` exemption that used to live here is removed.
 
 use crate::alignment::{is_finder_corner, AlignmentGrid, AnchorSlot};
 use crate::bitmatrix::BitMatrix;
@@ -73,7 +75,10 @@ pub(crate) struct SampleRegion {
 pub(crate) struct SampledGrid {
     pub bits: BitMatrix,
     /// The regions used to build `bits` — kept for trace/debug-UI
-    /// visualization (Plan 4 Task 6), not consumed by this file itself.
+    /// visualization (Plan 4 Task 6, not landed yet), not consumed by this
+    /// file itself or by `decode.rs` (Task 5), which only reads `bits`/
+    /// `oob_fraction` — hence the field-level `dead_code` allow below.
+    #[allow(dead_code)]
     pub regions: Vec<SampleRegion>,
     /// Fraction of modules (`oob_count / dimension^2`) whose sample fell
     /// outside the source image (a clamped/missing read, counted as `false`
@@ -438,6 +443,7 @@ mod tests {
             dimension: dim as u32,
             snap_error: 0.0,
             inverted: false,
+            finder_indices: [0, 1, 2],
         }
     }
 
