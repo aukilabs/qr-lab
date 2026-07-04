@@ -9,10 +9,20 @@ use wasm_bindgen::prelude::*;
 
 /// Serializable envelope returned to JS: the detection result, plus the
 /// optional debug trace when the caller asked for it.
+///
+/// `pub` (rather than private or `pub(crate)`) and `#[doc(hidden)]` so
+/// `tests/envelope_snapshot.rs` — a separate integration-test crate that
+/// only sees this crate's public API — can construct and serialize this
+/// *exact* struct instead of hand-rolling a lookalike. That keeps the
+/// debug UI's cross-language contract snapshot (Plan 3 Task 1) from ever
+/// diverging from what `scan_rgba` actually sends over the wire: if this
+/// struct's shape changes, both the wasm binding and the snapshot test
+/// change together.
 #[derive(Serialize)]
-struct WasmResult {
-    detections: Detections,
-    trace: Option<Trace>,
+#[doc(hidden)]
+pub struct WasmResult {
+    pub detections: Detections,
+    pub trace: Option<Trace>,
 }
 
 /// Scan one RGBA frame and return a `WasmResult` (via `serde-wasm-bindgen`)
@@ -23,7 +33,12 @@ struct WasmResult {
 /// stride == width). When `with_trace` is set, the result carries the full
 /// per-stage `Trace` (tiles/finders/triplets); otherwise `trace` is `None`
 /// and the trace-recording cost is skipped entirely. Stage timings are
-/// zero on wasm (see `qrk_core::StageClock`) — measure wall time JS-side.
+/// real elapsed time on wasm too — `qrk_core::StageClock` backs them with
+/// `js_sys::Date::now()`, millisecond-resolution rather than the
+/// nanosecond resolution `Instant` gives on native targets, so a fast
+/// stage can still read as 0ns. JS-side wall time (e.g. `performance.now()`
+/// around the `scan_rgba` call) complements these per-stage numbers with
+/// sub-ms precision for the call as a whole; it isn't the only source.
 #[wasm_bindgen]
 pub fn scan_rgba(
     rgba: &[u8],

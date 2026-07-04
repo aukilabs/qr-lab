@@ -1,0 +1,24 @@
+{
+  "name": "debug-ui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "predev": "node scripts/check-wasm-built.mjs && node scripts/gen-fixture-manifest.mjs",
+    "dev": "vite",
+    "prebuild": "node scripts/check-wasm-built.mjs && node scripts/gen-fixture-manifest.mjs",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "build:wasm": "bash ../scripts/build-wasm.sh"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.3",
+    "vitest": "^4.1.9"
+  }
+}
