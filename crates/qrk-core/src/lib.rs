@@ -8,6 +8,7 @@ mod downscale;
 mod finder;
 mod homography;
 mod luma;
+mod refine;
 mod sample;
 mod scan;
 mod scanner;

@@ -366,15 +366,21 @@ fn gate_3_arbitration_on_multi_fixtures() {
 /// fixtures as a regression pin"): on 3 near-resolution golden fixtures
 /// (source == working already, so no downscale is ever needed at any
 /// `max_working_dim`), `scan()` with downscaling explicitly disabled
-/// (`max_working_dim: 0`) must produce BIT-IDENTICAL output to plain
-/// `detect()` on the same view. This holds by construction — `scan_with`'s
-/// no-downscale branch calls `detect_with` directly, the exact function
-/// `detect()` itself calls, so `source` is always `None` and every
-/// source-resolution sampling code path this task adds is never even
-/// reached — but it's locked here as an explicit test per the plan rather
-/// than left as an implicit consequence, so a future refactor that
-/// accidentally routes this branch through source-aware sampling anyway
-/// fails loudly instead of silently drifting.
+/// (`max_working_dim: 0`) AND refinement explicitly disabled (`refine:
+/// false`) must produce BIT-IDENTICAL output to plain `detect()` on the
+/// same view. This holds by construction — with `refine: false`,
+/// `scan_with`'s no-downscale branch calls `detect_with_source(source,
+/// None, trace, false)`, the exact call `detect_with` (and hence
+/// `detect()`) itself makes (Plan 5 Task 3 changed this branch to route
+/// through `detect_with_source` directly, rather than `detect_with`, so
+/// `refine: true` also takes effect here — see `scan_with`'s own doc — but
+/// with `refine: false` the two are the same function call), so `source`
+/// is always `None` and every source-resolution sampling code path Task 2
+/// adds is never even reached — but it's locked here as an explicit test
+/// per the plan rather than left as an implicit consequence, so a future
+/// refactor that accidentally routes this branch through source-aware
+/// sampling (or refinement) anyway fails loudly instead of silently
+/// drifting.
 #[test]
 fn plan5_regression_pin_scan_matches_detect_on_near_res_fixtures() {
     for name in ["near_00", "inv_00", "multi_07"] {
@@ -407,6 +413,47 @@ fn plan5_regression_pin_scan_matches_detect_on_near_res_fixtures() {
             assert_eq!(a.corners, b.corners, "{name}: code {i} corners (bit-identical)");
         }
     }
+}
+
+// --- Plan 5 Task 3: subpixel corner refinement ---
+
+/// End-to-end wiring proof (Task 3's unit gate in `refine.rs` covers the
+/// numerics in isolation; this proves `scan(..., refine: true)` actually
+/// reaches `refine_corners` and populates `DecodedCode::refined_corners`
+/// on a REAL golden fixture, not just a synthetic render): on `near_00`
+/// (source == working, a single v1 code — see the Plan 5 Task 2 regression
+/// pin above), `refine: true` populates `refined_corners` for the decoded
+/// code, and it lands within a generous sanity bound of the fixture's own
+/// `corners_px` ground truth. This is deliberately a loose smoke bound
+/// (catches "refinement is wildly broken or wired to the wrong corners"),
+/// NOT `tests/refine_gate.rs`'s own precise, measured-then-locked
+/// per-fixture accuracy gate (Plan 5 Task 4, out of this task's scope).
+#[test]
+fn plan5_scan_refine_populates_refined_corners_on_a_real_fixture() {
+    let fx = common::load("near_00");
+    let view = fx.view();
+    let det = scan(&view, &ScanOptions { max_working_dim: 0, refine: true });
+    assert_eq!(det.codes.len(), 1, "near_00: expected exactly one decoded code");
+    let refined = det.codes[0]
+        .refined_corners
+        .expect("refine: true must populate refined_corners on a clean synthetic fixture");
+    let truth = fx.codes[0].corners_px;
+    for i in 0..4 {
+        let dx = refined[i][0] - truth[i][0];
+        let dy = refined[i][1] - truth[i][1];
+        let err = (dx * dx + dy * dy).sqrt();
+        assert!(
+            err < 5.0,
+            "near_00: refined corner {i} is {err:.3}px from ground truth ({:?} vs {:?}) — \
+             refinement wiring looks broken, not just imprecise",
+            refined[i],
+            truth[i]
+        );
+    }
+    // `refine: false` (the default) must still leave it `None` — the two
+    // fields are independently gated, not just "whichever ran last".
+    let det_off = scan(&view, &ScanOptions { max_working_dim: 0, refine: false });
+    assert!(det_off.codes[0].refined_corners.is_none());
 }
 
 /// Global Constraints gate 3 (source-resolution sampling): `IMG_4832.png` —

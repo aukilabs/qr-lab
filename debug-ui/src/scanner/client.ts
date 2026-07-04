@@ -57,11 +57,11 @@ export class WorkerInitTimeoutError extends Error {
 export interface ScanOptions {
   maxDim: number;
   withTrace: boolean;
-  /** Plumbing only as of Plan 5 Task 1 (see `qrk_core::ScanOptions::refine`
-   * — no refinement stage exists yet, so this has no effect on the
-   * result). Optional, defaulting to `false` in `start()`, so existing
-   * callers (e.g. `App.tsx`, which doesn't pass this yet) don't need to
-   * change. */
+  /** Enables subpixel corner refinement (Plan 5 Task 3 — see
+   * `qrk_core::ScanOptions::refine`'s doc): when `true`, each decoded
+   * code's `refined_corners` is populated (source px) instead of staying
+   * `null`. Optional, defaulting to `false` in `start()`, so existing
+   * callers (e.g. `App.tsx`, which doesn't pass this) are unaffected. */
   refine?: boolean;
 }
 

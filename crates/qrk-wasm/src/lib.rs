@@ -10,7 +10,10 @@
 //! function; it now hands over the full SOURCE frame instead (see
 //! `debug-ui/src/scanner/worker.ts`'s doc comment). `WasmResult` gained
 //! `scan_width`/`scan_height` so the worker can learn the working
-//! resolution `scan` picked without re-deriving it itself.
+//! resolution `scan` picked without re-deriving it itself. Plan 5 Task 3:
+//! `refine` now enables real subpixel corner refinement (previously
+//! plumbing-only) — no signature change needed here, since the field
+//! already existed.
 
 use qrk_core::{downscaled_dims, luma_from_rgba, scan, scan_traced, Detections, LumaView, ScanOptions, Trace};
 use serde::Serialize;
@@ -53,10 +56,11 @@ pub struct WasmResult {
 /// directly on the full source, like `qrk_core::detect`); the downscale
 /// (when one is needed) happens here, in Rust, via `qrk_core::scan` — see
 /// that function's and `ScanOptions`'s doc comments for the exact NN
-/// formula and the `source_scale` conversion it produces. `refine` is
-/// plumbing-only as of this task (see `ScanOptions::refine`): threaded
-/// through so this signature and the debug UI's wire protocol don't need a
-/// second breaking change once Plan 5 Task 3 lands refinement.
+/// formula and the `source_scale` conversion it produces. `refine` enables
+/// subpixel corner refinement (Plan 5 Task 3, see `ScanOptions::refine`'s
+/// doc): each decoded code's `refined_corners` is then populated (source
+/// px) instead of staying `None`, at the cost of the extra per-code edge
+/// probing/fitting work (visible in `StageTimings::refine_ns`).
 ///
 /// When `with_trace` is set, the result carries the full per-stage `Trace`
 /// (tiles/finders/triplets); otherwise `trace` is `None` and the

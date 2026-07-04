@@ -22,6 +22,7 @@ const EMPTY_TIMINGS = {
   version_ns: 0,
   alignment_ns: 0,
   sample_decode_ns: 0,
+  refine_ns: 0,
 };
 
 describe("samplegridLayer", () => {
@@ -44,6 +45,7 @@ describe("samplegridLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     samplegridLayer.draw(ctx);
@@ -82,6 +84,7 @@ describe("samplegridLayer", () => {
           },
         ],
         bits: null,
+        refine: null,
       },
     };
     samplegridLayer.draw(ctx);
@@ -117,6 +120,7 @@ describe("samplegridLayer", () => {
           },
         ],
         bits: null,
+        refine: null,
       },
     };
     samplegridLayer.draw(ctx);

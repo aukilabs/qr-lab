@@ -23,6 +23,7 @@ const EMPTY_TIMINGS = {
   version_ns: 0,
   alignment_ns: 0,
   sample_decode_ns: 0,
+  refine_ns: 0,
 };
 
 function code(overrides: Partial<DecodedCode> = {}): DecodedCode {
@@ -41,6 +42,7 @@ function code(overrides: Partial<DecodedCode> = {}): DecodedCode {
     ],
     inverted: false,
     finder_indices: [0, 1, 2],
+    refined_corners: null,
     ...overrides,
   };
 }
@@ -153,6 +155,7 @@ describe("decodedLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     decodedLayer.draw(ctx);
@@ -198,6 +201,7 @@ describe("decodedLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     decodedLayer.draw(ctx);

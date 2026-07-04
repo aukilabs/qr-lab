@@ -36,6 +36,11 @@ pub struct StageTimings {
     pub alignment_ns: u64,
     /// Grid sampling + `decode_bits`, summed across every decode attempt.
     pub sample_decode_ns: u64,
+    /// Subpixel corner refinement (Plan 5 Task 3), summed across every
+    /// decoded candidate this frame — `0` whenever `ScanOptions::refine`
+    /// is `false` (the default, including every `detect`/`detect_with`/
+    /// `detect_traced` call, which never enables it).
+    pub refine_ns: u64,
 }
 
 /// One frame's detection result: every finder candidate, every grouped
@@ -152,12 +157,13 @@ impl StageClock {
 /// available for its own optional trace output without taxing the
 /// common no-trace path).
 ///
-/// Thin wrapper over [`detect_with_source`] with `source: None` — kept as
-/// its own function (signature unchanged from before Plan 5 Task 2) so
-/// every existing `detect`/`detect_with`/`detect_traced` caller is
-/// unaffected by the source-resolution sampling plumbing.
+/// Thin wrapper over [`detect_with_source`] with `source: None, refine:
+/// false` — kept as its own function (signature unchanged from before Plan
+/// 5 Task 2) so every existing `detect`/`detect_with`/`detect_traced`
+/// caller is unaffected by the source-resolution sampling or subpixel
+/// refinement plumbing.
 pub fn detect_with(view: &LumaView, trace: Option<&mut Trace>) -> Detections {
-    detect_with_source(view, None, trace)
+    detect_with_source(view, None, trace, false)
 }
 
 /// [`detect_with`]'s real body, additionally threading an optional SOURCE
@@ -173,11 +179,16 @@ pub fn detect_with(view: &LumaView, trace: Option<&mut Trace>) -> Detections {
 /// plan's scope note: only module sampling moves to source resolution this
 /// task. `pub(crate)`, not `pub`: this is `scan.rs`'s own internal seam, not
 /// part of the crate's public entry-point surface (`scan`/`scan_traced`
-/// already are).
+/// already are). `refine` (Plan 5 Task 3) enables subpixel corner
+/// refinement on every decoded candidate — against `source.view` when
+/// `source` is `Some`, else against `view` itself (source == working, no
+/// downscale happened — refinement still runs; see `decode::attempt_candidate`'s
+/// doc).
 pub(crate) fn detect_with_source(
     view: &LumaView,
     source: Option<SourceView>,
     mut trace: Option<&mut Trace>,
+    refine: bool,
 ) -> Detections {
     let tiles_clock = StageClock::start();
     let grid = TileGrid::build(view);
@@ -207,13 +218,16 @@ pub(crate) fn detect_with_source(
     // `record_finders`/`record_triplets` are above — a copy only when a
     // trace was actually requested.
     let (codes, attempts, decode_timings, decode_trace) =
-        decode_candidates(view, &grid, &finders, &triplets, trace.is_some(), source);
+        decode_candidates(view, &grid, &finders, &triplets, trace.is_some(), source, refine);
     if let Some(t) = &mut trace {
         t.record_attempts(&attempts);
         t.record_alignment(&decode_trace.alignment);
         t.record_sample_regions(&decode_trace.sample_regions);
         if let Some(bits) = decode_trace.bits {
             t.record_bits(bits);
+        }
+        if let Some(refine_trace) = decode_trace.refine {
+            t.record_refine(refine_trace);
         }
     }
 
@@ -228,6 +242,7 @@ pub(crate) fn detect_with_source(
             version_ns: decode_timings.version_ns,
             alignment_ns: decode_timings.alignment_ns,
             sample_decode_ns: decode_timings.sample_decode_ns,
+            refine_ns: decode_timings.refine_ns,
         },
         // `detect`/`detect_with`/`detect_traced` never downscale — `view`
         // IS the working view, so working == source. `scan`/`scan_traced`

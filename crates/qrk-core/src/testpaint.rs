@@ -106,3 +106,54 @@ pub(crate) fn render_module_grid_transformed(
     }
     img
 }
+
+/// Antialiased variant of [`render_module_grid_transformed`] (Plan 5 Task
+/// 3): renders at `supersample`x the target resolution — through
+/// `code_to_image` composed with a [`crate::homography::PerspectiveTransform::scaled`]
+/// factor of `supersample`, so the SAME homography places the SAME module
+/// grid, just onto a bigger canvas — then box-reduces (averages each
+/// `supersample x supersample` block) back down to `img_w x img_h`.
+///
+/// The base helper's nearest-neighbor sampling gives every edge a hard 0/1
+/// step with no sub-pixel information at all — useless for testing a
+/// sub-pixel localizer. Box-reducing a hard edge rendered at `supersample`x
+/// instead produces a genuine coverage-weighted gradient across
+/// approximately one output pixel (exactly how standard antialiased
+/// rasterization/mild lens blur looks), which is what Task 3's ≤0.05px
+/// synthetic accuracy gate needs: `refine_corners`'s Devernay profile
+/// localizes a smooth gradient peak, something a hard-edged render cannot
+/// represent at any sub-pixel precision.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn render_module_grid_transformed_antialiased(
+    dim: usize,
+    is_dark: impl Fn(usize, usize) -> bool,
+    ink: u8,
+    light: u8,
+    code_to_image: &crate::homography::PerspectiveTransform,
+    img_w: usize,
+    img_h: usize,
+    supersample: usize,
+) -> Vec<u8> {
+    let s = supersample.max(1);
+    let super_transform =
+        code_to_image.then(&crate::homography::PerspectiveTransform::scaled(s as f64, s as f64));
+    let hi = render_module_grid_transformed(
+        dim, is_dark, ink, light, &super_transform, img_w * s, img_h * s,
+    );
+    let hi_stride = img_w * s;
+    let mut out = vec![0u8; img_w * img_h];
+    let area = (s * s) as u32;
+    for y in 0..img_h {
+        for x in 0..img_w {
+            let mut sum = 0u32;
+            for dy in 0..s {
+                let row = (y * s + dy) * hi_stride;
+                for dx in 0..s {
+                    sum += hi[row + x * s + dx] as u32;
+                }
+            }
+            out[y * img_w + x] = (sum / area) as u8;
+        }
+    }
+    out
+}

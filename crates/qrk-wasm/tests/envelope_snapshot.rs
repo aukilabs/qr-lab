@@ -31,6 +31,16 @@ const HEIGHT: usize = 720;
 /// `scan_height`) are the only shape delta Plan 5 Task 1 introduces here.
 const MAX_WORKING_DIM: u32 = 1280;
 
+/// Plan 5 Task 3: `refine: true` (not the field's own `false` default) —
+/// deliberately, so the committed snapshot (and hence the TS types read off
+/// it) sees the POPULATED `refined_corners`/`refine` trace shapes, not just
+/// `null`s. Refinement still runs here despite `MAX_WORKING_DIM` producing
+/// NO downscale for this fixture (source == working) — see `scan_with`'s
+/// own doc for why that's true by design, not an oversight — so this
+/// exercises exactly the source-px-refinement-without-downscale path a
+/// real no-downscale scan would take.
+const REFINE: bool = true;
+
 /// `crates/qrk-wasm` -> workspace root.
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -58,7 +68,7 @@ fn envelope_matches_committed_snapshot() {
     // — near_00 has real detections, so the TS types below get non-empty
     // array/struct shapes to check against, not just nulls.
     let mut trace = Trace::new();
-    let opts = ScanOptions { max_working_dim: MAX_WORKING_DIM, refine: false };
+    let opts = ScanOptions { max_working_dim: MAX_WORKING_DIM, refine: REFINE };
     let detections = scan_traced(&view, &opts, &mut trace);
     // `StageTimings` is nondeterministic on every target this test could
     // run on: here (host, not wasm32) it's `Instant::now()` deltas, a

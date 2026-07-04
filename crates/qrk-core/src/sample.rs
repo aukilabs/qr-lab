@@ -303,25 +303,47 @@ fn binarized_at(view: &LumaView, grid: &TileGrid, x: f64, y: f64, inverted: bool
 }
 
 /// A fitted edge line: total-least-squares centroid + unit direction.
-struct EdgeFit {
-    centroid: [f64; 2],
-    dir: [f64; 2],
+///
+/// `pub(crate)` (Plan 5 Task 3): `refine.rs`'s subpixel edge fit reuses
+/// this exact shape (and [`fit_line_tls_weighted`]/[`intersect_lines`]
+/// below) rather than duplicating the closed-form 2x2 eigenvector line fit
+/// a second time in a second module.
+pub(crate) struct EdgeFit {
+    pub(crate) centroid: [f64; 2],
+    pub(crate) dir: [f64; 2],
 }
 
 /// Total-least-squares line through `pts` (principal axis of the 2x2
 /// scatter matrix — the closed-form eigenvector via the half-angle
 /// identity, the standard orthogonal-regression result). `pts` must have
-/// >= 2 entries.
+/// at least 2 entries. Thin unweighted wrapper over [`fit_line_tls_weighted`]
+/// (Plan 5 Task 3 extracted the weighted core out of this function; equal
+/// weights reduce to the exact same arithmetic this always did).
 fn fit_line_tls(pts: &[[f64; 2]]) -> EdgeFit {
-    let n = pts.len() as f64;
-    let cx = pts.iter().map(|p| p[0]).sum::<f64>() / n;
-    let cy = pts.iter().map(|p| p[1]).sum::<f64>() / n;
+    let weights = vec![1.0; pts.len()];
+    fit_line_tls_weighted(pts, &weights)
+}
+
+/// Weighted total-least-squares line through `pts` (Plan 5 Task 3):
+/// `refine.rs`'s edge fit weights each point by its Devernay profile's
+/// gradient magnitude (a stronger-contrast localization should out-vote a
+/// weaker one), so the plain unweighted centroid/scatter this module used
+/// pre-Task-3 is generalized here to a per-point weight — the closed-form
+/// principal-axis-of-the-scatter-matrix result is unchanged, just every
+/// sum is now weighted. `pts` and `weights` must be the same non-empty
+/// length; a zero (or all-zero) weight is the caller's problem (produces a
+/// `NaN` centroid) — every caller here always has a strictly positive
+/// gradient-magnitude weight for any point that reached the fit at all.
+pub(crate) fn fit_line_tls_weighted(pts: &[[f64; 2]], weights: &[f64]) -> EdgeFit {
+    let wsum: f64 = weights.iter().sum();
+    let cx = pts.iter().zip(weights).map(|(p, w)| p[0] * w).sum::<f64>() / wsum;
+    let cy = pts.iter().zip(weights).map(|(p, w)| p[1] * w).sum::<f64>() / wsum;
     let (mut sxx, mut sxy, mut syy) = (0.0f64, 0.0f64, 0.0f64);
-    for p in pts {
+    for (p, w) in pts.iter().zip(weights) {
         let (dx, dy) = (p[0] - cx, p[1] - cy);
-        sxx += dx * dx;
-        sxy += dx * dy;
-        syy += dy * dy;
+        sxx += w * dx * dx;
+        sxy += w * dx * dy;
+        syy += w * dy * dy;
     }
     let theta = 0.5 * (2.0 * sxy).atan2(sxx - syy);
     EdgeFit { centroid: [cx, cy], dir: [theta.cos(), theta.sin()] }
@@ -330,7 +352,7 @@ fn fit_line_tls(pts: &[[f64; 2]]) -> EdgeFit {
 /// Intersection of two `EdgeFit` lines; `None` when near-parallel (the two
 /// edges of a real quadrilateral meet at a healthy angle, so a
 /// near-parallel pair means at least one fit is garbage).
-fn intersect_lines(a: &EdgeFit, b: &EdgeFit) -> Option<[f64; 2]> {
+pub(crate) fn intersect_lines(a: &EdgeFit, b: &EdgeFit) -> Option<[f64; 2]> {
     let cross = a.dir[0] * b.dir[1] - a.dir[1] * b.dir[0];
     if cross.abs() < 1e-9 {
         return None;
@@ -1404,6 +1426,35 @@ mod tests {
             scalar_err > 0.5,
             "expected the scalar lift to be >0.5 px off at the bottom-right corner \
              (measured 0.742 px at these dims), got {scalar_err:.4} px"
+        );
+    }
+
+    // --- fit_line_tls_weighted (Plan 5 Task 3 extraction) ---
+
+    #[test]
+    fn fit_line_tls_weighted_with_equal_weights_matches_unweighted() {
+        let pts = [[0.0, 0.1], [1.0, -0.1], [2.0, 0.15], [3.0, -0.05], [4.0, 0.0]];
+        let unweighted = fit_line_tls(&pts);
+        let weighted = fit_line_tls_weighted(&pts, &[1.0; 5]);
+        assert!((unweighted.centroid[0] - weighted.centroid[0]).abs() < 1e-12);
+        assert!((unweighted.centroid[1] - weighted.centroid[1]).abs() < 1e-12);
+        assert!((unweighted.dir[0] - weighted.dir[0]).abs() < 1e-12);
+        assert!((unweighted.dir[1] - weighted.dir[1]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fit_line_tls_weighted_favors_the_heavily_weighted_points() {
+        // Two clusters of points on two different horizontal lines
+        // (y=0 and y=10); a heavy weight on the y=0 cluster should pull
+        // the fitted line's centroid toward it, away from the unweighted
+        // midpoint (y=5).
+        let pts = [[0.0, 0.0], [1.0, 0.0], [0.0, 10.0], [1.0, 10.0]];
+        let weights = [100.0, 100.0, 1.0, 1.0];
+        let fit = fit_line_tls_weighted(&pts, &weights);
+        assert!(
+            fit.centroid[1] < 1.0,
+            "expected the heavily-weighted y=0 cluster to dominate the centroid, got {:?}",
+            fit.centroid
         );
     }
 }

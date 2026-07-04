@@ -33,6 +33,7 @@ describe("tilesLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
+        refine_ns: 0,
       }, source_scale: 1 },
       trace: null,
     };
@@ -51,6 +52,7 @@ describe("tilesLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
+        refine_ns: 0,
       }, source_scale: 1 },
       trace: {
         tiles: null,
@@ -60,6 +62,7 @@ describe("tilesLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     tilesLayer.draw(ctx);
@@ -78,6 +81,7 @@ describe("tilesLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
+        refine_ns: 0,
       }, source_scale: 1 },
       trace: {
         tiles: { tiles_x: 2, tiles_y: 1, thresholds: [100, 150], skip: [false, true] },
@@ -87,6 +91,7 @@ describe("tilesLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     tilesLayer.draw(ctx);
@@ -111,6 +116,7 @@ describe("tilesLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
+        refine_ns: 0,
       }, source_scale: 1 },
       trace: {
         tiles: { tiles_x: 1, tiles_y: 1, thresholds: [80], skip: [false] },
@@ -120,6 +126,7 @@ describe("tilesLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     tilesLayer.draw(ctx);

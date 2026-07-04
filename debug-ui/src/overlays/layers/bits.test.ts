@@ -23,6 +23,7 @@ const EMPTY_TIMINGS = {
   version_ns: 0,
   alignment_ns: 0,
   sample_decode_ns: 0,
+  refine_ns: 0,
 };
 
 function code(corners: DecodedCode["corners"]): DecodedCode {
@@ -36,6 +37,7 @@ function code(corners: DecodedCode["corners"]): DecodedCode {
     corners,
     inverted: false,
     finder_indices: [0, 1, 2],
+    refined_corners: null,
   };
 }
 
@@ -71,6 +73,7 @@ describe("bitsLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     bitsLayer.draw(ctx);
@@ -90,6 +93,7 @@ describe("bitsLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: BITS_2X2,
+        refine: null,
       },
     };
     bitsLayer.draw(ctx);
@@ -111,6 +115,7 @@ describe("bitsLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: BITS_2X2,
+        refine: null,
       },
     };
     bitsLayer.draw(ctx);
@@ -139,6 +144,7 @@ describe("bitsLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: BITS_2X2,
+        refine: null,
       },
     };
     bitsLayer.draw(ctx);

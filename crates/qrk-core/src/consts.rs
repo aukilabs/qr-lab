@@ -189,3 +189,71 @@ pub(crate) const BR_ANCHOR_FILTER_TOL_MODULES: f64 = 0.75;
 /// below), and per this task's gate-failure protocol no other K value may
 /// be tried without reporting it.
 pub(crate) const SHARPEN_K: f32 = 0.25;
+
+// --- Plan 5 Task 3: subpixel corner refinement (`refine.rs`) ---
+// Every constant below is transcribed verbatim from the plan's Global
+// Constraints ("Pinned refinement constants") — no value here may be
+// tuned against a fixture; see that section's gate-failure protocol.
+
+/// Sub-module-fraction probe positions along a dark border module's own
+/// length (0.35, 0.70 — the original GPU scanner's own two-probes-per-
+/// dark-module scheme). Symmetric about the module's center and
+/// comfortably inside its own boundaries, so a probe's
+/// [`REFINE_PROFILE_SAMPLES`]-point perpendicular profile samples the
+/// module-region's outer edge crossing, not a neighboring module's own.
+pub(crate) const REFINE_PROBE_MODULE_FRACTIONS: [f64; 2] = [0.35, 0.70];
+
+/// Margin excluded from each end of an outer module-region edge before
+/// `refine.rs` probes it, in modules — corner rounding (anti-aliasing and
+/// blur soften the true corner into a curve over roughly a module) would
+/// otherwise bias a probe landing there off the straight edge line the fit
+/// assumes. Skipping 1.5 modules at each end keeps the "middle ~80%" of a
+/// v1 edge (21 modules: `21 - 2*1.5 = 18`, `18/21 ≈ 86%`); the kept
+/// fraction grows toward the whole edge as `dim` increases, since the
+/// corner-rounding zone is a fixed few modules, not a fraction of the
+/// edge.
+pub(crate) const REFINE_EDGE_MARGIN_MODULES: f64 = 1.5;
+
+/// Hard cap on probe points per edge: bounds refinement's worst-case
+/// per-frame cost independent of the code's dimension — v40's 177-module
+/// edge, probed at up to 2 points per dark border module, could otherwise
+/// contribute on the order of 170 candidate points to a single edge fit.
+pub(crate) const REFINE_MAX_POINTS_PER_EDGE: usize = 64;
+
+/// Bilinear samples per Devernay sub-pixel edge-localization profile — an
+/// odd count centered on the coarse edge position (the module-region
+/// boundary the caller's, possibly-imprecise, corners predict), leaving 5
+/// interior samples with a same-spacing neighbor on both sides for the
+/// central-difference gradient, 3 of which (around whichever peaks) feed
+/// the 3-point quadratic (Devernay) sub-sample interpolation.
+pub(crate) const REFINE_PROFILE_SAMPLES: usize = 7;
+
+/// Spacing between consecutive [`REFINE_PROFILE_SAMPLES`] profile samples,
+/// in source-image modules: half a module, so the full 7-sample profile
+/// spans +/-1.5 modules around the coarse edge position — wide enough to
+/// bracket the true boundary despite ordinary coarse-corner imprecision,
+/// while staying tight enough that the profile doesn't reach into a
+/// neighboring module's own transition.
+pub(crate) const REFINE_PROFILE_STEP_MODULES: f64 = 0.5;
+
+/// Multiplier on the median residual for `refine.rs`'s one-pass outlier
+/// refit ("drop residuals > max(0.15 source-module, 2x median residual)"):
+/// keeps the threshold adaptive to each edge's own fit quality (a noisy
+/// edge's median residual dominates) while [`REFINE_OUTLIER_FLOOR_MODULES`]
+/// guards a near-perfect edge (median ~ 0) against rejecting points on
+/// floating-point noise alone.
+pub(crate) const REFINE_OUTLIER_MEDIAN_MULTIPLIER: f64 = 2.0;
+
+/// Flat floor on the outlier-refit threshold, in source modules — see
+/// [`REFINE_OUTLIER_MEDIAN_MULTIPLIER`]'s doc for why a floor is needed
+/// alongside the adaptive multiplier.
+pub(crate) const REFINE_OUTLIER_FLOOR_MODULES: f64 = 0.15;
+
+/// Minimum surviving points an edge's outlier refit must keep before
+/// `refine.rs` trusts its line — a line has 2 degrees of freedom, so 6
+/// points leave 4 of redundancy, comfortably more than
+/// [`BR_MIN_EDGE_POINTS`]'s own 5-point bar for the coarser Task 5b
+/// BR-corner estimator this stage supersedes in precision (not in role —
+/// that estimator still runs first, at decode time, making the corners
+/// this stage refines possible in the first place).
+pub(crate) const REFINE_MIN_EDGE_POINTS: usize = 6;

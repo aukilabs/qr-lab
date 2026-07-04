@@ -15,6 +15,15 @@
 ///
 /// Coordinates are `(x, y)` = `(column, row)`, matching the `qrcode` crate's
 /// `code[(x, y)]` indexing used to build matrices in tests.
+///
+/// `Clone` (Plan 5 Task 3): `decode.rs` keeps a copy of whichever bit
+/// matrix actually decoded (tile-threshold or Fix B's reference-threshold
+/// retry) around after its originating `sample_grid`/`build_reference_
+/// threshold_bits` call returns, so `refine_corners` can read border-module
+/// darkness from it regardless of whether a `Trace` was requested — a
+/// cheap clone (a `Vec<u32>` of at most `ceil(177/32) * 177 ≈ 1062` words
+/// even at the largest QR version).
+#[derive(Clone)]
 pub struct BitMatrix {
     /// Row/column count (QR codes are always square).
     pub dim: usize,

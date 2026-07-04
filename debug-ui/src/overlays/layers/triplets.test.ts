@@ -33,6 +33,7 @@ describe("tripletsLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
+        refine_ns: 0,
       }, source_scale: 1 },
       trace: null,
     };
@@ -66,6 +67,7 @@ describe("tripletsLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
+        refine_ns: 0,
         },
         source_scale: 1,
       },
@@ -113,6 +115,7 @@ describe("tripletsLayer", () => {
         version_ns: 0,
         alignment_ns: 0,
         sample_decode_ns: 0,
+        refine_ns: 0,
         },
         source_scale: 1,
       },

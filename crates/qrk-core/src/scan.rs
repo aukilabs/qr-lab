@@ -8,17 +8,22 @@
 //! task; `scan_rgba` (qrk-wasm) now does it in Rust instead (see that
 //! crate's doc comment).
 //!
-//! This task adds no new detection behavior: `scan` funnels through the
-//! exact same `detect_with` orchestration `detect`/`detect_traced` already
-//! use, on whichever view (source, or a freshly downscaled working copy)
-//! ends up being detected on. The only new output is
-//! `Detections::source_scale`, which records which case happened and by
-//! how much, so later tasks (source-resolution module sampling; subpixel
-//! corner refinement) can convert working-px geometry back to source px.
+//! Detection itself (tiling, finder/triplet grouping, decode) always runs
+//! through the same `detect_with_source` orchestration `detect`/
+//! `detect_traced` also use, on whichever view (source, or a freshly
+//! downscaled working copy) ends up being detected on — `scan` adds no new
+//! detection behavior there. `Detections::source_scale` records which case
+//! happened and by how much, so module sampling (Plan 5 Task 2) and
+//! subpixel corner refinement (Plan 5 Task 3, `ScanOptions::refine`) can
+//! convert working-px geometry back to source px; refinement's own
+//! `refine_corners` call happens inside `decode.rs`'s `attempt_candidate`,
+//! against `source` itself (either the downscaled-from view, or `view`
+//! when no downscale happened — see `attempt_candidate`'s doc for exactly
+//! how it resolves that).
 
 use crate::downscale::downscale_luma;
 use crate::sample::SourceView;
-use crate::scanner::{detect_with, detect_with_source, Detections};
+use crate::scanner::{detect_with_source, Detections};
 use crate::trace::Trace;
 use crate::LumaView;
 
@@ -32,15 +37,15 @@ pub struct ScanOptions {
     /// `max_dim` parameter verbatim (see its doc comment for the exact NN
     /// formula this uses).
     pub max_working_dim: u32,
-    /// Plumbing only as of this task: accepted and threaded through
-    /// `scan_rgba`'s wasm signature and the debug UI's wire protocol, but
-    /// has NO effect on `scan`'s output yet — there is no refinement stage
-    /// to enable. That lands in Plan 5 Task 3 (`refine_corners`), which
-    /// will make `scan` compute `DecodedCode::refined_corners` against the
-    /// source view when this is `true`. Landing the field now (rather than
-    /// widening `ScanOptions` again later) means Task 3 is an additive
-    /// change to `scan`'s body, not another breaking signature change to
-    /// `scan_rgba`/the worker/client wire protocol.
+    /// Enables subpixel corner refinement (Plan 5 Task 3): when `true`,
+    /// every decoded code's `DecodedCode::refined_corners` is computed
+    /// against the SOURCE view (traced edge-line intersections, source
+    /// px) instead of staying `None`. Refinement runs against the SOURCE
+    /// view when a downscale happened, and against `source` itself (`sx =
+    /// sy = 1.0`) when it didn't — enabling this always has an effect
+    /// regardless of `max_working_dim`. `false` (the default most callers
+    /// should use unless they need the refined geometry) costs nothing
+    /// extra: no edge probing, no `StageTimings::refine_ns`.
     pub refine: bool,
 }
 
@@ -83,18 +88,30 @@ fn scan_with(source: &LumaView, opts: &ScanOptions, trace: Option<&mut Trace>) -
             // before module sampling still runs on `working` exactly as
             // before; only the sampling calls deep inside `decode_candidates`
             // see `source` at all.
-            let mut detections =
-                detect_with_source(&working, Some(SourceView { view: source, sx, sy }), trace);
+            let mut detections = detect_with_source(
+                &working,
+                Some(SourceView { view: source, sx, sy }),
+                trace,
+                opts.refine,
+            );
             // The PUBLIC scalar stays width-pinned per the plan (see
             // `Detections::source_scale`'s doc) even though the internal
             // sampling lift above is per-axis.
             detections.source_scale = sx;
             detections
         }
-        // No downscale needed: `detect_with` already defaults
-        // `source_scale` to `1.0`, exactly right since working == source
-        // here.
-        None => detect_with(source, trace),
+        // No downscale needed: `source_scale` defaults to `1.0` inside
+        // `detect_with_source`, exactly right since working == source
+        // here. IMPORTANT (Plan 5 Task 3): this does NOT delegate to
+        // `detect_with` (which hardcodes `refine: false`) — refinement
+        // still runs when `opts.refine` is `true` even though no downscale
+        // happened; `detect_with_source`'s `source: None` branch handles
+        // that by refining against `view` itself with `sx = sy = 1.0` (see
+        // `decode::attempt_candidate`'s doc). `detect_with_source(source,
+        // None, trace, false)` — the `refine: false` case — is exactly
+        // what `detect_with` itself calls, so behavior is byte-identical
+        // to pre-Task-3 `scan` whenever refinement is off.
+        None => detect_with_source(source, None, trace, opts.refine),
     }
 }
 
@@ -157,12 +174,22 @@ mod tests {
     }
 
     #[test]
-    fn refine_flag_has_no_effect_yet() {
+    fn refine_flag_has_no_effect_when_nothing_decodes() {
+        // Plan 5 Task 3: `refine` now DOES enable real work (subpixel
+        // corner refinement) — see `decode_gate.rs`'s
+        // `plan5_scan_refine_populates_refined_corners_on_a_real_fixture`
+        // for the end-to-end proof it actually runs. On a flat image with
+        // no finders/codes at all, though, there is nothing for refinement
+        // to run against (`attempt_candidate`'s refine call only fires on
+        // an actual decode), so `codes`/`source_scale` stay identical
+        // either way — a narrower, still-true regression pin than this
+        // test's pre-Task-3 name implied.
         let data = vec![128u8; 64 * 32];
         let view = flat_view(&data, 64, 32);
         let without = scan(&view, &ScanOptions { max_working_dim: 0, refine: false });
         let with = scan(&view, &ScanOptions { max_working_dim: 0, refine: true });
         assert_eq!(without.codes.len(), with.codes.len());
+        assert_eq!(without.codes.len(), 0, "test setup: a flat image must not decode anything");
         assert_eq!(without.source_scale, with.source_scale);
     }
 }
