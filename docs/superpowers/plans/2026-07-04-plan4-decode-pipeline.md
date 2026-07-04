@@ -185,6 +185,16 @@ Plus integration-style tests using synthetic renders: rasterize a v7 and a v20 c
 
 ---
 
+### Task 5b (recorded amendment after the first gate run): image-derived 4th corner for v1/no-AP candidates
+
+The first gate run failed 15/81 fixtures and real_1 — all v1 codes under genuine perspective, where the provisional transform's affine parallelogram BR estimate diverges (Task 4's documented limitation, now shown to bite the product's primary scenario: small stickers photographed obliquely). Recorded decision: estimate the 4th corner from the image instead (zxing-cpp edge-tracing practice; also the original GPU scanner's `improve_corners` concept — perpendicular boundary probing + line fit + intersection — applied at detection precision now; Plan 5 upgrades it to full-res gradient subpixel).
+
+`refine_fourth_corner(view, grid, t, dimension, provisional) -> Option<[f64; 2]>`:
+- Probe the module-region **bottom edge**: at ~8 positions along modules `x ∈ [7, dim−7]` (avoiding finders/corner rounding), walk perpendicular (±1.5 modules around the expected boundary from `provisional`) on the binarized image to locate the last ink→background transition; likewise the **right edge**. Polarity-aware.
+- Require ≥5 accepted points per edge; least-squares line fit each; intersect → BR outer corner (module-space `(dim, dim)`).
+- On success: rebuild the sampling transform from mixed anchors [(3.5,3.5), (dim−3.5,3.5), (dim,dim)→BR, (3.5,dim−3.5)] via `quad_to_quad` (4 arbitrary correspondences form valid quads). On failure: parallelogram fallback (previous behavior).
+- Applied when no Found BR alignment anchor exists. Constants carry provenance; gates unchanged (this is an algorithm fix, not tuning).
+
 ### Task 6: Trace + envelope + debug-UI overlays
 
 - `Trace` gains `attempts: Vec<DecodeAttemptTrace>`, `alignment: Vec<AlignmentTraceEntry { predicted: [f64;2], found: Option<[f64;2]> }>` (per last attempted candidate), `sample_regions: Vec<SampleRegionTrace { module_rect, quad: [[f64;2];4] }>`, `bits: Option<BitsTrace { dim, words: Vec<u32> }>`, and `Detections.codes` flows through existing serialization. Regenerate snapshot (UPDATE_SNAPSHOT=1); extend `types.ts` + `parseScanResult` (snapshot wins on names); envelope tests extended.
