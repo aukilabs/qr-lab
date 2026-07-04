@@ -272,9 +272,13 @@ fn gate_2b_video_frame167_decodes_at_working_resolution() {
     let det = detect(&view);
     let payloads: Vec<&str> = det.codes.iter().map(|c| c.payload.as_str()).collect();
     println!("video_f167 @{w}x{h}: decoded {} code(s): {payloads:?}", det.codes.len());
-    assert!(
-        payloads.contains(&R8HR),
-        "video_f167: expected payload {R8HR:?} among decoded codes, got {payloads:?}"
+    // Exact (same pattern as `real_2` above): the frame decodes exactly
+    // this one code today — pin that, so a future spurious extra decode
+    // fails loudly instead of slipping past a mere `contains` check.
+    assert_eq!(
+        payloads,
+        vec![R8HR],
+        "video_f167: expected exactly [{R8HR:?}], got {payloads:?}"
     );
 }
 

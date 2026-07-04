@@ -629,4 +629,65 @@ mod tests {
         let decoded = decode_bits(&refbits).expect("clean re-thresholded grid must decode");
         assert_eq!(decoded.payload, "REFBITS");
     }
+
+    /// Inverted-polarity coverage for `build_reference_threshold_bits`
+    /// (review finding: the `inv_*` fixtures never trigger the refbits
+    /// retry, so the `inverted = true` branch had zero coverage): an
+    /// INVERTED (light-on-dark) code's ink modules read HIGH grays and its
+    /// background LOW. The finder-derived reference threshold still lands
+    /// between the two polarity means regardless of which side is ink
+    /// (the midpoint formula is symmetric), and the `(v < threshold) !=
+    /// inverted` binarization must then map high-gray ink cells back to
+    /// `true` (ink) exactly as the tile-threshold path does. Plus a
+    /// false-polarity control: the SAME gray grid with `inverted = false`
+    /// must come out fully complemented (every ink cell reads light and
+    /// every background cell reads dark) — pinning that the flag, not some
+    /// accident of the threshold, is what carries the polarity.
+    #[test]
+    fn build_reference_threshold_bits_handles_inverted_polarity() {
+        let code = qrcode::QrCode::with_version(
+            b"INVREF", qrcode::Version::Normal(2), qrcode::EcLevel::H,
+        )
+        .unwrap();
+        let dim = code.width();
+        // Inverted render: spec-ink (Dark) modules are painted LIGHT
+        // (220.0) on a dark (30.0) background.
+        let mut grays = vec![0.0f32; dim * dim];
+        for y in 0..dim {
+            for x in 0..dim {
+                grays[y * dim + x] =
+                    if code[(x, y)] == qrcode::Color::Dark { 220.0 } else { 30.0 };
+            }
+        }
+
+        // Correct polarity flag: bit-exact recovery + decode.
+        let refbits = build_reference_threshold_bits(&grays, dim, true)
+            .expect("finder blocks fully populated: threshold must be defined");
+        for y in 0..dim {
+            for x in 0..dim {
+                assert_eq!(
+                    refbits.get(x, y),
+                    code[(x, y)] == qrcode::Color::Dark,
+                    "inverted=true mismatch at ({x},{y})"
+                );
+            }
+        }
+        let decoded = decode_bits(&refbits).expect("inverted re-thresholded grid must decode");
+        assert_eq!(decoded.payload, "INVREF");
+
+        // False-polarity control: same grays, inverted=false — every module
+        // must come out complemented (ink cells light, background dark),
+        // proving the polarity flows through the flag and nothing else.
+        let wrong = build_reference_threshold_bits(&grays, dim, false)
+            .expect("threshold is polarity-independent: still defined");
+        for y in 0..dim {
+            for x in 0..dim {
+                assert_eq!(
+                    wrong.get(x, y),
+                    code[(x, y)] != qrcode::Color::Dark,
+                    "inverted=false control not complemented at ({x},{y})"
+                );
+            }
+        }
+    }
 }
