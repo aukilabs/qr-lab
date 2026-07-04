@@ -7,10 +7,10 @@
 // Plan 5 Task 1: this file no longer downscales. `scan_rgba` now takes the
 // SOURCE rgba + `maxDim` directly and owns the NN downscale in Rust (see
 // `qrk_core::scan`/`downscale_luma`) — this worker just forwards the full
-// frame it was sent. That means worker traffic (the `postMessage` transfer
-// from the main thread) now carries the FULL source frame instead of an
-// already-downscaled one — a 24MP photo transfers ~98MB instead of a few
-// MB. Recorded/accepted cost (Plan 5 Global Constraints "Known risks"):
+// frame it was sent. Worker traffic has ALWAYS carried the full source
+// frame (App sends source rgba; pre-Task-1 the worker downscaled it after
+// receipt) — Task 1 only moved WHERE the downscale computes (JS→Rust); a
+// 24MP photo still transfers ~98MB per scan. Recorded/accepted cost:
 // this is a dev tool, not the mobile production path (which receives a
 // borrowed Y-plane and never goes through postMessage at all), and the
 // copy-once ownership semantics (`ScannerClient.scan`'s doc comment)

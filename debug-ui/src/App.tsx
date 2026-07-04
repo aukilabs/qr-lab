@@ -5,9 +5,9 @@
 //
 // Scan pipeline (binding decision, see task-6-brief.md): a source change,
 // a resolution change, or a new video frame produces a full-resolution RGBA
-// readout, which goes to `ScannerClient.scan` (the worker downscales
-// internally via `downscaleRgba` and runs `scan_rgba` on the result; the
-// client copies the frame up front, so the caller's rgba stays readable).
+// readout, which goes to `ScannerClient.scan` (since Plan 5 Task 1 the
+// downscale happens in Rust inside `scan_rgba`; the client copies the
+// frame up front, so the caller's rgba stays readable).
 // While that scan runs, this file downscales the SAME rgba with the SAME
 // `downscaleRgba` call (same maxDim) to build the bitmap actually drawn in
 // the `Viewport` — guaranteeing the displayed pixels and the overlay
