@@ -32,3 +32,144 @@ pub const CONTRAST_FLOOR: u8 = 12;
 /// candidates with `hits >= 2` (the merge gate), so ≥3 hit chances
 /// leaves one spare above that floor rather than sitting exactly on it.
 pub const ROW_STEP: usize = 2;
+
+/// Alignment-pattern concentric re-centering probe half-width, in modules
+/// (zxing-cpp's `AlignmentPatternFinder` uses the same ±2.25 half-width).
+/// Must comfortably exceed the largest prediction error the caller can
+/// hand in (parallelogram/provisional-transform drift is typically well
+/// under 2 modules even at high versions and moderate perspective) while
+/// staying well short of ever reaching a *neighboring* alignment pattern's
+/// own 5×5 footprint: computed (not eyeballed — see the min-gap check
+/// alongside `alignment.rs`'s table test) the smallest center-to-center
+/// spacing between two adjacent, non-finder-corner `alignment_coords`
+/// grid nodes across every version with at least one such pair (v7..40)
+/// is 16 modules (v7's own coordinate list `[6, 22, 38]`, gap 16 both
+/// times — the *global* minimum, not merely v7's), so a half-width of
+/// 2.25 leaves `16 - 2*2.25 = 11.5` modules of dead zone between probe
+/// windows — nowhere close to colliding. (v2..6's single real alignment
+/// pattern has no neighboring real pattern to collide with at all, so
+/// their nominal `6 -> coord` gap, sometimes < 16, doesn't apply here.)
+pub const ALIGNMENT_PROBE_HALF_MODULES: f64 = 2.25;
+
+/// Sample-out-of-image tolerance (Plan 4's Global Constraints, transcribed
+/// verbatim): a candidate whose sampling grid would read more than this
+/// fraction of modules outside the source image is rejected before decode —
+/// a border-clamped read would otherwise silently repeat an edge pixel's
+/// value instead of surfacing that the candidate's geometry runs off-frame.
+/// 2% ≈ one clipped quiet-zone-adjacent row on a v1 (21×21 = 441 modules;
+/// one full row is `21/441 ≈ 4.8%`, so 2% catches a *partial* row/column
+/// clipping before it grows into a whole one). `sample.rs`'s `sample_grid`
+/// computes and returns `oob_fraction`; `decode.rs` applies this threshold.
+pub(crate) const MAX_OOB_FRACTION: f64 = 0.02;
+
+/// Candidate cap for `decode.rs`'s per-frame arbitration loop (Plan 4's
+/// Global Constraints, transcribed verbatim): `4 codes/frame worst case * 3
+/// triplet permutations/code * 2 headroom = 24`. A "triplet permutation"
+/// here is the observed failure mode from multi-code fixtures where more
+/// than one finder triple can plausibly group around the same handful of
+/// real finders before proximity dedup and consumption prune them — capping
+/// total attempts bounds worst-case per-frame decode work even when a scene
+/// is unusually cluttered with finder-like noise.
+pub(crate) const MAX_DECODE_ATTEMPTS: usize = 24;
+
+/// Number of boundary probes per edge for `sample.rs`'s
+/// `refine_fourth_corner` (Plan 4 Task 5b). Line-fit noise scales as
+/// `~1/sqrt(N)` in the number of fitted points, so 8 probes cut a single
+/// probe's localization noise by ~2.8x, while the probe-able span
+/// `[7, dim-7]` (the amendment's range — the flanking finder/separator
+/// structures are excluded) still offers one probe per module even at v1's
+/// minimum `dim = 21` (7-module span).
+pub(crate) const BR_PROBE_COUNT: usize = 8;
+
+/// Half-width, in modules, of the perpendicular search window each
+/// `refine_fourth_corner` probe walks around its predicted edge-boundary
+/// position.
+///
+/// Must cover the prediction's divergence from the true boundary. Measured
+/// (Task 5b investigation) against the ground-truth `corners_px` homography
+/// at the 8 probe positions per edge on the gate-failing 45-degree-tilt
+/// fixtures: when the prediction comes from the affine parallelogram
+/// provisional transform alone, the divergence reaches 1.81 modules
+/// (`tilt45_00`, right edge) and 2.06 modules (`tilt45_07`, bottom edge) at
+/// the probes nearest the BR corner — *exceeding* 1.5. That measurement is
+/// exactly why `refine_fourth_corner` probes each edge in two passes (see
+/// `sample.rs`'s `probe_edge_line`): a provisional-guided first pass whose
+/// near-finder probes — where the same measurement shows the provisional's
+/// divergence is smallest, 0.46-0.88 modules across every failing
+/// fixture — pin the edge's straight image-space line, then a second pass
+/// re-probing every position with its window centered on that line (the
+/// same evidence-over-provisional prediction principle `alignment.rs`'s
+/// parallelogram rule established). 1.5 covers the measured near-probe
+/// divergence with ~2x margin while staying well below half the 7-module
+/// minimum probe span (a window can never reach around to the code's far
+/// side).
+pub(crate) const BR_PROBE_WINDOW_HALF_MODULES: f64 = 1.5;
+
+/// Minimum accepted boundary points per edge before `refine_fourth_corner`
+/// trusts a line fit: a line has 2 parameters, so 5 points leave 3 degrees
+/// of freedom of redundancy — enough for least squares to average out
+/// single-probe localization noise. The count includes the
+/// [`BR_ANCHOR_POSITIONS`] finder-border probes (the constant's provenance
+/// is fit degrees-of-freedom margin, which counts every fitted point), so
+/// with 2 anchors + [`BR_PROBE_COUNT`] = 8 data-span probes the gate
+/// tolerates up to 5 rejected data probes (a data probe rejects when its
+/// window sees no usable ink-to-background transition, e.g. where the
+/// edge-adjacent module column/row is locally light, as ~half of a QR data
+/// region's boundary modules are — measured on the golden suite, several
+/// v1 fixtures' bottom rows have only 4 dark columns among the 8 probed).
+pub(crate) const BR_MIN_EDGE_POINTS: usize = 5;
+
+/// Anchor-probe positions (module-space coordinate along the edge) over
+/// the edge's flanking finder pattern, used by `refine_fourth_corner` in
+/// addition to the [`BR_PROBE_COUNT`] data-span probes.
+///
+/// The bottom edge's modules `(x, dim-1)` for `x in 0..=6` are the BL
+/// finder's own outer border row — dark by construction (ISO 18004 §6.3.3,
+/// the 7x7 finder's 1-module dark outer ring), lying exactly ON the module
+/// region's bottom edge line; likewise `(dim-1, y)`, `y in 0..=6`, the TR
+/// finder's border column on the right edge. Probing there yields
+/// *guaranteed* boundary points with a clean dark(border)/light(inner
+/// ring) inward profile, independent of payload — unlike the data-span
+/// probes, whose acceptance depends on which boundary data modules happen
+/// to be dark. This is where zxing-cpp's own edge tracing starts (from the
+/// finder patterns outward) — the amendment's cited practice. Two anchors
+/// also stretch the fit's baseline toward the near corner, cutting the
+/// line's extrapolation error at the far (BR) corner roughly in half
+/// versus fitting the `[7, dim-7]` span alone.
+///
+/// `2.0` and `5.0`: symmetric within the border's clean central span, at
+/// least 1.5 modules (one probe window half-width) away from the finder's
+/// two corners at `0` and `7`, so a probe window never straddles the
+/// corner rounding the amendment's data-span bounds exclude.
+pub(crate) const BR_ANCHOR_POSITIONS: [f64; 2] = [2.0, 5.0];
+
+/// Perpendicular tolerance, in modules, for `sample.rs`'s anchor-line
+/// consistency filter: a data-span boundary point is kept only if it lies
+/// within this distance of the line through the two
+/// [`BR_ANCHOR_POSITIONS`] finder-border points.
+///
+/// Bounds, from the two failure modes the filter separates (both observed
+/// on the golden suite):
+/// - It must EXCEED the anchor line's own worst-case extrapolation error
+///   across the data span: each anchor localizes to ~1/16 module (walk
+///   step is 1/8 module, transition taken at the step midpoint), the two
+///   anchors sit 3 modules apart, so the line's tilt error is at most
+///   `(2 * 1/16) / 3 ~= 0.042 rad`; over the ~10.5 modules from the anchor
+///   midpoint to the far end of a v1 data span that is ~0.44 modules of
+///   deviation. (Systematic transition shifts — blur, thresholding — move
+///   both anchors together and cancel out of the tilt.)
+/// - It must stay WELL BELOW 1 module, the two structures a wrong point
+///   snaps to: a light-boundary-module probe's inward offset is exactly
+///   one module (the next module row's own edge), and the plate-edge /
+///   scene-background contour captured on the 45-degree-tilt fixtures
+///   (where the projected quiet zone compresses toward the probe window's
+///   reach) sits >= 1.2 modules outside.
+///
+/// 0.75 is the midpoint of that `[0.44, 1.0]` gap. Note the v1 lever arm
+/// is the practically binding one: `refine_fourth_corner` only runs when
+/// no alignment pattern was found anywhere, which in practice means v1
+/// (higher versions' probes virtually always find at least one AP); for a
+/// hypothetical no-AP high version the longer span makes the anchor line
+/// over-reject, refinement returns `None`, and the caller keeps the
+/// pre-Task-5b parallelogram fallback — a no-regression outcome.
+pub(crate) const BR_ANCHOR_FILTER_TOL_MODULES: f64 = 0.75;

@@ -1,6 +1,13 @@
-//! Test-only synthetic-finder painters shared by `finder.rs` and
-//! `triplet.rs` unit tests (compiled only under `cfg(test)` via the
-//! module declaration in `lib.rs`).
+//! Test-only synthetic-render painters shared across unit tests (compiled
+//! only under `cfg(test)` via the module declaration in `lib.rs`):
+//! `paint_finder`/`paint_finder_rotated` (finder-pattern painters, used by
+//! `finder.rs`/`triplet.rs`) and `render_module_grid_transformed` (a
+//! general QR-matrix rasterizer through an arbitrary homography, added in
+//! Plan 4 Task 2 for `version.rs`'s synthetic-render tests — extended here
+//! rather than a separate tests-support module, since it's the natural
+//! home for shared render helpers and later Plan 4 tasks are expected to
+//! reuse it, per the task brief's "extend testpaint.rs or add a
+//! tests-support module — your call, note it").
 
 /// Paint an axis-aligned finder pattern (7x7 modules, scale px/module)
 /// at top-left pixel `(ox, oy)` into a light background.
@@ -51,4 +58,51 @@ pub(crate) fn paint_finder_rotated(img: &mut [u8], w: usize, center: [f64; 2],
             }
         }
     }
+}
+
+/// Render an abstract `dim x dim` module grid (e.g. a `qrcode::QrCode`'s
+/// matrix, via `is_dark(x, y)`) into a fresh `img_w x img_h` luma buffer
+/// (tight stride == `img_w`), through an arbitrary `code_to_image`
+/// homography mapping the code's own module square — normalized to the
+/// unit square `[0,1]x[0,1]` — to image pixel space. This is the exact
+/// transform convention `version.rs`'s `count_timing_transitions`/
+/// `read_version_bits` expect, so the same `PerspectiveTransform` value
+/// used to render an image here can be passed straight to the function
+/// under test — a tight round-trip with no separate "ground truth
+/// geometry" to keep in sync.
+///
+/// For every output pixel, the inverse transform recovers its
+/// `(u, v)` position in code-module fractions; pixels that land outside
+/// `[0,1]x[0,1]` (or whose module happens to be light) are left at
+/// `light` (the buffer's initial fill), so quiet-zone/background margin
+/// around the code needs no separate handling — it falls out naturally
+/// from picking an `img_w`/`img_h` larger than the mapped code footprint.
+/// Nearest-neighbor (nearest module) sampling per output pixel, matching
+/// the style of [`paint_finder_rotated`] above.
+pub(crate) fn render_module_grid_transformed(
+    dim: usize,
+    is_dark: impl Fn(usize, usize) -> bool,
+    ink: u8,
+    light: u8,
+    code_to_image: &crate::homography::PerspectiveTransform,
+    img_w: usize,
+    img_h: usize,
+) -> Vec<u8> {
+    let dimf = dim as f64;
+    let inv = code_to_image.inverse();
+    let mut img = vec![light; img_w * img_h];
+    for py in 0..img_h {
+        for px in 0..img_w {
+            let [u, v] = inv.map(px as f64 + 0.5, py as f64 + 0.5);
+            if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
+                continue;
+            }
+            let mx = (u * dimf) as usize;
+            let my = (v * dimf) as usize;
+            if mx < dim && my < dim && is_dark(mx, my) {
+                img[py * img_w + px] = ink;
+            }
+        }
+    }
+    img
 }

@@ -109,6 +109,69 @@ impl PerspectiveTransform {
             a33: self.a11 * self.a22 - self.a12 * self.a21,
         }
     }
+
+    /// This transform's 3x3 matrix, row-major, acting on the homogeneous
+    /// column vector `[u, v, 1]^T` to produce `[x*w, y*w, w]^T` (see the
+    /// struct doc's `map` derivation). Used only by [`Self::then`]'s matrix
+    /// composition.
+    fn matrix(&self) -> [[f64; 3]; 3] {
+        [
+            [self.a11, self.a21, self.a31],
+            [self.a12, self.a22, self.a32],
+            [self.a13, self.a23, self.a33],
+        ]
+    }
+
+    fn from_matrix(m: [[f64; 3]; 3]) -> Self {
+        Self {
+            a11: m[0][0], a21: m[0][1], a31: m[0][2],
+            a12: m[1][0], a22: m[1][1], a32: m[1][2],
+            a13: m[2][0], a23: m[2][1], a33: m[2][2],
+        }
+    }
+
+    /// Compose two homographies: `self.then(outer)` applies `self` first,
+    /// then `outer` — i.e. `self.then(outer).map(p) == outer.map(self.map(p))`
+    /// (up to the shared projective scale ambiguity, which `map`'s `/w`
+    /// normalization removes either way). Implemented as the 3x3 matrix
+    /// product `outer.matrix() * self.matrix()`, since composing two
+    /// projective maps is exactly multiplying their homogeneous matrices.
+    fn then(&self, outer: &Self) -> Self {
+        let a = outer.matrix();
+        let b = self.matrix();
+        let mut r = [[0.0f64; 3]; 3];
+        for (i, row) in r.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                *cell = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+            }
+        }
+        Self::from_matrix(r)
+    }
+
+    /// General quadrilateral-to-quadrilateral homography: maps `src`'s own
+    /// quad (in whatever coordinate space its 4 corners are given) onto
+    /// `dst`'s quad, extending correctly (as a single projective map) to
+    /// every other point — not just the 4 corners themselves.
+    ///
+    /// `= square_to_quad(dst) ∘ square_to_quad(src)⁻¹`: `square_to_quad(src)`
+    /// already IS the unique homography taking the unit square's corners to
+    /// `src`'s corners, so its inverse recovers, for any point expressed in
+    /// `src`'s coordinate space, the `(u, v)` unit-square fraction that
+    /// produces it; composing with `square_to_quad(dst)` re-expands that
+    /// same `(u, v)` fraction against `dst`'s corners instead. A homography
+    /// is uniquely determined by 4 (non-collinear-triple) point
+    /// correspondences, so this composition — built from exactly the 4
+    /// `src[i] -> dst[i]` correspondences — is THE homography satisfying
+    /// them, not merely an approximation.
+    ///
+    /// Returns `None` when either `square_to_quad` call does (a degenerate
+    /// `src` or `dst` admits no valid homography at all — see
+    /// [`Self::square_to_quad`]'s docs).
+    pub fn quad_to_quad(src: [[f64; 2]; 4], dst: [[f64; 2]; 4]) -> Option<Self> {
+        let s = Self::square_to_quad(src)?;
+        let d = Self::square_to_quad(dst)?;
+        Some(s.inverse().then(&d))
+    }
 }
 
 #[cfg(test)]
@@ -177,5 +240,46 @@ mod tests {
         // p1 == p3 == p0's antipode makes the "parallelogram" zero-area.
         let q = [[0.0, 0.0], [2.0, 0.0], [2.0, 0.0], [0.0, 0.0]];
         assert!(PerspectiveTransform::square_to_quad(q).is_none());
+    }
+
+    // --- quad_to_quad ---
+
+    /// A genuinely projective (non-parallelogram) source quad and a
+    /// genuinely projective destination quad — exercises the general
+    /// branch of `square_to_quad` on both sides of the composition, not
+    /// just the affine shortcut.
+    const SRC_Q: [[f64; 2]; 4] =
+        [[10.0, 10.0], [50.0, 12.0], [46.0, 54.0], [8.0, 50.0]];
+    const DST_Q: [[f64; 2]; 4] =
+        [[100.0, 20.0], [300.0, 15.0], [310.0, 220.0], [90.0, 210.0]];
+
+    #[test]
+    fn quad_to_quad_corners_map_exactly() {
+        let h = PerspectiveTransform::quad_to_quad(SRC_Q, DST_Q).unwrap();
+        for (i, &[x, y]) in SRC_Q.iter().enumerate() {
+            let p = h.map(x, y);
+            assert!((p[0] - DST_Q[i][0]).abs() < 1e-6, "corner {i}: {p:?}");
+            assert!((p[1] - DST_Q[i][1]).abs() < 1e-6, "corner {i}: {p:?}");
+        }
+    }
+
+    #[test]
+    fn quad_to_quad_interior_round_trips() {
+        let fwd = PerspectiveTransform::quad_to_quad(SRC_Q, DST_Q).unwrap();
+        let back = PerspectiveTransform::quad_to_quad(DST_Q, SRC_Q).unwrap();
+        // Interior points expressed in SRC_Q's own coordinate space (not
+        // just its 4 corners): forward then backward must recover them.
+        for &[x, y] in &[[25.0, 25.0], [30.0, 40.0], [15.0, 45.0], [40.0, 20.0]] {
+            let p = fwd.map(x, y);
+            let b = back.map(p[0], p[1]);
+            assert!((b[0] - x).abs() < 1e-6 && (b[1] - y).abs() < 1e-6, "({x},{y}) -> {p:?} -> {b:?}");
+        }
+    }
+
+    #[test]
+    fn quad_to_quad_degenerate_src_or_dst_returns_none() {
+        let collinear = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]];
+        assert!(PerspectiveTransform::quad_to_quad(collinear, DST_Q).is_none());
+        assert!(PerspectiveTransform::quad_to_quad(SRC_Q, collinear).is_none());
     }
 }

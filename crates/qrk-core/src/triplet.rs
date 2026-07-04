@@ -38,6 +38,13 @@ pub struct TripletCandidate {
     pub dimension: u32,
     pub snap_error: f64,
     pub inverted: bool,
+    /// Indices into the `finders` slice [`group_triplets`] was called with,
+    /// in the same `[tl, tr, bl]` canonical order as the point fields above
+    /// (Plan 4 Task 5's recorded addition): `decode.rs`'s arbitration needs
+    /// to know which finder candidates a triplet is built from, both to
+    /// proximity-dedup triplets that share ≥2 of them and to mark them
+    /// consumed once a shared candidate decodes successfully.
+    pub finder_indices: [usize; 3],
 }
 
 /// `|cos|` of the between-leg angle at a candidate corner must be at most
@@ -250,12 +257,16 @@ fn leg_module(view: &LumaView, grid: &TileGrid, inverted: bool, a: [f64; 2], b: 
 /// leg-balance), canonical ordering, then per-leg module measurement on
 /// the binarized image and the dimension estimate + its gates. `None` if
 /// any gate fails.
+#[allow(clippy::too_many_arguments)]
 fn try_group(
     view: &LumaView,
     grid: &TileGrid,
     a: FinderCandidate,
+    ai: usize,
     b: FinderCandidate,
+    bi: usize,
     c: FinderCandidate,
+    ci: usize,
 ) -> Option<TripletCandidate> {
     if a.inverted != b.inverted || b.inverted != c.inverted {
         return None;
@@ -268,6 +279,7 @@ fn try_group(
     }
 
     let pts = [[a.x, a.y], [b.x, b.y], [c.x, c.y]];
+    let idxs = [ai, bi, ci];
 
     // Corner = the finder whose two legs have the smallest |cos| between
     // them (closest to perpendicular), chosen once and independent of the
@@ -299,13 +311,16 @@ fn try_group(
         return None;
     }
 
+    let tl_idx = idxs[corner_idx];
     let tl = pts[corner_idx];
     let (mut tr, mut bl) = (pts[p_idx], pts[q_idx]);
+    let (mut tr_idx, mut bl_idx) = (idxs[p_idx], idxs[q_idx]);
     let cross = (tr[0] - tl[0]) * (bl[1] - tl[1]) - (tr[1] - tl[1]) * (bl[0] - tl[0]);
     // cross == 0.0 (collinear) cannot reach here: a collinear corner has
     // |cos| == 1, already rejected by the MAX_ABS_COS gate above.
     if cross < 0.0 {
         std::mem::swap(&mut tr, &mut bl);
+        std::mem::swap(&mut tr_idx, &mut bl_idx);
     }
 
     // Per-leg module (amended contract): measured along each leg on the
@@ -335,6 +350,7 @@ fn try_group(
         dimension: snapped as u32,
         snap_error,
         inverted,
+        finder_indices: [tl_idx, tr_idx, bl_idx],
     })
 }
 
@@ -349,7 +365,7 @@ pub fn group_triplets(view: &LumaView, grid: &TileGrid, finders: &[FinderCandida
     for i in 0..n {
         for j in (i + 1)..n {
             for k in (j + 1)..n {
-                if let Some(t) = try_group(view, grid, finders[i], finders[j], finders[k]) {
+                if let Some(t) = try_group(view, grid, finders[i], i, finders[j], j, finders[k], k) {
                     out.push(t);
                 }
             }
@@ -403,6 +419,9 @@ mod tests {
         assert!(t[0].snap_error < 0.6);
         // The per-leg measurement must recover the painted 4px module.
         assert!((t[0].module - 4.0).abs() < 0.3, "module={}", t[0].module);
+        // Input order was [tl, tr, bl] already, so finder_indices should
+        // pass through unchanged (no corner/tr-bl swap needed).
+        assert_eq!(t[0].finder_indices, [0, 1, 2]);
     }
 
     #[test]
@@ -418,6 +437,9 @@ mod tests {
         let cross = (tr[0] - tl[0]) * (bl[1] - tl[1])
             - (tr[1] - tl[1]) * (bl[0] - tl[0]);
         assert!(cross > 0.0);
+        // Input order was [tl@0, bl@1, tr@2]: the tr/bl swap that fixes the
+        // point order must swap the paired indices in lockstep too.
+        assert_eq!(t[0].finder_indices, [0, 2, 1]);
     }
 
     #[test]

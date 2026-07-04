@@ -27,6 +27,10 @@ struct Meta {
     codes: Vec<CodeTruth>,
 }
 
+// `name`/`codes` unused by `decode_trace_gate.rs` (Plan 4 Task 6), which
+// only needs `view()` + `width`/`height` — same "each integration test
+// binary compiles `common` independently" situation as `CodeTruth` above.
+#[allow(dead_code)]
 pub struct Fixture {
     pub name: String,
     pub width: usize,
@@ -82,6 +86,9 @@ pub fn expected_finder_centers(c: &CodeTruth) -> [[f64; 2]; 3] {
     [h.map(f, f), h.map(g, f), h.map(f, g)]
 }
 
+// Unused by `decode_trace_gate.rs` (Plan 4 Task 6), which loads a single
+// named fixture via `load` — same per-binary situation as above.
+#[allow(dead_code)]
 pub fn load_all() -> Vec<Fixture> {
     let mut names: Vec<String> = fs::read_dir(suite_dir())
         .expect("fixtures/ missing — run tools/fixtures/generate.py")

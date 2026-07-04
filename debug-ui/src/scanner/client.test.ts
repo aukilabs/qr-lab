@@ -67,7 +67,15 @@ function minimalScanResultJson(): unknown {
     detections: {
       finders: [],
       triplets: [],
-      timings: { tiles_ns: 0, finders_ns: 0, triplets_ns: 0 },
+      codes: [],
+      timings: {
+        tiles_ns: 0,
+        finders_ns: 0,
+        triplets_ns: 0,
+        version_ns: 0,
+        alignment_ns: 0,
+        sample_decode_ns: 0,
+      },
     },
     trace: null,
   };

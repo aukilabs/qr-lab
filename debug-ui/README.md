@@ -65,8 +65,9 @@ required to pick up new Rust code while `npm run dev` keeps running.
                   ScannerClient.scan()  →  scanner/worker.ts (Web Worker)
                        │                     scan_rgba() from qrk-wasm
                        ▼
-                  ScanResult { detections: { finders, triplets, timings },
-                               trace: { tiles, finders, triplets } | null }
+                  ScanResult { detections: { finders, triplets, codes, timings },
+                               trace: { tiles, finders, triplets, attempts,
+                                        alignment, sample_regions, bits } | null }
                        │
           ┌────────────┼─────────────────────┐
           ▼            ▼                     ▼
@@ -77,8 +78,9 @@ required to pick up new Rust code while `npm run dev` keeps running.
     overlay)       workingScale)
                        ▲
                        │ registered once, module scope
-                tilesLayer, findersLayer,
-                tripletsLayer, groundtruthLayer
+                tilesLayer, findersLayer, tripletsLayer,
+                groundtruthLayer, alignmentLayer,
+                samplegridLayer, bitsLayer, decodedLayer
                 (overlays/layers/*.ts)
                        ▲
                 LayerPanel (checkboxes mirror
@@ -95,7 +97,19 @@ Key modules:
   `WasmResult`'s Rust shape changes, regenerate the snapshot
   (`UPDATE_SNAPSHOT=1 cargo test -p qrk-wasm --test envelope_snapshot`) and
   update `parseScanResult` to match — `envelope.test.ts` fails loudly on
-  drift.
+  drift. **Gotcha (found by Plan 4 Task 7's live-browser QA, fixed in the
+  same task):** the snapshot is JSON text (`serde_json`), which renders a
+  Rust `Option::None` as `null` — but the REAL `scan_rgba` binding
+  (`serde_wasm_bindgen::to_value`, `qrk-wasm/src/lib.rs`) renders `None` as
+  `undefined` instead (key present, value `undefined`), `serde-wasm-bindgen`'s
+  documented default. Every "OrNull" parser in this file (`parseNumberOrNull`,
+  `parsePairOrNull`, `parseBitsTraceOrNull`, `parseTileTraceOrNull`,
+  `parseTraceOrNull`) treats both the same way — if a new optional field's
+  parser only checks `=== null`, it will throw on every real scan where that
+  `Option` is `None` (e.g. `version_bits` for any code below version 7),
+  while `envelope.test.ts` stays green (it only exercises the JSON-shaped
+  snapshot). Add an `undefined` regression test alongside the `null` one, not
+  just the latter.
 - `scanner/client.ts` / `scanner/worker.ts` — main-thread request/response
   wrapper around the Worker; "latest-wins" queueing so video mode can fire
   a scan per presented frame without an unbounded backlog when frames
@@ -113,10 +127,11 @@ Key modules:
 
 ## Add an overlay layer (5-step recipe)
 
-Follow this to add a new debug overlay for a future detection stage (e.g. a
-homography/pose or decoded-payload layer in Plan 4+). Concretely reproduces
-what `overlays/layers/tiles.ts`/`finders.ts`/`triplets.ts`/`groundtruth.ts`
-already do — read one of those alongside this list.
+Follow this to add a new debug overlay for a future detection stage (Plan 4
+Task 6 added `alignment.ts`/`samplegrid.ts`/`bits.ts`/`decoded.ts` for the
+decode pipeline's own stages this same way — read one of those, or the
+original `tiles.ts`/`finders.ts`/`triplets.ts`/`groundtruth.ts`, alongside
+this list).
 
 1. **Extend the contract, if the new stage needs new envelope fields.**
    Add the field(s) to the Rust `WasmResult`/`Trace`/`Detections` types,
@@ -148,7 +163,8 @@ already do — read one of those alongside this list.
    asserting exact draw-call sequences.
 
 3. **Register it** in `App.tsx`'s module-scope `createRegistry([...])` call
-   (currently `[tilesLayer, findersLayer, tripletsLayer, groundtruthLayer]`).
+   (currently `[tilesLayer, findersLayer, tripletsLayer, groundtruthLayer,
+   alignmentLayer, samplegridLayer, bitsLayer, decodedLayer]`).
    Registration order is draw order (later entries draw on top) and
    `LayerPanel`'s checkbox order.
 

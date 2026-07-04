@@ -51,10 +51,13 @@ fn main() {
 
     println!("fixture: {name} ({}x{})", meta.width, meta.height);
     println!(
-        "timings (us): tiles={} finders={} triplets={}",
+        "timings (us): tiles={} finders={} triplets={} version={} alignment={} sample_decode={}",
         det.timings.tiles_ns / 1_000,
         det.timings.finders_ns / 1_000,
         det.timings.triplets_ns / 1_000,
+        det.timings.version_ns / 1_000,
+        det.timings.alignment_ns / 1_000,
+        det.timings.sample_decode_ns / 1_000,
     );
     println!("finders: {}", det.finders.len());
     println!("triplets: {}", det.triplets.len());
@@ -62,6 +65,13 @@ fn main() {
         println!(
             "  [{i}] tl=({:.1},{:.1}) tr=({:.1},{:.1}) bl=({:.1},{:.1}) dimension={} inverted={}",
             t.tl[0], t.tl[1], t.tr[0], t.tr[1], t.bl[0], t.bl[1], t.dimension, t.inverted,
+        );
+    }
+    println!("codes: {}", det.codes.len());
+    for (i, c) in det.codes.iter().enumerate() {
+        println!(
+            "  [{i}] payload={:?} version={} ecc={} mirrored={} dimension={} inverted={}",
+            c.payload, c.version, c.ecc, c.mirrored, c.dimension, c.inverted,
         );
     }
 }
