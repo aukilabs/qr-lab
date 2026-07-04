@@ -13,11 +13,18 @@
 //! resolution `scan` picked without re-deriving it itself. Plan 5 Task 3:
 //! `refine` now enables real subpixel corner refinement (previously
 //! plumbing-only) — no signature change needed here, since the field
-//! already existed.
+//! already existed. Plan 5 Task 5: `qrgen` (feature `qr-gen`, off by
+//! default) adds `generate_qr` — the debug UI's 3D-scene mode uses it to
+//! texture a plane with a real, decodable QR — see that module's doc.
 
 use qrk_core::{downscaled_dims, luma_from_rgba, scan, scan_traced, Detections, LumaView, ScanOptions, Trace};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
+
+#[cfg(feature = "qr-gen")]
+mod qrgen;
+#[cfg(feature = "qr-gen")]
+pub use qrgen::generate_qr;
 
 /// Serializable envelope returned to JS: the detection result, the working
 /// (post-downscale) resolution `scan` actually detected on, plus the

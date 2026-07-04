@@ -33,6 +33,7 @@ import { tilesLayer } from "./overlays/layers/tiles";
 import { tripletsLayer } from "./overlays/layers/triplets";
 import { parseGroundTruth, type GroundTruthCode } from "./overlays/groundtruth-types";
 import { createRegistry, type OverlayContext } from "./overlays/registry";
+import { Scene3D } from "./scene3d/Scene3D";
 import { LayerPanel } from "./panels/LayerPanel";
 import {
   DEFAULT_RESOLUTION,
@@ -93,7 +94,19 @@ function videoInputFor(source: SourceDescriptor | null): File | null {
   return source.file;
 }
 
+/** Task 5: the debug UI's two top-level modes — "media" is everything
+ * Tasks 3-4 built (image/video source, viewport, fixture-driven ground
+ * truth); "scene3d" is the new orbitable 3D scene (`Scene3D.tsx`), the
+ * plan's headline debug-UI feature. Both modes share the same
+ * `ScannerClient`/worker (one scanner per `App` mount, see the
+ * client-lifecycle effect below) and the same `overlayRegistry` (layer
+ * enable/disable state — and therefore the "Layers" panel — is shared
+ * across modes, since `registry.enabled` lives at module scope
+ * independent of which mode is currently drawing from it). */
+type Mode = "media" | "scene3d";
+
 export function App() {
+  const [mode, setMode] = useState<Mode>("media");
   const clientRef = useRef<ScannerClient | null>(null);
   const [scannerReady, setScannerReady] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
@@ -396,78 +409,105 @@ export function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <SourcePanel
-          source={source}
-          onSourceChange={handleSourceChange}
-          resolution={resolution}
-          onResolutionChange={handleResolutionChange}
-          onRescan={handleRescan}
-          rescanDisabled={rescanDisabled}
-        />
+        <div className="mode-tabs">
+          <button
+            type="button"
+            className={mode === "media" ? "mode-tab mode-tab-active" : "mode-tab"}
+            onClick={() => setMode("media")}
+          >
+            Media
+          </button>
+          <button
+            type="button"
+            className={mode === "scene3d" ? "mode-tab mode-tab-active" : "mode-tab"}
+            onClick={() => setMode("scene3d")}
+          >
+            3D Scene
+          </button>
+        </div>
+
+        {mode === "media" && (
+          <SourcePanel
+            source={source}
+            onSourceChange={handleSourceChange}
+            resolution={resolution}
+            onResolutionChange={handleResolutionChange}
+            onRescan={handleRescan}
+            rescanDisabled={rescanDisabled}
+          />
+        )}
         <section className="panel-section">
           <h2 className="panel-title">Layers</h2>
           <LayerPanel registry={overlayRegistry} onToggle={handleLayerToggle} />
         </section>
-        <section className="panel-section">
-          <h2 className="panel-title">Timings</h2>
-          <TimingsPanel sample={timingsSample} sampleId={sampleId} />
-        </section>
+        {mode === "media" && (
+          <section className="panel-section">
+            <h2 className="panel-title">Timings</h2>
+            <TimingsPanel sample={timingsSample} sampleId={sampleId} />
+          </section>
+        )}
       </aside>
 
-      <main className="main">
-        {initError && (
-          <div className="banner banner-error">Scanner worker failed to start: {initError}</div>
-        )}
-        {scanError && <div className="banner banner-error">Scan failed: {scanError}</div>}
-        {imageSourceState.error && (
-          <div className="banner banner-error">Source load failed: {imageSourceState.error}</div>
-        )}
-        {videoState.error && <div className="banner banner-error">Video error: {videoState.error}</div>}
+      {mode === "media" ? (
+        <main className="main">
+          {initError && (
+            <div className="banner banner-error">Scanner worker failed to start: {initError}</div>
+          )}
+          {scanError && <div className="banner banner-error">Scan failed: {scanError}</div>}
+          {imageSourceState.error && (
+            <div className="banner banner-error">Source load failed: {imageSourceState.error}</div>
+          )}
+          {videoState.error && (
+            <div className="banner banner-error">Video error: {videoState.error}</div>
+          )}
 
-        <div className="viewport-wrap">
-          <Viewport image={displayBitmap} overlays={handleOverlays} onCursorImagePos={setCursorPos} />
-          {!scannerReady && !initError && <div className="loading-overlay">Loading scanner…</div>}
-        </div>
-
-        {isVideoMode && (
-          <div className="video-controls">
-            <button type="button" onClick={() => videoState.stepFrame(-1)} disabled={videoState.playing}>
-              ◀ frame
-            </button>
-            <button
-              type="button"
-              onClick={() => (videoState.playing ? videoState.pause() : videoState.play())}
-            >
-              {videoState.playing ? "Pause" : "Play"}
-            </button>
-            <button type="button" onClick={() => videoState.stepFrame(1)} disabled={videoState.playing}>
-              frame ▶
-            </button>
-            <span className="video-frame-counter">
-              frame {videoState.frameIndex} · {videoState.currentTime.toFixed(2)}s /{" "}
-              {videoState.duration.toFixed(2)}s
-            </span>
-            {!videoState.supportsFrameCallback && (
-              <span className="video-warn">no requestVideoFrameCallback — degraded capture rate</span>
-            )}
+          <div className="viewport-wrap">
+            <Viewport image={displayBitmap} overlays={handleOverlays} onCursorImagePos={setCursorPos} />
+            {!scannerReady && !initError && <div className="loading-overlay">Loading scanner…</div>}
           </div>
-        )}
 
-        <div className="status-bar">
-          <span>
-            source: {sourceDims ? `${sourceDims.width}×${sourceDims.height}` : "–"}
-          </span>
-          <span>
-            working: {scanState ? `${scanState.scanWidth}×${scanState.scanHeight}` : "–"}
-          </span>
-          <span>scale: {workingScale.toFixed(3)}</span>
-          <span>
-            cursor:{" "}
-            {cursorPos ? `${Math.round(cursorPos[0])}, ${Math.round(cursorPos[1])}` : "–"}
-          </span>
-          <span>luma: {cursorLuma ?? "–"}</span>
-        </div>
-      </main>
+          {isVideoMode && (
+            <div className="video-controls">
+              <button type="button" onClick={() => videoState.stepFrame(-1)} disabled={videoState.playing}>
+                ◀ frame
+              </button>
+              <button
+                type="button"
+                onClick={() => (videoState.playing ? videoState.pause() : videoState.play())}
+              >
+                {videoState.playing ? "Pause" : "Play"}
+              </button>
+              <button type="button" onClick={() => videoState.stepFrame(1)} disabled={videoState.playing}>
+                frame ▶
+              </button>
+              <span className="video-frame-counter">
+                frame {videoState.frameIndex} · {videoState.currentTime.toFixed(2)}s /{" "}
+                {videoState.duration.toFixed(2)}s
+              </span>
+              {!videoState.supportsFrameCallback && (
+                <span className="video-warn">no requestVideoFrameCallback — degraded capture rate</span>
+              )}
+            </div>
+          )}
+
+          <div className="status-bar">
+            <span>
+              source: {sourceDims ? `${sourceDims.width}×${sourceDims.height}` : "–"}
+            </span>
+            <span>
+              working: {scanState ? `${scanState.scanWidth}×${scanState.scanHeight}` : "–"}
+            </span>
+            <span>scale: {workingScale.toFixed(3)}</span>
+            <span>
+              cursor:{" "}
+              {cursorPos ? `${Math.round(cursorPos[0])}, ${Math.round(cursorPos[1])}` : "–"}
+            </span>
+            <span>luma: {cursorLuma ?? "–"}</span>
+          </div>
+        </main>
+      ) : (
+        <Scene3D client={clientRef.current} scannerReady={scannerReady} overlayRegistry={overlayRegistry} />
+      )}
 
       {/* Hidden decode surface for video mode — the visible bitmap is the
           downscaled frame drawn in `Viewport`, not this element itself. */}

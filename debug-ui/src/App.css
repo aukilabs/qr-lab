@@ -117,6 +117,73 @@ body {
   color: #fbbf24;
 }
 
+/* Plan 5 Task 5: mode tabs (Media / 3D Scene) + the 3D-scene mode's own
+ * layout — a canvas area (WebGL `<Canvas>` + a same-sized 2D overlay
+ * canvas stacked on top via `position: absolute`) plus a right-hand
+ * sidebar of scene/camera-sim/error/timings controls, mirroring the
+ * media mode's own sidebar+main split. */
+.mode-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.mode-tab {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: #1f2937;
+  color: #9ca3af;
+  border: 1px solid #374151;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.mode-tab-active {
+  background: #2563eb;
+  color: #eff6ff;
+  border-color: #3b82f6;
+}
+
+.app > .scene3d {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+}
+
+/* Centers a forced-square canvas area — see `Scene3D.tsx`'s doc comment
+ * on why the on-screen container MUST be square (camera.aspect has to
+ * match the square offscreen render target the scan loop reads back
+ * from, or the rendered geometry stretches and detection breaks). */
+.scene3d-canvas-area {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  padding: 12px;
+}
+
+.scene3d-canvas-wrap {
+  /* width/height are set inline (px) by `Scene3D.tsx`, measured from the
+   * container — see that file's doc comment on why CSS alone
+   * (aspect-ratio + height/max-width) isn't reliable here. */
+  position: relative;
+}
+
+.scene3d-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.scene3d-sidebar {
+  border-right: none;
+  border-left: 1px solid #1f2937;
+}
+
 .status-bar {
   display: flex;
   gap: 16px;
