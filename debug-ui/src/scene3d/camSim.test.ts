@@ -119,3 +119,51 @@ describe("applyGaussianNoise", () => {
     expect(Array.from(rgba)).toEqual(before);
   });
 });
+
+describe("optional out-buffer / in-place contract (Plan 5 Task 5 review fix)", () => {
+  it("applyExposureOffset writes into a provided out buffer and returns it", () => {
+    const rgba = new Uint8ClampedArray([10, 20, 30, 255]);
+    const out = new Uint8ClampedArray(4);
+    const result = applyExposureOffset(rgba, 5, out);
+    expect(result).toBe(out);
+    expect(Array.from(out)).toEqual([15, 25, 35, 255]);
+    expect(Array.from(rgba)).toEqual([10, 20, 30, 255]); // input untouched
+  });
+
+  it("applyExposureOffset in place (out === rgba) matches the pure result", () => {
+    const src = new Uint8ClampedArray([10, 250, 0, 128, 100, 100, 100, 255]);
+    const pure = applyExposureOffset(src, 20);
+    const inPlace = src.slice();
+    const result = applyExposureOffset(inPlace, 20, inPlace);
+    expect(result).toBe(inPlace);
+    expect(Array.from(inPlace)).toEqual(Array.from(pure));
+  });
+
+  it("applyExposureOffset offset=0 with an out buffer copies into it", () => {
+    const rgba = new Uint8ClampedArray([1, 2, 3, 4]);
+    const out = new Uint8ClampedArray([9, 9, 9, 9]);
+    expect(Array.from(applyExposureOffset(rgba, 0, out))).toEqual([1, 2, 3, 4]);
+  });
+
+  it("applyGaussianNoise in place (out === rgba) matches the pure result", () => {
+    const src = flatRgba(32, 128);
+    const pure = applyGaussianNoise(src, 5, 42);
+    const inPlace = src.slice();
+    const result = applyGaussianNoise(inPlace, 5, 42, inPlace);
+    expect(result).toBe(inPlace);
+    expect(Array.from(inPlace)).toEqual(Array.from(pure));
+  });
+
+  it("applyGaussianNoise sigma<=0 with an out buffer copies into it", () => {
+    const rgba = flatRgba(4, 77);
+    const out = new Uint8ClampedArray(rgba.length);
+    expect(Array.from(applyGaussianNoise(rgba, 0, 1, out))).toEqual(Array.from(rgba));
+  });
+
+  it("both reject a wrong-sized out buffer", () => {
+    const rgba = flatRgba(4, 100);
+    const tooSmall = new Uint8ClampedArray(4);
+    expect(() => applyExposureOffset(rgba, 5, tooSmall)).toThrow(RangeError);
+    expect(() => applyGaussianNoise(rgba, 5, 1, tooSmall)).toThrow(RangeError);
+  });
+});

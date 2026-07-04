@@ -49,48 +49,84 @@ function clamp255(v: number): number {
   return Math.min(255, Math.max(0, v));
 }
 
-/**
- * Add a flat offset to every R/G/B channel (alpha untouched), clamped to
- * `[0, 255]`. `offset` in `[-60, 60]` per the task brief's slider range,
- * though this function itself doesn't enforce that bound. Returns a new
- * buffer; does not mutate `rgba`.
- */
-export function applyExposureOffset(rgba: Uint8ClampedArray, offset: number): Uint8ClampedArray {
-  if (offset === 0) return rgba.slice();
-  const out = new Uint8ClampedArray(rgba.length);
-  for (let i = 0; i < rgba.length; i += 4) {
-    out[i] = clamp255(rgba[i]! + offset);
-    out[i + 1] = clamp255(rgba[i + 1]! + offset);
-    out[i + 2] = clamp255(rgba[i + 2]! + offset);
-    out[i + 3] = rgba[i + 3]!;
+/** Resolve the shared optional-out-buffer contract of
+ * `applyExposureOffset`/`applyGaussianNoise`: `out` omitted -> fresh
+ * allocation (the original pure behavior, unchanged); `out` provided ->
+ * written into and returned — and it MAY alias `rgba` itself
+ * (`out === rgba`, true in-place), which is safe here because both
+ * transforms are strictly per-pixel (each output byte depends only on the
+ * same input byte, so no read-after-overwrite hazard exists). Added for
+ * the 3D scene's per-tick readback path (Plan 5 Task 5 review), which
+ * reuses one persistent scratch buffer across scan ticks instead of
+ * allocating several fresh buffers per ~100ms tick. */
+function resolveOut(
+  rgba: Uint8ClampedArray,
+  out: Uint8ClampedArray | undefined,
+): Uint8ClampedArray {
+  if (out === undefined) return new Uint8ClampedArray(rgba.length);
+  if (out.length !== rgba.length) {
+    throw new RangeError(`out buffer is ${out.length} bytes, expected ${rgba.length}`);
   }
   return out;
 }
 
 /**
+ * Add a flat offset to every R/G/B channel (alpha untouched), clamped to
+ * `[0, 255]`. `offset` in `[-60, 60]` per the task brief's slider range,
+ * though this function itself doesn't enforce that bound. Writes into
+ * `out` when provided (which may be `rgba` itself — in-place is safe; see
+ * `resolveOut`'s doc), else into a fresh buffer; `rgba` is never mutated
+ * unless it IS `out`.
+ */
+export function applyExposureOffset(
+  rgba: Uint8ClampedArray,
+  offset: number,
+  out?: Uint8ClampedArray,
+): Uint8ClampedArray {
+  const dst = resolveOut(rgba, out);
+  if (offset === 0) {
+    if (dst !== rgba) dst.set(rgba);
+    return dst;
+  }
+  for (let i = 0; i < rgba.length; i += 4) {
+    dst[i] = clamp255(rgba[i]! + offset);
+    dst[i + 1] = clamp255(rgba[i + 1]! + offset);
+    dst[i + 2] = clamp255(rgba[i + 2]! + offset);
+    dst[i + 3] = rgba[i + 3]!;
+  }
+  return dst;
+}
+
+/**
  * Add i.i.d. Gaussian noise (mean 0, standard deviation `sigma`) to every
  * R/G/B channel independently (alpha untouched), clamped to `[0, 255]`.
- * `sigma <= 0` is a no-op copy. Deterministic given `seed` — the same
- * `(rgba, sigma, seed)` always produces byte-identical output, which is
- * what makes this unit-testable (a real per-call `Math.random()` would
- * make output assertions flaky). Returns a new buffer; does not mutate
- * `rgba`.
+ * `sigma <= 0` is a no-op (copy or passthrough). Deterministic given
+ * `seed` — the same `(rgba, sigma, seed)` always produces byte-identical
+ * output, which is what makes this unit-testable (a real per-call
+ * `Math.random()` would make output assertions flaky). Writes into `out`
+ * when provided (which may be `rgba` itself — in-place is safe; see
+ * `resolveOut`'s doc), else into a fresh buffer; `rgba` is never mutated
+ * unless it IS `out`.
  */
 export function applyGaussianNoise(
   rgba: Uint8ClampedArray,
   sigma: number,
   seed: number,
+  out?: Uint8ClampedArray,
 ): Uint8ClampedArray {
-  if (sigma <= 0) return rgba.slice();
-  const rand = mulberry32(seed);
-  const out = new Uint8ClampedArray(rgba.length);
-  for (let i = 0; i < rgba.length; i += 4) {
-    out[i] = clamp255(rgba[i]! + nextGaussian(rand) * sigma);
-    out[i + 1] = clamp255(rgba[i + 1]! + nextGaussian(rand) * sigma);
-    out[i + 2] = clamp255(rgba[i + 2]! + nextGaussian(rand) * sigma);
-    out[i + 3] = rgba[i + 3]!;
+  const dst = resolveOut(rgba, out);
+  if (sigma <= 0) {
+    if (dst !== rgba) dst.set(rgba);
+    return dst;
   }
-  return out;
+  const rand = mulberry32(seed);
+  for (let i = 0; i < rgba.length; i += 4) {
+    dst[i] = clamp255(rgba[i]! + nextGaussian(rand) * sigma);
+    dst[i + 1] = clamp255(rgba[i + 1]! + nextGaussian(rand) * sigma);
+    dst[i + 2] = clamp255(rgba[i + 2]! + nextGaussian(rand) * sigma);
+    dst[i + 3] = rgba[i + 3]!;
+  }
+  return dst;
 }
 
 /** Minimal 2D-canvas surface {@link applyGaussianBlurCanvas} needs —

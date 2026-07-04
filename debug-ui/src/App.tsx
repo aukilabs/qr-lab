@@ -274,22 +274,56 @@ export function App() {
 
   const imageSourceState = useImageSource(imageInput);
 
+  // Mode gating (Plan 5 Task 5 review fix): the app has ONE ScannerClient,
+  // and in "scene3d" mode the 3D scene's own per-frame scan loop is its
+  // sole intended producer. Without this gate, a video left playing in
+  // media mode keeps firing `requestVideoFrameCallback` scans after the
+  // switch — two producers then contend for the single latest-wins queue,
+  // starving the 3D scene's live error panel (each producer keeps
+  // superseding the other's queued request). Video frames are dropped
+  // here whenever `mode !== "media"`; belt-and-braces on top of the
+  // pause-on-switch effect below (a frame callback already in flight when
+  // the mode flips can still land after the pause call).
   const handleVideoFrame = useCallback(
     (frame: VideoFrame) => {
+      if (mode !== "media") return; // scene3d owns the scanner — see the gating doc above
       void runScan(frame.rgba, frame.width, frame.height);
     },
-    [runScan],
+    [runScan, mode],
   );
   const videoState = useVideoSource(videoInput, handleVideoFrame);
+
+  // Pause the (hidden, still-mounted) video element on leaving media mode
+  // so playback — and with it the rVFC frame-callback stream — actually
+  // stops rather than burning decode work into dropped frames. On
+  // switching back it stays paused; resuming is the user's call (review
+  // decision). `pause` is read through a ref because `useVideoSource`
+  // recreates its closures every render — depending on `videoState` here
+  // would re-run this effect (and call `pause()`) once per render instead
+  // of once per mode change. No pure seam worth unit-testing here (the
+  // predicate is a bare `mode !== "media"`); covered by Task 7 manual QA:
+  // play a video, switch to 3D Scene (video pauses, error panel updates
+  // live), switch back (video still paused).
+  const videoPauseRef = useRef(videoState.pause);
+  videoPauseRef.current = videoState.pause;
+  useEffect(() => {
+    if (mode !== "media") videoPauseRef.current();
+  }, [mode]);
 
   // Image mode: (re-)scan whenever the decoded source or the resolution
   // changes. `runScan`'s identity already changes with `resolution` (and
   // `scannerReady`), so listing it here covers both "source change" and
   // "resolution change" from the brief without duplicating that logic.
+  // Mode-gated like `handleVideoFrame` above — and since `mode` is a dep,
+  // switching BACK to media re-fires this effect and re-scans the current
+  // image, repopulating the media viewport's overlays after the 3D scene
+  // had the scanner to itself.
   useEffect(() => {
+    if (mode !== "media") return; // scene3d owns the scanner — see the gating doc above
     if (imageSourceState.loading || imageSourceState.error || !imageSourceState.rgba) return;
     void runScan(imageSourceState.rgba, imageSourceState.width, imageSourceState.height);
   }, [
+    mode,
     imageSourceState.rgba,
     imageSourceState.width,
     imageSourceState.height,

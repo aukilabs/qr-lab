@@ -56,3 +56,45 @@ describe("flipRowsRgba", () => {
     expect(() => flipRowsRgba(rgba, 2, 2)).toThrow(RangeError);
   });
 });
+
+describe("flipRowsRgba out-buffer contract (Plan 5 Task 5 review fix)", () => {
+  it("writes into a provided out buffer and returns it", () => {
+    const rgba = makeRows([
+      [10, 20],
+      [30, 40],
+    ]);
+    const out = new Uint8ClampedArray(rgba.length);
+    const result = flipRowsRgba(rgba, 2, 2, out);
+    expect(result).toBe(out);
+    expect(Array.from(out)).toEqual(
+      Array.from(
+        makeRows([
+          [30, 40],
+          [10, 20],
+        ]),
+      ),
+    );
+  });
+
+  it("rejects a wrong-sized out buffer", () => {
+    const rgba = makeRows([[1, 2]]);
+    expect(() => flipRowsRgba(rgba, 2, 1, new Uint8ClampedArray(4))).toThrow(RangeError);
+  });
+
+  it("rejects an out buffer aliasing the input (same array)", () => {
+    const rgba = makeRows([
+      [1, 2],
+      [3, 4],
+    ]);
+    expect(() => flipRowsRgba(rgba, 2, 2, rgba)).toThrow(RangeError);
+  });
+
+  it("rejects an out buffer sharing the input's ArrayBuffer (different view)", () => {
+    const rgba = makeRows([
+      [1, 2],
+      [3, 4],
+    ]);
+    const alias = new Uint8ClampedArray(rgba.buffer, 0, rgba.length);
+    expect(() => flipRowsRgba(rgba, 2, 2, alias)).toThrow(RangeError);
+  });
+});

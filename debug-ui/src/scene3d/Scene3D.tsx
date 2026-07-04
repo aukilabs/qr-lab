@@ -102,12 +102,32 @@ interface ScanLoopProps {
  * per-tick render-to-target -> readback -> camera-sim -> scan pipeline.
  * Renders nothing itself (`return null`); all of its work is side
  * effects reported via `onResult`. */
+/** Per-tick scratch buffers, reused across scan ticks and reallocated
+ * only when the render resolution changes (Plan 5 Task 5 review fix —
+ * the naive version allocated ~5 fresh `resolution² * 4`-byte buffers per
+ * 100ms tick). `readback` receives `readRenderTargetPixels`' bottom-up
+ * bytes; `frame` holds the top-down flip and is then mutated IN PLACE by
+ * the noise/exposure passes (safe: both are strictly per-pixel — see
+ * `camSim.ts`'s `resolveOut` doc). Reuse across ticks is safe w.r.t. the
+ * scanner because `ScannerClient.scan` copies the frame up front (see its
+ * ownership doc comment) — a later tick overwriting `frame` can't touch
+ * an in-flight scan's snapshot. The blur pass (when active) still
+ * allocates: it round-trips through a 2D canvas and `getImageData`
+ * always returns a fresh buffer — unavoidable, and it only costs when
+ * the blur knob is actually nonzero. */
+interface ScanScratch {
+  res: number;
+  readback: Uint8Array;
+  frame: Uint8ClampedArray;
+}
+
 function ScanLoop({ qr, physicalSize, client, payload, camSim, meshRef, onResult }: ScanLoopProps) {
   const { gl, camera } = useThree();
   const targetRef = useRef<THREE.WebGLRenderTarget | null>(null);
   const lastScanAtRef = useRef(0);
   const scanningRef = useRef(false);
   const noiseSeedRef = useRef(0x9e3779b9);
+  const scratchRef = useRef<ScanScratch | null>(null);
 
   useEffect(() => {
     const target = new THREE.WebGLRenderTarget(camSim.resolution, camSim.resolution, {
@@ -138,20 +158,48 @@ function ScanLoop({ qr, physicalSize, client, payload, camSim, meshRef, onResult
     gl.render(state.scene, camera);
     gl.setRenderTarget(prevTarget);
 
-    const bottomUp = new Uint8Array(resolution * resolution * 4);
-    gl.readRenderTargetPixels(target, 0, 0, resolution, resolution, bottomUp);
+    // Reused scratch buffers — realloc only on resolution change (see
+    // `ScanScratch`'s doc for the full reuse-safety argument).
+    let scratch = scratchRef.current;
+    if (!scratch || scratch.res !== resolution) {
+      scratch = {
+        res: resolution,
+        readback: new Uint8Array(resolution * resolution * 4),
+        frame: new Uint8ClampedArray(resolution * resolution * 4),
+      };
+      scratchRef.current = scratch;
+    }
 
-    // Bottom-up -> top-down (see this file's module doc + rowFlip.ts).
-    let rgba = flipRowsRgba(new Uint8ClampedArray(bottomUp), resolution, resolution);
+    gl.readRenderTargetPixels(target, 0, 0, resolution, resolution, scratch.readback);
+    // A clamped VIEW over the readback's own storage (no copy) — just a
+    // type adapter, since readRenderTargetPixels wants Uint8Array and the
+    // image pipeline speaks Uint8ClampedArray.
+    const bottomUp = new Uint8ClampedArray(
+      scratch.readback.buffer,
+      scratch.readback.byteOffset,
+      scratch.readback.length,
+    );
+
+    // Camera-sim pipeline order: row-flip -> noise -> exposure -> blur.
+    // Noise and exposure run BEFORE blur deliberately-ish (the blur then
+    // smooths the just-added noise, muting the noise knob's visible
+    // effect at high blur sigmas) — a physical camera actually noises
+    // AFTER optical blur, so this ordering slightly understates noise
+    // under blur; acceptable for a sim whose passes are all documented
+    // approximations anyway (see camSim.ts), just don't be surprised
+    // that maxing blur visually "eats" the noise slider.
+    // Bottom-up -> top-down flip first (see this file's module doc +
+    // rowFlip.ts); then noise/exposure mutate `scratch.frame` in place.
+    let rgba = flipRowsRgba(bottomUp, resolution, resolution, scratch.frame);
     if (noiseSigma > 0) {
       // Fresh seed per tick (not truly random — deterministic advance of
       // a counter) so consecutive frames don't dither on identical noise,
       // while a single tick's `applyGaussianNoise` call stays pure/
       // reproducible given its seed.
       noiseSeedRef.current = (noiseSeedRef.current + 0x6d2b79f5) >>> 0;
-      rgba = applyGaussianNoise(rgba, noiseSigma, noiseSeedRef.current);
+      rgba = applyGaussianNoise(rgba, noiseSigma, noiseSeedRef.current, rgba);
     }
-    if (exposureOffset !== 0) rgba = applyExposureOffset(rgba, exposureOffset);
+    if (exposureOffset !== 0) rgba = applyExposureOffset(rgba, exposureOffset, rgba);
     if (blurSigma > 0) {
       rgba = applyGaussianBlurCanvas(rgba, resolution, resolution, blurSigma, (w, h) => {
         const c = document.createElement("canvas");
