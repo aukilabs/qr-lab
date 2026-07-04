@@ -3,6 +3,14 @@ import type { OverlayRegistry } from "../overlays/registry";
 
 export interface LayerPanelProps {
   registry: OverlayRegistry;
+  /** Called after every toggle, with the toggled layer's `id`. Optional —
+   * added in Task 6 so `App.tsx` can force a `Viewport` redraw: toggling a
+   * layer mutates `registry.enabled` in place without changing `registry`
+   * or the `overlays` callback's identity, and `Viewport` only redraws on
+   * an `image`/`overlays` identity change (or a pan/zoom/resize), so
+   * without this hook a toggle wouldn't visibly repaint the canvas until
+   * some unrelated interaction did. */
+  onToggle?: (id: string) => void;
 }
 
 /**
@@ -14,12 +22,13 @@ export interface LayerPanelProps {
  * dumb: this is the only place layers get toggled from, so there's no
  * need for a prop-driven "version" to sync against external toggles.
  */
-export function LayerPanel({ registry }: LayerPanelProps) {
+export function LayerPanel({ registry, onToggle }: LayerPanelProps) {
   const [, forceRender] = useState(0);
 
   const handleToggle = (id: string) => {
     registry.toggle(id);
     forceRender((n) => n + 1);
+    onToggle?.(id);
   };
 
   return (

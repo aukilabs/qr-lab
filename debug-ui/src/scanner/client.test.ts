@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import { ScannerClient, StaleScanError, type ScannerWorkerLike } from "./client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  INIT_TIMEOUT_MS,
+  ScannerClient,
+  StaleScanError,
+  WorkerInitTimeoutError,
+  type ScannerWorkerLike,
+} from "./client";
 import { ScanResultParseError } from "./types";
 
 /** Minimal in-memory stand-in for the real Worker, driven manually by
@@ -51,6 +57,60 @@ function makeRgba(len: number): Uint8ClampedArray {
 }
 
 describe("ScannerClient", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("init() timeout", () => {
+    it("rejects with WorkerInitTimeoutError when no ready message arrives in time", async () => {
+      vi.useFakeTimers();
+      const worker = new FakeWorker();
+      const client = new ScannerClient(worker);
+
+      const initPromise = client.init();
+      const onSettle = vi.fn();
+      initPromise.then(onSettle, onSettle);
+
+      await vi.advanceTimersByTimeAsync(INIT_TIMEOUT_MS - 1);
+      expect(onSettle).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(initPromise).rejects.toBeInstanceOf(WorkerInitTimeoutError);
+      await expect(initPromise).rejects.toThrow(/did not report ready/);
+    });
+
+    it("does not time out if ready arrives before the deadline", async () => {
+      vi.useFakeTimers();
+      const worker = new FakeWorker();
+      const client = new ScannerClient(worker);
+
+      const initPromise = client.init();
+      await vi.advanceTimersByTimeAsync(INIT_TIMEOUT_MS - 1);
+      worker.emit({ type: "ready" });
+      await expect(initPromise).resolves.toBeUndefined();
+
+      // No pending timer left dangling once ready has landed.
+      await vi.advanceTimersByTimeAsync(INIT_TIMEOUT_MS * 2);
+    });
+
+    it("a second init() call after a timeout returns the same rejection", async () => {
+      vi.useFakeTimers();
+      const worker = new FakeWorker();
+      const client = new ScannerClient(worker);
+
+      // Attach the rejection assertion synchronously (before advancing
+      // timers) so the promise never sits unhandled for a tick — Node
+      // flags that as a (harmless here, but noisy) unhandled-rejection
+      // warning even though it's `await`ed a few lines later.
+      const first = client.init();
+      const firstRejection = expect(first).rejects.toBeInstanceOf(WorkerInitTimeoutError);
+      await vi.advanceTimersByTimeAsync(INIT_TIMEOUT_MS);
+      await firstRejection;
+
+      await expect(client.init()).rejects.toBeInstanceOf(WorkerInitTimeoutError);
+    });
+  });
+
   it("init() resolves once the worker posts a ready message", async () => {
     const worker = new FakeWorker();
     const client = new ScannerClient(worker);

@@ -1,0 +1,130 @@
+/* Task 6: app shell layout — left sidebar (source/layers/timings, stacked
+ * and independently scrollable) + main area (viewport, video controls when
+ * applicable, status bar). Panel-internal styling (SourcePanel, LayerPanel,
+ * TimingsPanel) stays inline in each component per this codebase's existing
+ * precedent; this file only owns the shell around them plus a couple of
+ * shared primitives (banners, section headers) reused across panels. */
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0b0f17;
+  color: #e5e7eb;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+}
+
+.app {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.sidebar {
+  width: 280px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 12px;
+  overflow-y: auto;
+  background: #111827;
+  border-right: 1px solid #1f2937;
+}
+
+.panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.panel-title {
+  font-size: 13px;
+  margin: 0;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.viewport-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #000;
+}
+
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #9ca3af;
+  font-size: 13px;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.banner {
+  padding: 8px 12px;
+  font-size: 12px;
+  flex: none;
+}
+
+.banner-error {
+  background: #450a0a;
+  color: #fca5a5;
+  border-bottom: 1px solid #7f1d1d;
+}
+
+.video-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #111827;
+  border-top: 1px solid #1f2937;
+  font-size: 12px;
+  flex: none;
+}
+
+.video-frame-counter {
+  font-variant-numeric: tabular-nums;
+  color: #9ca3af;
+}
+
+.video-warn {
+  color: #fbbf24;
+}
+
+.status-bar {
+  display: flex;
+  gap: 16px;
+  padding: 6px 12px;
+  background: #111827;
+  border-top: 1px solid #1f2937;
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: #d1d5db;
+  flex: none;
+}

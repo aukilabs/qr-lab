@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/check-wasm-built.mjs",
+    "predev": "node scripts/check-wasm-built.mjs && node scripts/gen-fixture-manifest.mjs",
     "dev": "vite",
-    "prebuild": "node scripts/check-wasm-built.mjs",
+    "prebuild": "node scripts/check-wasm-built.mjs && node scripts/gen-fixture-manifest.mjs",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "build:wasm": "bash ../scripts/build-wasm.sh"

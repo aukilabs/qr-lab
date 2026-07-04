@@ -70,6 +70,18 @@ describe("formatNs", () => {
     expect(formatNs(999_000)).toBe("999.0 µs");
     expect(formatNs(1_000_000)).toBe("1.0 ms");
   });
+
+  it("rounds a value that would display as 1000.0 µs into 1.0 ms instead", () => {
+    // 999_950..999_999 ns is 999.95..999.999 µs, which `toFixed(1)` alone
+    // rounds up to the string "1000.0" while still being < 1000 (US_PER_MS)
+    // — the piggybacked bug this test guards against.
+    expect(formatNs(999_950)).toBe("1.0 ms");
+    expect(formatNs(999_999)).toBe("1.0 ms");
+  });
+
+  it("does not round up just below the 999.95µs boundary", () => {
+    expect(formatNs(999_949)).toBe("999.9 µs");
+  });
 });
 
 describe("formatMs", () => {

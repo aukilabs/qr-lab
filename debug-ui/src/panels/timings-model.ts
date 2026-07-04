@@ -59,14 +59,22 @@ const US_PER_MS = 1_000;
  * observe — see `qrk_core::StageClock`'s doc comment — so 0 reads as "not
  * measurable" rather than "instant"), microseconds with one decimal below
  * 1ms, milliseconds with one decimal at or above it.
+ *
+ * Branches on the *rounded* µs value, not the raw one: a raw value like
+ * 999.95µs rounds to "1000.0" under `toFixed(1)`, which would otherwise
+ * take the `us < US_PER_MS` branch (999.95 < 1000) and print the
+ * self-contradictory "1000.0 µs" instead of "1.0 ms". Rounding first
+ * (half-up, matching `toFixed`'s own rounding) makes the unit boundary and
+ * the displayed digits agree.
  */
 export function formatNs(ns: number): string {
   if (ns <= 0) return "n/a";
   const us = ns / NS_PER_US;
-  if (us < US_PER_MS) {
-    return `${us.toFixed(1)} µs`;
+  const usRounded = Math.round(us * 10) / 10;
+  if (usRounded < US_PER_MS) {
+    return `${usRounded.toFixed(1)} µs`;
   }
-  return `${(us / US_PER_MS).toFixed(1)} ms`;
+  return `${(usRounded / US_PER_MS).toFixed(1)} ms`;
 }
 
 /**

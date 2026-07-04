@@ -30,6 +30,30 @@ export class StaleScanError extends Error {
   }
 }
 
+/** How long `init()` waits for the worker's "ready" message before giving
+ * up. See {@link WorkerInitTimeoutError}'s doc comment for why this exists. */
+export const INIT_TIMEOUT_MS = 10_000;
+
+/**
+ * Thrown by {@link ScannerClient.init} when the worker never posts a
+ * "ready" message within {@link INIT_TIMEOUT_MS}. Known gap this guards
+ * against: `worker.ts`'s wasm `init()` failure is only `console.error`'d,
+ * not surfaced as a message the client could reject on — so without this
+ * timeout, a broken wasm build (missing/corrupt `.wasm` file, unsupported
+ * browser, etc.) leaves `init()` pending forever with no feedback at all.
+ * Callers (the debug UI's App shell) should catch this and show a banner
+ * rather than leave the app looking like it's stuck loading.
+ */
+export class WorkerInitTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(
+      `ScannerClient.init(): worker did not report ready within ${timeoutMs}ms — ` +
+        `it likely failed during wasm init (check the worker's console output)`,
+    );
+    this.name = "WorkerInitTimeoutError";
+  }
+}
+
 export interface ScanOptions {
   maxDim: number;
   withTrace: boolean;
@@ -68,6 +92,7 @@ export class ScannerClient {
   private isReady = false;
   private readyResolve: (() => void) | null = null;
   private readyPromise: Promise<void> | null = null;
+  private initTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private inFlight: PendingScan | null = null;
   private queued: PendingScan | null = null;
 
@@ -80,12 +105,23 @@ export class ScannerClient {
    * accept scan requests. Safe to call more than once (idempotent), and
    * safe even if the worker's "ready" message arrives before `init()` is
    * ever called — the ready state is latched independently of whether
-   * anyone is awaiting it yet. */
+   * anyone is awaiting it yet.
+   *
+   * Rejects with {@link WorkerInitTimeoutError} if no "ready" message
+   * arrives within {@link INIT_TIMEOUT_MS} — see that error's doc comment
+   * for why the timeout is necessary. Once rejected, the client stays
+   * broken (this same rejection is returned by every subsequent `init()`
+   * call); a caller that wants to retry should construct a fresh
+   * `ScannerClient` around a fresh `Worker`. */
   async init(): Promise<void> {
     if (this.isReady) return;
     if (!this.readyPromise) {
-      this.readyPromise = new Promise<void>((resolve) => {
+      this.readyPromise = new Promise<void>((resolve, reject) => {
         this.readyResolve = resolve;
+        this.initTimeoutId = setTimeout(() => {
+          this.initTimeoutId = null;
+          reject(new WorkerInitTimeoutError(INIT_TIMEOUT_MS));
+        }, INIT_TIMEOUT_MS);
       });
     }
     return this.readyPromise;
@@ -127,6 +163,10 @@ export class ScannerClient {
 
   /** Releases the underlying worker. The client is unusable afterward. */
   dispose(): void {
+    if (this.initTimeoutId != null) {
+      clearTimeout(this.initTimeoutId);
+      this.initTimeoutId = null;
+    }
     this.worker.removeEventListener("message", this.handleMessage);
     this.worker.terminate();
   }
@@ -162,6 +202,10 @@ export class ScannerClient {
     const msg = ev.data as { type?: unknown };
     if (msg?.type === "ready") {
       this.isReady = true;
+      if (this.initTimeoutId != null) {
+        clearTimeout(this.initTimeoutId);
+        this.initTimeoutId = null;
+      }
       this.readyResolve?.();
       return;
     }
