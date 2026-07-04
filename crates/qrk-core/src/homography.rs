@@ -95,6 +95,30 @@ impl PerspectiveTransform {
         ]
     }
 
+    /// Diagonal scaling homography: `(u, v) -> (sx*u, sy*v)`. Plan 5 Task
+    /// 2's source-resolution sampling composes this with a module→working
+    /// transform (via [`Self::then`]) to lift it to a module→SOURCE
+    /// transform: `working.then(&PerspectiveTransform::scaled(1.0 /
+    /// source_scale, 1.0 / source_scale))` maps a module coordinate straight
+    /// to source-image pixels, since `source_px = working_px / source_scale`
+    /// (see `Detections::source_scale`'s doc for that convention). Not
+    /// itself projective (`a13 == a23 == 0.0`), just the diagonal special
+    /// case expressed in the same 3x3 form so [`Self::then`]'s matrix
+    /// composition applies unchanged.
+    pub fn scaled(sx: f64, sy: f64) -> Self {
+        Self {
+            a11: sx,
+            a21: 0.0,
+            a31: 0.0,
+            a12: 0.0,
+            a22: sy,
+            a32: 0.0,
+            a13: 0.0,
+            a23: 0.0,
+            a33: 1.0,
+        }
+    }
+
     /// Adjugate: inverse up to scale, which a homography ignores.
     pub fn inverse(&self) -> Self {
         Self {
@@ -136,7 +160,13 @@ impl PerspectiveTransform {
     /// normalization removes either way). Implemented as the 3x3 matrix
     /// product `outer.matrix() * self.matrix()`, since composing two
     /// projective maps is exactly multiplying their homogeneous matrices.
-    fn then(&self, outer: &Self) -> Self {
+    ///
+    /// `pub(crate)` (not private) so `sample.rs`'s source-resolution module
+    /// sampling (Plan 5 Task 2) can lift a module→working transform to
+    /// module→source by composing with [`Self::scaled`] — the same
+    /// composition `quad_to_quad` already builds internally, just exposed
+    /// for a second caller instead of duplicated.
+    pub(crate) fn then(&self, outer: &Self) -> Self {
         let a = outer.matrix();
         let b = self.matrix();
         let mut r = [[0.0f64; 3]; 3];
@@ -281,5 +311,47 @@ mod tests {
         let collinear = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]];
         assert!(PerspectiveTransform::quad_to_quad(collinear, DST_Q).is_none());
         assert!(PerspectiveTransform::quad_to_quad(SRC_Q, collinear).is_none());
+    }
+
+    // --- scaled + then composition (Plan 5 Task 2) ---
+
+    #[test]
+    fn scaled_maps_a_known_point_exactly() {
+        let s = PerspectiveTransform::scaled(2.0, 0.5);
+        let p = s.map(3.0, 10.0);
+        assert!((p[0] - 6.0).abs() < 1e-12 && (p[1] - 5.0).abs() < 1e-12, "{p:?}");
+    }
+
+    #[test]
+    fn scaled_round_trips_with_inverse() {
+        let s = PerspectiveTransform::scaled(4.0, 0.25);
+        let inv = s.inverse();
+        for &(x, y) in &[(1.0, 1.0), (3.5, -2.0), (0.0, 7.0)] {
+            let p = s.map(x, y);
+            let b = inv.map(p[0], p[1]);
+            assert!((b[0] - x).abs() < 1e-9 && (b[1] - y).abs() < 1e-9, "({x},{y}) -> {p:?} -> {b:?}");
+        }
+    }
+
+    /// The exact composition Task 2's source-resolution sampling relies on:
+    /// a module→working transform, lifted to module→source by composing
+    /// with `scaled(1/source_scale, 1/source_scale)`, must land on exactly
+    /// `working_point / source_scale` — the `source_px = working_px /
+    /// source_scale` convention `Detections::source_scale` documents.
+    #[test]
+    fn then_composes_a_transform_with_a_scale_to_lift_working_to_source() {
+        let working = PerspectiveTransform::square_to_quad(Q).unwrap();
+        let source_scale = 0.4; // working = source * 0.4 (a downscale)
+        let to_source = PerspectiveTransform::scaled(1.0 / source_scale, 1.0 / source_scale);
+        let lifted = working.then(&to_source);
+        for &(u, v) in &[(0.0, 0.0), (1.0, 0.0), (0.3, 0.7), (1.0, 1.0)] {
+            let working_pt = working.map(u, v);
+            let got = lifted.map(u, v);
+            let want = [working_pt[0] / source_scale, working_pt[1] / source_scale];
+            assert!(
+                (got[0] - want[0]).abs() < 1e-9 && (got[1] - want[1]).abs() < 1e-9,
+                "({u},{v}): got {got:?}, want {want:?}"
+            );
+        }
     }
 }

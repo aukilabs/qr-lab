@@ -15,6 +15,7 @@ use std::time::Instant;
 
 use crate::decode::{decode_candidates, DecodedCode};
 use crate::finder::{find_finders, FinderCandidate};
+use crate::sample::SourceView;
 use crate::tiles::TileGrid;
 use crate::trace::Trace;
 use crate::triplet::{group_triplets, TripletCandidate};
@@ -144,7 +145,34 @@ impl StageClock {
 /// `debug-trace` feature (as `qrk-wasm` does, to keep the feature
 /// available for its own optional trace output without taxing the
 /// common no-trace path).
-pub fn detect_with(view: &LumaView, mut trace: Option<&mut Trace>) -> Detections {
+///
+/// Thin wrapper over [`detect_with_source`] with `source: None` — kept as
+/// its own function (signature unchanged from before Plan 5 Task 2) so
+/// every existing `detect`/`detect_with`/`detect_traced` caller is
+/// unaffected by the source-resolution sampling plumbing.
+pub fn detect_with(view: &LumaView, trace: Option<&mut Trace>) -> Detections {
+    detect_with_source(view, None, trace)
+}
+
+/// [`detect_with`]'s real body, additionally threading an optional SOURCE
+/// view through to [`decode_candidates`] (Plan 5 Task 2): `scan.rs`'s
+/// `scan_with` calls this directly (not `detect_with`) with
+/// `Some(SourceView { view: source, scale })` whenever it downscaled `view`
+/// from `source`, so module sampling
+/// can read the SOURCE image instead of the (lossier, at ~2 working
+/// px/module) working `view` — see `sample::sample_grid`'s doc for exactly
+/// what changes. Every other stage below (tiles/finders/triplets, plus
+/// decode's own timing-check/version-bits/alignment sub-stages) still runs
+/// on `view` — the WORKING resolution — regardless of `source`, per the
+/// plan's scope note: only module sampling moves to source resolution this
+/// task. `pub(crate)`, not `pub`: this is `scan.rs`'s own internal seam, not
+/// part of the crate's public entry-point surface (`scan`/`scan_traced`
+/// already are).
+pub(crate) fn detect_with_source(
+    view: &LumaView,
+    source: Option<SourceView>,
+    mut trace: Option<&mut Trace>,
+) -> Detections {
     let tiles_clock = StageClock::start();
     let grid = TileGrid::build(view);
     let tiles_ns = tiles_clock.elapsed_ns();
@@ -173,7 +201,7 @@ pub fn detect_with(view: &LumaView, mut trace: Option<&mut Trace>) -> Detections
     // `record_finders`/`record_triplets` are above — a copy only when a
     // trace was actually requested.
     let (codes, attempts, decode_timings, decode_trace) =
-        decode_candidates(view, &grid, &finders, &triplets, trace.is_some());
+        decode_candidates(view, &grid, &finders, &triplets, trace.is_some(), source);
     if let Some(t) = &mut trace {
         t.record_attempts(&attempts);
         t.record_alignment(&decode_trace.alignment);

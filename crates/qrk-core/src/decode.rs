@@ -53,6 +53,7 @@ use crate::consts::{MAX_DECODE_ATTEMPTS, MAX_OOB_FRACTION};
 use crate::finder::FinderCandidate;
 use crate::sample::{
     needs_refined_br, provisional_transform, refine_fourth_corner, sample_grid, EdgeFitMode,
+    SourceView,
 };
 use crate::scanner::StageClock;
 use crate::tiles::TileGrid;
@@ -350,7 +351,12 @@ struct AttemptResult {
 /// doc for the stage-by-stage contract. Accumulates elapsed time for each
 /// of the three stage buckets into `timings`. `want_trace` gates the Task 6
 /// debug-trace fields on the returned `AttemptResult` (see its doc) — pass
-/// `false` from any caller that isn't collecting a `Trace` at all.
+/// `false` from any caller that isn't collecting a `Trace` at all. `source`
+/// (Plan 5 Task 2) is `Some` only when `scan()` downscaled the source image
+/// to build `view` — see [`sample_grid`]'s doc for exactly how it
+/// changes module sampling; every OTHER stage here (timing cross-check,
+/// version-info bits, alignment-pattern location) still runs on `view`
+/// (the WORKING view) regardless, per the plan's scope note.
 fn attempt_candidate(
     view: &LumaView,
     grid: &TileGrid,
@@ -358,6 +364,7 @@ fn attempt_candidate(
     t: &TripletCandidate,
     timings: &mut DecodeTimings,
     want_trace: bool,
+    source: Option<SourceView>,
 ) -> AttemptResult {
     let dimension_est = t.dimension;
 
@@ -500,7 +507,7 @@ fn attempt_candidate(
             transform.map(1.0, 1.0),
             transform.map(0.0, 1.0),
         ];
-        let sampled = match sample_grid(view, grid, t, dimension, &alignment, refined_br) {
+        let sampled = match sample_grid(view, grid, t, dimension, &alignment, refined_br, source) {
             Some(s) => s,
             None => {
                 return RoundOutcome {
@@ -765,13 +772,16 @@ fn attempt_candidate(
 /// built only when `want_trace` is set (pass `trace.is_some()` from
 /// `detect_with` — see [`AttemptResult`]'s doc for why this matters: the
 /// per-attempt trace data is otherwise-avoidable homography/allocation work
-/// on every one of up to [`MAX_DECODE_ATTEMPTS`] attempts).
+/// on every one of up to [`MAX_DECODE_ATTEMPTS`] attempts). `source` (Plan 5
+/// Task 2) is threaded straight through to every [`attempt_candidate`] call
+/// unchanged — see that function's doc.
 pub(crate) fn decode_candidates(
     view: &LumaView,
     grid: &TileGrid,
     finders: &[FinderCandidate],
     triplets: &[TripletCandidate],
     want_trace: bool,
+    source: Option<SourceView>,
 ) -> (Vec<DecodedCode>, Vec<DecodeAttemptTrace>, DecodeTimings, DecodeTraceData) {
     let mut timings = DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0 };
     let mut consumed = vec![false; finders.len()];
@@ -838,7 +848,7 @@ pub(crate) fn decode_candidates(
             };
             attempts_run += 1;
 
-            let result = attempt_candidate(view, grid, idx, &rotated, &mut timings, want_trace);
+            let result = attempt_candidate(view, grid, idx, &rotated, &mut timings, want_trace, source);
             let decoded = result.code.is_some();
             // Fix A: the very first attempt run this frame, full stop —
             // canonical (rotation 0) corner roles, captured once and never
@@ -1054,7 +1064,7 @@ mod tests {
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None);
         assert_eq!(attempts.len(), 1);
         assert_eq!(attempts[0].outcome, "decoded");
         assert_eq!(codes.len(), 1);
@@ -1095,7 +1105,7 @@ mod tests {
         let wrong_est_dim = dim - 4; // v39's dimension (173), one version step short of the true v40 (177).
         let t = triplet_from_transform(&transform, dim, wrong_est_dim as u32);
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None);
         assert_eq!(attempts.len(), 1, "{attempts:?}");
         assert_eq!(attempts[0].dimension_est, wrong_est_dim as u32);
         assert_eq!(attempts[0].dimension_final, dim as u32);
@@ -1136,7 +1146,7 @@ mod tests {
         let triplets = [worse, better];
 
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), &triplets, false);
+            decode_candidates(&view, &grid, &dummy_finders(3), &triplets, false, None);
         assert_eq!(codes.len(), 1, "expected exactly one decode, no spurious duplicate");
         assert_eq!(attempts.len(), 1, "the duplicate must be deduped away before attempting");
         assert_eq!(attempts[0].triplet_index, 1, "the lower-snap_error (index 1) survivor must be the one attempted");
@@ -1166,7 +1176,7 @@ mod tests {
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None);
         assert!(codes.is_empty());
         // One attempt per corner-role rotation (all fail), each rejected
         // by the OOB gate before decode.
@@ -1192,7 +1202,7 @@ mod tests {
             finder_indices: [0, 1, 2],
         };
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None);
         assert!(codes.is_empty());
         // One attempt per corner-role rotation, all failing cleanly.
         assert_eq!(attempts.len(), 3);
@@ -1223,7 +1233,7 @@ mod tests {
             })
             .collect();
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(total * 3), &triplets, false);
+            decode_candidates(&view, &grid, &dummy_finders(total * 3), &triplets, false, None);
         assert!(codes.is_empty());
         assert_eq!(attempts.len(), MAX_DECODE_ATTEMPTS);
     }
@@ -1272,7 +1282,7 @@ mod tests {
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None);
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "KEYSTONE");
         // The decode must have come through the image-derived corner — the
@@ -1340,7 +1350,7 @@ mod tests {
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None);
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "MULTIREGIONKEYSTONE");
 
@@ -1404,7 +1414,7 @@ mod tests {
         rotated.finder_indices = [1, 2, 0];
 
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&rotated), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&rotated), false, None);
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "ROTROLE");
         assert!(
@@ -1450,7 +1460,7 @@ mod tests {
         // computed directly via `attempt_candidate` so this test doesn't
         // need to hand-derive the sampled quad geometry itself.
         let mut timings = DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0 };
-        let expected = attempt_candidate(&view, &grid, 0, &a, &mut timings, true);
+        let expected = attempt_candidate(&view, &grid, 0, &a, &mut timings, true, None);
         assert!(expected.code.is_none(), "test setup: candidate A must not decode");
         assert!(
             !expected.sample_regions_trace.is_empty(),
@@ -1458,7 +1468,7 @@ mod tests {
         );
 
         let (codes, attempts, _timings, trace_data) =
-            decode_candidates(&view, &grid, &dummy_finders(6), &[a, b], true);
+            decode_candidates(&view, &grid, &dummy_finders(6), &[a, b], true, None);
         assert!(codes.is_empty(), "test setup: nothing in this frame should decode");
         assert!(
             attempts.len() > 1,
@@ -1514,7 +1524,7 @@ mod tests {
         garbage.finder_indices = [3, 4, 5];
 
         let (codes, attempts, _timings, trace_data) = decode_candidates(
-            &view, &grid, &dummy_finders(6), &[good, garbage], true,
+            &view, &grid, &dummy_finders(6), &[good, garbage], true, None,
         );
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "FIXAORDER");
@@ -1573,11 +1583,11 @@ mod tests {
         // Ground truth: the decoded attempt's own trace, computed directly
         // (same technique as the total-failure test above).
         let mut timings = DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0 };
-        let expected = attempt_candidate(&view, &grid, 1, &good, &mut timings, true);
+        let expected = attempt_candidate(&view, &grid, 1, &good, &mut timings, true, None);
         assert!(expected.code.is_some(), "test setup: the good candidate must decode on its own");
 
         let (codes, attempts, _timings, trace_data) =
-            decode_candidates(&view, &grid, &dummy_finders(6), &[garbage, good], true);
+            decode_candidates(&view, &grid, &dummy_finders(6), &[garbage, good], true, None);
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "LATERWINS");
         assert!(

@@ -158,6 +158,57 @@ pub(crate) fn sample_module_gray(
     Some(view.get(xu, yu) as f32)
 }
 
+/// Sample one module center's RAW gray value via BILINEAR interpolation of
+/// its 4 neighboring pixels, rather than [`sample_module_gray`]'s
+/// nearest-neighbor round. Plan 5 Task 2's source-resolution module
+/// sampling: `sample.rs`'s `sample_grid` uses this (not the
+/// nearest-neighbor primitive) when reading module GRAYS straight off the
+/// SOURCE image through a lifted transform, since a far/small code can sit
+/// at only ~2 source px/module, where nearest-neighbor's single-pixel read
+/// is materially noisier than interpolating across its neighbors.
+///
+/// Same `transform.map(col / dim, row / dim)` coordinate convention as
+/// [`sample_module_gray`]. `None` when the mapped point (or any of the 4
+/// pixels bilinear interpolation needs) falls outside `[0, w-1] x [0,
+/// h-1]` — i.e. strictly stricter by half a pixel on each edge than the
+/// nearest-neighbor primitives' own `xi >= 0 && xi < w` bounds (which admit
+/// a mapped point up to `w - 0.5`, rounding down to pixel `w-1`): bilinear
+/// interpolation genuinely needs a real pixel on both sides, so there is no
+/// clamped-edge fallback here either, for the same "missing data must not
+/// be silently repeated" reason [`sample_pixel_coords`]'s doc gives.
+pub(crate) fn sample_module_gray_bilinear(
+    view: &LumaView,
+    transform: &PerspectiveTransform,
+    dimension: u32,
+    col: f64,
+    row: f64,
+) -> Option<f32> {
+    let dim = dimension as f64;
+    let [px, py] = transform.map(col / dim, row / dim);
+    let (w, h) = (view.width(), view.height());
+    if px < 0.0 || py < 0.0 || px > (w - 1) as f64 || py > (h - 1) as f64 {
+        return None;
+    }
+    let x0 = px.floor() as usize;
+    let y0 = py.floor() as usize;
+    // `.min(w-1)`/`.min(h-1)`: only reached when `px`/`py` land exactly on
+    // the last pixel (`px == w - 1.0`), where `fx`/`fy` below are then
+    // exactly `0.0` and this neighbor's value is never actually blended in
+    // — not a clamped-edge approximation, just avoiding a one-past-the-end
+    // index for a weight that turns out to be zero.
+    let x1 = (x0 + 1).min(w - 1);
+    let y1 = (y0 + 1).min(h - 1);
+    let fx = px - x0 as f64;
+    let fy = py - y0 as f64;
+    let v00 = view.get(x0, y0) as f64;
+    let v10 = view.get(x1, y0) as f64;
+    let v01 = view.get(x0, y1) as f64;
+    let v11 = view.get(x1, y1) as f64;
+    let top = v00 + (v10 - v00) * fx;
+    let bot = v01 + (v11 - v01) * fx;
+    Some((top + (bot - top) * fy) as f32)
+}
+
 /// Walk one timing axis (row 6 across all columns if `horizontal`, else
 /// column 6 across all rows) and count polarity value changes between
 /// consecutive module-center samples. `None` if any sample's mapped pixel
@@ -358,6 +409,61 @@ pub(crate) fn read_version_bits(
 mod tests {
     use super::*;
     use crate::testpaint::render_module_grid_transformed;
+
+    // --- sample_module_gray_bilinear (Plan 5 Task 2) ---
+
+    /// Identity module->image transform over a 10x10 canvas (`dimension ==
+    /// 10`, so `col`/`row` ARE image pixel coordinates directly) painted
+    /// with a horizontal ramp (`gray(x, y) = 10*x`) — lets each assertion
+    /// below hand-compute the exact expected interpolated value.
+    fn ramp_view_and_transform() -> (Vec<u8>, PerspectiveTransform) {
+        let dim = 10usize;
+        let data: Vec<u8> = (0..dim * dim).map(|i| (10 * (i % dim)) as u8).collect();
+        let transform =
+            PerspectiveTransform::square_to_quad([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])
+                .unwrap();
+        (data, transform)
+    }
+
+    #[test]
+    fn bilinear_gray_matches_exact_pixel_at_integer_coords() {
+        let (data, transform) = ramp_view_and_transform();
+        let view = LumaView::new(&data, 10, 10, 10).unwrap();
+        // col/row = 3.0 maps to image (3.0, 3.0) exactly -> gray(3,3) = 30.
+        let g = sample_module_gray_bilinear(&view, &transform, 10, 3.0, 3.0).unwrap();
+        assert!((g - 30.0).abs() < 1e-6, "{g}");
+    }
+
+    #[test]
+    fn bilinear_gray_interpolates_between_pixels() {
+        let (data, transform) = ramp_view_and_transform();
+        let view = LumaView::new(&data, 10, 10, 10).unwrap();
+        // col = 3.5 -> image x = 3.5, halfway between gray(3,*)=30 and
+        // gray(4,*)=40 -> exactly 35. The ramp is constant along y, so the
+        // y-fraction doesn't matter here.
+        let g = sample_module_gray_bilinear(&view, &transform, 10, 3.5, 4.2).unwrap();
+        assert!((g - 35.0).abs() < 1e-6, "{g}");
+    }
+
+    #[test]
+    fn bilinear_gray_none_outside_the_pixel_center_grid() {
+        let (data, transform) = ramp_view_and_transform();
+        let view = LumaView::new(&data, 10, 10, 10).unwrap();
+        // image x = -0.1: strictly outside [0, w-1].
+        assert!(sample_module_gray_bilinear(&view, &transform, 10, -0.1, 3.0).is_none());
+        // image x = 9.4 (> w-1 = 9.0): also outside, unlike the
+        // nearest-neighbor primitive which would still accept it (rounds to
+        // 9) — bilinear's stricter bound (see the function's own doc).
+        assert!(sample_module_gray_bilinear(&view, &transform, 10, 9.4, 3.0).is_none());
+    }
+
+    #[test]
+    fn bilinear_gray_accepts_the_last_pixel_exactly() {
+        let (data, transform) = ramp_view_and_transform();
+        let view = LumaView::new(&data, 10, 10, 10).unwrap();
+        let g = sample_module_gray_bilinear(&view, &transform, 10, 9.0, 9.0).unwrap();
+        assert!((g - 90.0).abs() < 1e-6, "{g}");
+    }
 
     // --- BCH core (verbatim per the brief) ---
 
