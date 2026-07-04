@@ -257,3 +257,32 @@ pub(crate) const REFINE_OUTLIER_FLOOR_MODULES: f64 = 0.15;
 /// that estimator still runs first, at decode time, making the corners
 /// this stage refines possible in the first place).
 pub(crate) const REFINE_MIN_EDGE_POINTS: usize = 6;
+
+// --- Plan 5 Task 4 (carried review nit from Task 3): pin the two
+// structural iteration counts `refine.rs` previously expressed only as
+// literal repeated call sites (two sequential `refine_round` calls; three
+// sequential `localize_edge_point_pass` calls) into named, documented
+// constants — a mechanical move, no behavior change (still exactly 2
+// rounds, still exactly 3 passes).
+
+/// Number of `refine_round` invocations `refine_corners` runs, each
+/// re-anchored on the previous round's own output corners (see
+/// `refine_corners`'s "two rounds" doc for the full derivation): round 1
+/// leaves the anchor-derived probe geometry accurate to ~0.2%, at which
+/// point the coherent per-probe bias that geometry error causes (measured
+/// ~0.1px at a ±0.3-module round-1 input error) falls far below the gate's
+/// budget — a further round was not shown to move the measured accuracy
+/// (Task 3 review), so this is fixed at 2 for a small, predictable
+/// per-code cost rather than iterating to convergence.
+pub(crate) const REFINE_ROUNDS: usize = 2;
+
+/// Number of `localize_edge_point_pass` iterations `localize_edge_point`
+/// runs before Aitken Δ² extrapolation (see that function's doc for the
+/// phase-gain-error derivation the extrapolation corrects). This is not a
+/// free-standing tunable: the closed-form Aitken step `x* = x_2 -
+/// (x_2-x_1)^2 / (x_2-2x_1+x_0)` is derived from exactly 3 consecutive
+/// iterates of a locally-linear fixed-point map, so changing this value
+/// requires re-deriving the extrapolation itself, not just editing a loop
+/// bound — `localize_edge_point` asserts this invariant with a
+/// `debug_assert!`.
+pub(crate) const REFINE_LOCALIZE_PASSES: usize = 3;

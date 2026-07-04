@@ -83,7 +83,8 @@ required to pick up new Rust code while `npm run dev` keeps running.
                        │ registered once, module scope
                 tilesLayer, findersLayer, tripletsLayer,
                 groundtruthLayer, alignmentLayer,
-                samplegridLayer, bitsLayer, decodedLayer
+                samplegridLayer, bitsLayer, decodedLayer,
+                refinedLayer
                 (overlays/layers/*.ts)
                        ▲
                 LayerPanel (checkboxes mirror
@@ -132,7 +133,8 @@ Key modules:
 
 Follow this to add a new debug overlay for a future detection stage (Plan 4
 Task 6 added `alignment.ts`/`samplegrid.ts`/`bits.ts`/`decoded.ts` for the
-decode pipeline's own stages this same way — read one of those, or the
+decode pipeline's own stages this same way, and Plan 5 Task 4 added
+`refined.ts` for subpixel corner refinement — read one of those, or the
 original `tiles.ts`/`finders.ts`/`triplets.ts`/`groundtruth.ts`, alongside
 this list).
 
@@ -167,7 +169,7 @@ this list).
 
 3. **Register it** in `App.tsx`'s module-scope `createRegistry([...])` call
    (currently `[tilesLayer, findersLayer, tripletsLayer, groundtruthLayer,
-   alignmentLayer, samplegridLayer, bitsLayer, decodedLayer]`).
+   alignmentLayer, samplegridLayer, bitsLayer, decodedLayer, refinedLayer]`).
    Registration order is draw order (later entries draw on top) and
    `LayerPanel`'s checkbox order.
 

@@ -65,9 +65,10 @@
 
 use crate::bitmatrix::BitMatrix;
 use crate::consts::{
-    CONTRAST_FLOOR, REFINE_EDGE_MARGIN_MODULES, REFINE_MAX_POINTS_PER_EDGE, REFINE_MIN_EDGE_POINTS,
-    REFINE_OUTLIER_FLOOR_MODULES, REFINE_OUTLIER_MEDIAN_MULTIPLIER, REFINE_PROBE_MODULE_FRACTIONS,
-    REFINE_PROFILE_SAMPLES, REFINE_PROFILE_STEP_MODULES,
+    CONTRAST_FLOOR, REFINE_EDGE_MARGIN_MODULES, REFINE_LOCALIZE_PASSES, REFINE_MAX_POINTS_PER_EDGE,
+    REFINE_MIN_EDGE_POINTS, REFINE_OUTLIER_FLOOR_MODULES, REFINE_OUTLIER_MEDIAN_MULTIPLIER,
+    REFINE_PROBE_MODULE_FRACTIONS, REFINE_PROFILE_SAMPLES, REFINE_PROFILE_STEP_MODULES,
+    REFINE_ROUNDS,
 };
 use crate::homography::PerspectiveTransform;
 use crate::sample::{fit_line_tls_weighted, intersect_lines, EdgeFit};
@@ -381,6 +382,13 @@ fn localize_edge_point(
     inverted: bool,
     inward_differs: bool,
 ) -> Option<EdgePoint> {
+    // The three-iterate Aitken step below is a closed-form derivation over
+    // exactly `REFINE_LOCALIZE_PASSES` consecutive passes — see this
+    // constant's own doc for why bumping it isn't just a loop-bound edit.
+    debug_assert_eq!(
+        REFINE_LOCALIZE_PASSES, 3,
+        "the Aitken extrapolation below is derived for exactly 3 passes (p0, p1, p2)"
+    );
     let p0 = localize_edge_point_pass(source, coarse, normal, step, inverted, inward_differs)?;
     let p1 = localize_edge_point_pass(source, p0.pos, normal, step, inverted, inward_differs)?;
     let p2 = localize_edge_point_pass(source, p1.pos, normal, step, inverted, inward_differs)?;
@@ -611,9 +619,10 @@ fn refine_round(
 /// produce a usable line.
 ///
 /// # Two rounds (evidence-guided re-anchoring)
-/// [`refine_round`] runs twice: once anchored on the caller's coarse
-/// corners, then once more anchored on the first round's refined corners,
-/// and the second round's result wins. The probe GEOMETRY — each probe's
+/// [`refine_round`] runs [`REFINE_ROUNDS`] times: once anchored on the
+/// caller's coarse corners, then re-anchored on the previous round's own
+/// refined corners for each subsequent round, and the LAST successful
+/// round's result wins. The probe GEOMETRY — each probe's
 /// outward normal, its 0.5-module profile step, and critically the
 /// bar-unfolding correction's exact 1-module imposter offset (see
 /// [`localize_edge_point_pass`]) — all derive from the anchor quad, so an
@@ -648,11 +657,19 @@ pub(crate) fn refine_corners(
         return None;
     }
     let corners_source: [[f64; 2]; 4] = code_corners_working.map(|[x, y]| [x / sx, y / sy]);
-    let first = refine_round(source, &corners_source, bits, inverted)?;
-    match refine_round(source, &first.corners, bits, inverted) {
-        Some(second) => Some(second),
-        None => Some(first),
+    let mut best = refine_round(source, &corners_source, bits, inverted)?;
+    for _ in 1..REFINE_ROUNDS {
+        match refine_round(source, &best.corners, bits, inverted) {
+            // If a later round fails outright (it can only see fewer valid
+            // edges than its predecessor, if the tighter anchor exposes a
+            // genuinely marginal edge), the previous round's result is
+            // kept — a weaker but still evidence-based refinement, never a
+            // coarse echo (see the doc above).
+            Some(next) => best = next,
+            None => break,
+        }
     }
+    Some(best)
 }
 
 #[cfg(test)]

@@ -27,6 +27,7 @@ import { bitsLayer } from "./overlays/layers/bits";
 import { decodedLayer } from "./overlays/layers/decoded";
 import { findersLayer } from "./overlays/layers/finders";
 import { groundtruthLayer } from "./overlays/layers/groundtruth";
+import { refinedLayer } from "./overlays/layers/refined";
 import { samplegridLayer } from "./overlays/layers/samplegrid";
 import { tilesLayer } from "./overlays/layers/tiles";
 import { tripletsLayer } from "./overlays/layers/triplets";
@@ -60,6 +61,7 @@ const overlayRegistry = createRegistry([
   samplegridLayer,
   bitsLayer,
   decodedLayer,
+  refinedLayer,
 ]);
 
 interface ScanState {
