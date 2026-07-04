@@ -70,16 +70,28 @@ ctx.addEventListener("message", (ev) => {
   void (async () => {
     await ready;
 
-    const full = new Uint8ClampedArray(msg.rgba);
-    const {
-      rgba: scanRgba,
-      width: scanWidth,
-      height: scanHeight,
-    } = downscaleRgba(full, msg.width, msg.height, msg.maxDim);
-    // scan_rgba wants a Uint8Array view over the same bytes — no copy.
-    const view = new Uint8Array(scanRgba.buffer, scanRgba.byteOffset, scanRgba.byteLength);
+    // Hoisted with the requested (pre-downscale) dims as a fallback: if
+    // constructing `full`/downscaling throws before the real
+    // `scanWidth`/`scanHeight` are known, the catch below still has
+    // *something* dimension-shaped to report instead of a
+    // ReferenceError — which would propagate out of this async IIFE as an
+    // unhandled rejection instead of posting a `scan-result`, leaving the
+    // client's `inFlight` entry for `msg.id` never resolved (permanently
+    // "stale" for every scan after it). Everything that can throw —
+    // constructing the typed array, downscaling, and the wasm call itself
+    // — now runs inside the try below so a scan-result (ok or not) always
+    // gets posted.
+    let scanWidth = msg.width;
+    let scanHeight = msg.height;
 
     try {
+      const full = new Uint8ClampedArray(msg.rgba);
+      const down = downscaleRgba(full, msg.width, msg.height, msg.maxDim);
+      scanWidth = down.width;
+      scanHeight = down.height;
+      // scan_rgba wants a Uint8Array view over the same bytes — no copy.
+      const view = new Uint8Array(down.rgba.buffer, down.rgba.byteOffset, down.rgba.byteLength);
+
       const start = performance.now();
       const result: unknown = scan_rgba(view, scanWidth, scanHeight, msg.withTrace);
       const wallMs = performance.now() - start;

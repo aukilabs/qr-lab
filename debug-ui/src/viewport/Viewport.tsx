@@ -46,6 +46,12 @@ export function Viewport({ image, overlays, onCursorImagePos }: ViewportProps) {
   const viewRef = useRef<ViewTransform>(identity);
   const rafRef = useRef<number | null>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
+  // Dimensions of the image the view was last auto-fit to, or `null` before
+  // any bitmap has arrived. Compared (not just "is this a new source?")
+  // because a resolution change swaps in a same-source bitmap at different
+  // working dims — see the `[image, overlays]` effect below for why that
+  // comparison is the deliberate trigger, not source identity.
+  const lastFitDimsRef = useRef<{ width: number; height: number } | null>(null);
 
   // Latest-value refs so the imperative event handlers (attached once,
   // never re-subscribed) always see the current props without needing to
@@ -130,7 +136,38 @@ export function Viewport({ image, overlays, onCursorImagePos }: ViewportProps) {
   // Redraw when the image or overlay-drawing callback changes (e.g. new
   // scan data). Pan/zoom-driven redraws are scheduled directly from the
   // event handlers below, not through this effect.
+  //
+  // Auto-fit decision: before the redraw, fit the view whenever the
+  // *display bitmap's dimensions* change from what the view was last fit
+  // to — not merely "a new source was picked" and not "any new bitmap
+  // committed" (that would re-fit, and so undo the user's pan/zoom, on
+  // every re-scan/video frame at unchanged dims). Keying off dimension
+  // change covers both cases the brief calls out with one rule: a brand
+  // new source's first bitmap always differs from the previous (or null)
+  // dims, so it always fits; and a resolution change swaps in a
+  // same-source bitmap at different working dims, so it also re-fits
+  // (deliberately — the old view's scale/pan was chosen for the old
+  // working resolution and no longer matches). A same-dims re-scan of the
+  // same source (video frames, ground-truth reload, etc.) leaves the
+  // user's current pan/zoom alone. `lastFitDimsRef` is reset to `null`
+  // when the bitmap is cleared (source change resets `image` to `null`
+  // before the new source's first bitmap arrives), so the next bitmap —
+  // even one that coincidentally matches the previous source's dims —
+  // still triggers a fit.
   useEffect(() => {
+    if (image) {
+      const last = lastFitDimsRef.current;
+      if (!last || last.width !== image.width || last.height !== image.height) {
+        const container = containerRef.current;
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          viewRef.current = fitToView(image.width, image.height, rect.width, rect.height);
+        }
+        lastFitDimsRef.current = { width: image.width, height: image.height };
+      }
+    } else {
+      lastFitDimsRef.current = null;
+    }
     scheduleRedraw();
   }, [image, overlays]);
 

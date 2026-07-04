@@ -33,7 +33,12 @@ pub struct WasmResult {
 /// stride == width). When `with_trace` is set, the result carries the full
 /// per-stage `Trace` (tiles/finders/triplets); otherwise `trace` is `None`
 /// and the trace-recording cost is skipped entirely. Stage timings are
-/// zero on wasm (see `qrk_core::StageClock`) — measure wall time JS-side.
+/// real elapsed time on wasm too — `qrk_core::StageClock` backs them with
+/// `js_sys::Date::now()`, millisecond-resolution rather than the
+/// nanosecond resolution `Instant` gives on native targets, so a fast
+/// stage can still read as 0ns. JS-side wall time (e.g. `performance.now()`
+/// around the `scan_rgba` call) complements these per-stage numbers with
+/// sub-ms precision for the call as a whole; it isn't the only source.
 #[wasm_bindgen]
 pub fn scan_rgba(
     rgba: &[u8],

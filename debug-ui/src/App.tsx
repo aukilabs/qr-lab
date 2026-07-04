@@ -318,6 +318,20 @@ export function App() {
     }
   };
 
+  // A resolution change re-scans at a different `maxDim` (see the
+  // image-mode effect below), so the working `scanWidth`/`scanHeight` for
+  // any scan already in flight at the OLD resolution no longer matches
+  // what's about to be displayed. Bump the generation exactly like
+  // `handleSourceChange` does, so `runScan`'s post-await generation check
+  // drops that stale scan instead of letting it land — a mismatched
+  // resolution's overlays would otherwise flash onto the new display for
+  // one frame (same class of bug `sourceGenerationRef` already guards
+  // against for source changes).
+  const handleResolutionChange = (next: ResolutionOption) => {
+    sourceGenerationRef.current += 1;
+    setResolution(next);
+  };
+
   const handleLayerToggle = useCallback(() => setLayerVersion((v) => v + 1), []);
 
   const workingScale = sourceDims && scanState ? workingScaleFor(sourceDims.width, scanState.scanWidth) : 1;
@@ -371,7 +385,7 @@ export function App() {
           source={source}
           onSourceChange={handleSourceChange}
           resolution={resolution}
-          onResolutionChange={setResolution}
+          onResolutionChange={handleResolutionChange}
           onRescan={handleRescan}
           rescanDisabled={rescanDisabled}
         />

@@ -51,15 +51,17 @@ fn envelope_matches_committed_snapshot() {
     // array/struct shapes to check against, not just nulls.
     let mut trace = Trace::new();
     let detections = detect_with(&view, Some(&mut trace));
-    // `StageTimings` is wall-clock `Instant::now()` deltas on every target
-    // this test actually runs on (host, not wasm32), so it's a different
-    // number every run — comparing it byte-for-byte would make the drift
-    // gate flaky for reasons that have nothing to do with contract shape.
-    // On the real wasm32 target `StageClock` is a zero-field stub and
-    // every stage genuinely reports 0ns (see `qrk_core::StageClock` and
-    // `scan_rgba`'s doc comment) — measurement happens JS-side instead —
-    // so zeroing timings here matches production wasm output exactly and
-    // keeps the snapshot both deterministic and representative.
+    // `StageTimings` is nondeterministic on every target this test could
+    // run on: here (host, not wasm32) it's `Instant::now()` deltas, a
+    // different number every run; on the real wasm32 target `StageClock`
+    // reads `js_sys::Date::now()` instead (see `qrk_core::StageClock` and
+    // `scan_rgba`'s doc comment) — real elapsed time, but still a
+    // different number every call, and only ms-resolution at that.
+    // Either way, comparing timings byte-for-byte would make the drift
+    // gate flaky for reasons that have nothing to do with contract shape,
+    // so this test zeroes them before serializing — deterministic, and
+    // still representative of the envelope's *shape*, which is the only
+    // thing this snapshot is meant to gate.
     let detections = qrk_core::Detections {
         timings: StageTimings::default(),
         ..detections
