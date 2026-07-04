@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod alignment;
 mod bitmatrix;
 mod consts;
 mod finder;

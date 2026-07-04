@@ -103,7 +103,12 @@ fn reverse_bits(bits: u32, n: u32) -> u32 {
 /// outside the image — the caller's walk is then unreliable and must abort
 /// rather than silently clamp (a clamped read would silently repeat an
 /// edge pixel's value instead of reporting missing data).
-fn sample_module_ink(
+///
+/// `pub(crate)` (not private) so `alignment.rs`'s concentric re-centering
+/// probe (Plan 4 Task 3) can reuse this exact sampling convention instead
+/// of duplicating it — same `transform.map(col / dim, row / dim)` contract
+/// documented above the module-doc's "read from the image" paragraph.
+pub(crate) fn sample_module_ink(
     view: &LumaView,
     grid: &TileGrid,
     transform: &PerspectiveTransform,

@@ -32,3 +32,21 @@ pub const CONTRAST_FLOOR: u8 = 12;
 /// candidates with `hits >= 2` (the merge gate), so ≥3 hit chances
 /// leaves one spare above that floor rather than sitting exactly on it.
 pub const ROW_STEP: usize = 2;
+
+/// Alignment-pattern concentric re-centering probe half-width, in modules
+/// (zxing-cpp's `AlignmentPatternFinder` uses the same ±2.25 half-width).
+/// Must comfortably exceed the largest prediction error the caller can
+/// hand in (parallelogram/provisional-transform drift is typically well
+/// under 2 modules even at high versions and moderate perspective) while
+/// staying well short of ever reaching a *neighboring* alignment pattern's
+/// own 5×5 footprint: computed (not eyeballed — see the min-gap check
+/// alongside `alignment.rs`'s table test) the smallest center-to-center
+/// spacing between two adjacent, non-finder-corner `alignment_coords`
+/// grid nodes across every version with at least one such pair (v7..40)
+/// is 16 modules (v7's own coordinate list `[6, 22, 38]`, gap 16 both
+/// times — the *global* minimum, not merely v7's), so a half-width of
+/// 2.25 leaves `16 - 2*2.25 = 11.5` modules of dead zone between probe
+/// windows — nowhere close to colliding. (v2..6's single real alignment
+/// pattern has no neighboring real pattern to collide with at all, so
+/// their nominal `6 -> coord` gap, sometimes < 16, doesn't apply here.)
+pub const ALIGNMENT_PROBE_HALF_MODULES: f64 = 2.25;
