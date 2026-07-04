@@ -233,6 +233,7 @@ dependencies = [
 name = "qrk-wasm"
 version = "0.1.0"
 dependencies = [
+ "qrcode",
  "qrk-core",
  "serde",
  "serde-wasm-bindgen",

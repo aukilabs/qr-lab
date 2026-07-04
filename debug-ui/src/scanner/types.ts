@@ -45,6 +45,22 @@ export interface DecodedCode {
   corners: [[number, number], [number, number], [number, number], [number, number]];
   inverted: boolean;
   finder_indices: [number, number, number];
+  /** Subpixel-refined `[TL, TR, BR, BL]` corners, in SOURCE image px (Plan
+   * 5 Task 3) — `null` when `ScanOptions.refine` was `false`, or `true` but
+   * refinement produced fewer than 2 valid edge lines. Unlike `corners`
+   * (always working px), this is never a scaled copy of it — convert
+   * `corners` yourself (`working_px / source_scale`, per-axis) if you need
+   * to compare the two spaces directly. */
+  refined_corners: [[number, number], [number, number], [number, number], [number, number]] | null;
+  /** Per-corner refinement provenance for `refined_corners`, `[TL, TR, BR,
+   * BL]` — mirrors `qrk_core::decode::DecodedCode::corner_refined`. `[false,
+   * false, false, false]` when `refined_corners` is `null`; otherwise
+   * `true` at index `i` iff that corner came from intersecting its two
+   * adjacent fitted edge lines rather than keeping the coarse (source-
+   * scaled) fallback position — same per-corner rule `RefineTrace.
+   * corner_refined` documents, just always available (not gated behind
+   * `withTrace`). */
+  corner_refined: [boolean, boolean, boolean, boolean];
 }
 
 /** One decode attempt's trace (mirrors `qrk_core::decode::DecodeAttemptTrace`).
@@ -96,6 +112,26 @@ export interface BitsTrace {
   words: number[];
 }
 
+/** One outer module-region edge's subpixel refinement point counts (Plan 5
+ * Task 3) — mirrors `qrk_core::trace::EdgeRefineTrace`. */
+export interface EdgeRefineStat {
+  points_probed: number;
+  points_fit: number;
+  dropped_outliers: number;
+  valid: boolean;
+}
+
+/** Subpixel corner refinement diagnostics for the last decoded candidate
+ * this frame (Plan 5 Task 3) — mirrors `qrk_core::trace::RefineTrace`.
+ * `edges` is `[top, right, bottom, left]` (module-space `y=0`, `x=dim`,
+ * `y=dim`, `x=0`); `corner_refined` is `[TL, TR, BR, BL]`, `true` where the
+ * corner came from intersecting its two adjacent edge lines rather than
+ * keeping the caller's unrefined (coarse, source-scaled) corner. */
+export interface RefineTrace {
+  edges: [EdgeRefineStat, EdgeRefineStat, EdgeRefineStat, EdgeRefineStat];
+  corner_refined: [boolean, boolean, boolean, boolean];
+}
+
 export interface StageTimings {
   tiles_ns: number;
   finders_ns: number;
@@ -103,6 +139,10 @@ export interface StageTimings {
   version_ns: number;
   alignment_ns: number;
   sample_decode_ns: number;
+  /** Subpixel corner refinement (Plan 5 Task 3), summed across every
+   * decoded candidate this frame — `0` whenever `ScanOptions.refine` is
+   * `false`. */
+  refine_ns: number;
 }
 
 export interface Detections {
@@ -110,6 +150,14 @@ export interface Detections {
   triplets: TripletCandidate[];
   codes: DecodedCode[];
   timings: StageTimings;
+  /** Working-resolution ÷ source-resolution scale (Plan 5 Task 1), mirrors
+   * `qrk_core::Detections::source_scale`: `working_dim / source_dim`,
+   * always `<= 1`. `1.0` whenever `scan` didn't need to downscale. Every
+   * OTHER geometry field on `Detections` (and `DecodedCode.corners`) is in
+   * WORKING px — divide by this to get SOURCE px: `source_px = working_px
+   * / source_scale`. See the Rust field's doc comment for why this is
+   * computed from the width axis specifically. */
+  source_scale: number;
 }
 
 export interface TileTrace {
@@ -145,6 +193,9 @@ export interface Trace {
   alignment: AlignmentTraceEntry[];
   sample_regions: SampleRegionTrace[];
   bits: BitsTrace | null;
+  /** This frame's subpixel corner refinement diagnostics (Plan 5 Task 3) —
+   * see `RefineTrace`'s doc for the selection rule and `null` cases. */
+  refine: RefineTrace | null;
 }
 
 export interface ScanResult {
@@ -248,6 +299,14 @@ function parseQuad(
     parsePair(arr[2], indexPath(path, 2)),
     parsePair(arr[3], indexPath(path, 3)),
   ];
+}
+
+function parseQuadOrNull(
+  v: unknown,
+  path: string,
+): [[number, number], [number, number], [number, number], [number, number]] | null {
+  if (v === null || v === undefined) return null;
+  return parseQuad(v, path);
 }
 
 /** A flat 4-number tuple (e.g. `module_rect: [x0, y0, x1, y1]`), as opposed
@@ -378,6 +437,14 @@ function parseDecodedCode(v: unknown, path: string): DecodedCode {
       expectField(obj, "finder_indices", path),
       joinPath(path, "finder_indices"),
     ),
+    refined_corners: parseQuadOrNull(
+      expectField(obj, "refined_corners", path),
+      joinPath(path, "refined_corners"),
+    ),
+    corner_refined: parseBooleanQuad(
+      expectField(obj, "corner_refined", path),
+      joinPath(path, "corner_refined"),
+    ),
   };
 }
 
@@ -487,6 +554,70 @@ function parseBitsTraceOrNull(v: unknown, path: string): BitsTrace | null {
   return parseBitsTrace(v, path);
 }
 
+function parseEdgeRefineStat(v: unknown, path: string): EdgeRefineStat {
+  const obj = expectObject(v, path);
+  return {
+    points_probed: expectNumber(
+      expectField(obj, "points_probed", path),
+      joinPath(path, "points_probed"),
+    ),
+    points_fit: expectNumber(
+      expectField(obj, "points_fit", path),
+      joinPath(path, "points_fit"),
+    ),
+    dropped_outliers: expectNumber(
+      expectField(obj, "dropped_outliers", path),
+      joinPath(path, "dropped_outliers"),
+    ),
+    valid: expectBoolean(expectField(obj, "valid", path), joinPath(path, "valid")),
+  };
+}
+
+function parseEdgeRefineStatQuad(
+  v: unknown,
+  path: string,
+): [EdgeRefineStat, EdgeRefineStat, EdgeRefineStat, EdgeRefineStat] {
+  const arr = expectArray(v, path);
+  if (arr.length !== 4) {
+    fail(path, `expected a 4-element tuple, got ${arr.length} elements`);
+  }
+  return [
+    parseEdgeRefineStat(arr[0], indexPath(path, 0)),
+    parseEdgeRefineStat(arr[1], indexPath(path, 1)),
+    parseEdgeRefineStat(arr[2], indexPath(path, 2)),
+    parseEdgeRefineStat(arr[3], indexPath(path, 3)),
+  ];
+}
+
+function parseBooleanQuad(v: unknown, path: string): [boolean, boolean, boolean, boolean] {
+  const arr = expectArray(v, path);
+  if (arr.length !== 4) {
+    fail(path, `expected a 4-element tuple, got ${arr.length} elements`);
+  }
+  return [
+    expectBoolean(arr[0], indexPath(path, 0)),
+    expectBoolean(arr[1], indexPath(path, 1)),
+    expectBoolean(arr[2], indexPath(path, 2)),
+    expectBoolean(arr[3], indexPath(path, 3)),
+  ];
+}
+
+function parseRefineTrace(v: unknown, path: string): RefineTrace {
+  const obj = expectObject(v, path);
+  return {
+    edges: parseEdgeRefineStatQuad(expectField(obj, "edges", path), joinPath(path, "edges")),
+    corner_refined: parseBooleanQuad(
+      expectField(obj, "corner_refined", path),
+      joinPath(path, "corner_refined"),
+    ),
+  };
+}
+
+function parseRefineTraceOrNull(v: unknown, path: string): RefineTrace | null {
+  if (v === null || v === undefined) return null;
+  return parseRefineTrace(v, path);
+}
+
 function parseStageTimings(v: unknown, path: string): StageTimings {
   const obj = expectObject(v, path);
   return {
@@ -514,6 +645,10 @@ function parseStageTimings(v: unknown, path: string): StageTimings {
       expectField(obj, "sample_decode_ns", path),
       joinPath(path, "sample_decode_ns"),
     ),
+    refine_ns: expectNumber(
+      expectField(obj, "refine_ns", path),
+      joinPath(path, "refine_ns"),
+    ),
   };
 }
 
@@ -535,6 +670,10 @@ function parseDetections(v: unknown, path: string): Detections {
     timings: parseStageTimings(
       expectField(obj, "timings", path),
       joinPath(path, "timings"),
+    ),
+    source_scale: expectNumber(
+      expectField(obj, "source_scale", path),
+      joinPath(path, "source_scale"),
     ),
   };
 }
@@ -601,6 +740,7 @@ function parseTrace(v: unknown, path: string): Trace {
       joinPath(path, "sample_regions"),
     ),
     bits: parseBitsTraceOrNull(expectField(obj, "bits", path), joinPath(path, "bits")),
+    refine: parseRefineTraceOrNull(expectField(obj, "refine", path), joinPath(path, "refine")),
   };
 }
 

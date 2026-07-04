@@ -2,12 +2,32 @@
 //! entry point that the debug UI (Plan 3) calls with a captured camera
 //! frame and gets back detections (and, optionally, the full per-stage
 //! trace) as a plain JS object.
+//!
+//! Plan 5 Task 1: `scan_rgba` gained `max_dim`/`refine` and now owns the
+//! source→working downscale in Rust via `qrk_core::scan`/`scan_traced`,
+//! rather than `detect`/`detect_traced` directly on an already-downscaled
+//! view — the debug UI's TS worker used to downscale before calling this
+//! function; it now hands over the full SOURCE frame instead (see
+//! `debug-ui/src/scanner/worker.ts`'s doc comment). `WasmResult` gained
+//! `scan_width`/`scan_height` so the worker can learn the working
+//! resolution `scan` picked without re-deriving it itself. Plan 5 Task 3:
+//! `refine` now enables real subpixel corner refinement (previously
+//! plumbing-only) — no signature change needed here, since the field
+//! already existed. Plan 5 Task 5: `qrgen` (feature `qr-gen`, off by
+//! default) adds `generate_qr` — the debug UI's 3D-scene mode uses it to
+//! texture a plane with a real, decodable QR — see that module's doc.
 
-use qrk_core::{detect_with, luma_from_rgba, Detections, LumaView, Trace};
+use qrk_core::{downscaled_dims, luma_from_rgba, scan, scan_traced, Detections, LumaView, ScanOptions, Trace};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-/// Serializable envelope returned to JS: the detection result, plus the
+#[cfg(feature = "qr-gen")]
+mod qrgen;
+#[cfg(feature = "qr-gen")]
+pub use qrgen::generate_qr;
+
+/// Serializable envelope returned to JS: the detection result, the working
+/// (post-downscale) resolution `scan` actually detected on, plus the
 /// optional debug trace when the caller asked for it.
 ///
 /// `pub` (rather than private or `pub(crate)`) and `#[doc(hidden)]` so
@@ -23,17 +43,36 @@ use wasm_bindgen::prelude::*;
 pub struct WasmResult {
     pub detections: Detections,
     pub trace: Option<Trace>,
+    /// The working view's width/height in px — what `Detections`' own
+    /// working-px geometry (and the displayed overlay coordinates) is
+    /// relative to. Equal to `width`/`height` (the SOURCE frame passed in)
+    /// whenever `detections.source_scale == 1.0`; otherwise the downscaled
+    /// dimensions `qrk_core::downscale_luma` computed for `max_dim`.
+    pub scan_width: u32,
+    pub scan_height: u32,
 }
 
-/// Scan one RGBA frame and return a `WasmResult` (via `serde-wasm-bindgen`)
-/// as a `JsValue`, or `Err` with a descriptive message on invalid input
-/// (a panic would poison the wasm instance for every later call, so all
-/// input checks happen up front and nothing on this path can panic).
-/// `rgba` must be exactly `width * height * 4` bytes, tightly packed (row
-/// stride == width). When `with_trace` is set, the result carries the full
-/// per-stage `Trace` (tiles/finders/triplets); otherwise `trace` is `None`
-/// and the trace-recording cost is skipped entirely. Stage timings are
-/// real elapsed time on wasm too — `qrk_core::StageClock` backs them with
+/// Scan one SOURCE-resolution RGBA frame and return a `WasmResult` (via
+/// `serde-wasm-bindgen`) as a `JsValue`, or `Err` with a descriptive
+/// message on invalid input (a panic would poison the wasm instance for
+/// every later call, so all input checks happen up front and nothing on
+/// this path can panic). `rgba` must be exactly `width * height * 4`
+/// bytes, tightly packed (row stride == width).
+///
+/// `max_dim` caps the WORKING view's longest side (`0` = no cap — detect
+/// directly on the full source, like `qrk_core::detect`); the downscale
+/// (when one is needed) happens here, in Rust, via `qrk_core::scan` — see
+/// that function's and `ScanOptions`'s doc comments for the exact NN
+/// formula and the `source_scale` conversion it produces. `refine` enables
+/// subpixel corner refinement (Plan 5 Task 3, see `ScanOptions::refine`'s
+/// doc): each decoded code's `refined_corners` is then populated (source
+/// px) instead of staying `None`, at the cost of the extra per-code edge
+/// probing/fitting work (visible in `StageTimings::refine_ns`).
+///
+/// When `with_trace` is set, the result carries the full per-stage `Trace`
+/// (tiles/finders/triplets); otherwise `trace` is `None` and the
+/// trace-recording cost is skipped entirely. Stage timings are real
+/// elapsed time on wasm too — `qrk_core::StageClock` backs them with
 /// `js_sys::Date::now()`, millisecond-resolution rather than the
 /// nanosecond resolution `Instant` gives on native targets, so a fast
 /// stage can still read as 0ns. JS-side wall time (e.g. `performance.now()`
@@ -44,7 +83,9 @@ pub fn scan_rgba(
     rgba: &[u8],
     width: u32,
     height: u32,
+    max_dim: u32,
     with_trace: bool,
+    refine: bool,
 ) -> Result<JsValue, JsValue> {
     let width = width as usize;
     let height = height as usize;
@@ -74,16 +115,28 @@ pub fn scan_rgba(
     let view = LumaView::new(&luma, width, height, width)
         .map_err(|e| JsValue::from_str(&format!("scan_rgba: invalid luma view: {e:?}")))?;
 
-    // `qrk_core::detect_with` is the single orchestration both `detect`
-    // and `detect_traced` funnel through; it only pays `Trace`'s
-    // record/clone cost when `trace` is `Some`, so passing `None` here
-    // (this crate compiles `qrk-core` with `debug-trace`) is as cheap as
-    // the old crate-local `detect_untraced` duplicate used to be —
-    // without needing that duplicate.
-    let mut trace = with_trace.then(Trace::new);
-    let detections = detect_with(&view, trace.as_mut());
+    let opts = ScanOptions { max_working_dim: max_dim, refine };
 
-    serde_wasm_bindgen::to_value(&WasmResult { detections, trace }).map_err(JsValue::from)
+    // Branch on `with_trace` (rather than always calling `scan_traced` with
+    // a throwaway `Trace`) so the no-trace path stays exactly as cheap as
+    // `scan`'s own doc comment promises: `qrk_core`'s internals never call
+    // any `record_*` (with its `to_vec()` clones) unless a trace was
+    // actually asked for.
+    let mut trace = with_trace.then(Trace::new);
+    let detections = match trace.as_mut() {
+        Some(t) => scan_traced(&view, &opts, t),
+        None => scan(&view, &opts),
+    };
+    let (scan_width, scan_height) =
+        downscaled_dims(width, height, max_dim).unwrap_or((width, height));
+
+    serde_wasm_bindgen::to_value(&WasmResult {
+        detections,
+        trace,
+        scan_width: scan_width as u32,
+        scan_height: scan_height as u32,
+    })
+    .map_err(JsValue::from)
 }
 
 #[cfg(test)]
@@ -100,15 +153,20 @@ mod tests {
     #[test]
     fn scan_result_shape_is_serializable() {
         // Round-trip the result struct through serde_json natively to pin
-        // the field names the debug UI will consume.
+        // the field names the debug UI will consume — via `qrk_core::scan`
+        // (Plan 5 Task 1's entry point, what `scan_rgba` now calls), not
+        // the older `detect`, so this test exercises the same shape
+        // `source_scale` included.
         let d = vec![128u8; 32 * 32 * 4];
         let luma = qrk_core::luma_from_rgba(&d, 32, 32);
         let view = qrk_core::LumaView::new(&luma, 32, 32, 32).unwrap();
-        let det = qrk_core::detect(&view);
+        let opts = qrk_core::ScanOptions { max_working_dim: 0, refine: false };
+        let det = qrk_core::scan(&view, &opts);
         let json = serde_json::to_value(&det).unwrap();
         assert!(json.get("finders").is_some());
         assert!(json.get("triplets").is_some());
         assert!(json.get("timings").is_some());
+        assert_eq!(json.get("source_scale").and_then(|v| v.as_f64()), Some(1.0));
     }
 
     #[test]
@@ -116,9 +174,12 @@ mod tests {
         let luma = flat_luma();
         let view = qrk_core::LumaView::new(&luma, SIDE, SIDE, SIDE).unwrap();
 
+        let opts = qrk_core::ScanOptions { max_working_dim: 0, refine: false };
         let result = WasmResult {
-            detections: qrk_core::detect_with(&view, None),
+            detections: qrk_core::scan(&view, &opts),
             trace: None,
+            scan_width: SIDE as u32,
+            scan_height: SIDE as u32,
         };
         let json = serde_json::to_value(&result).unwrap();
 
@@ -126,7 +187,10 @@ mod tests {
         assert!(det.get("finders").is_some());
         assert!(det.get("triplets").is_some());
         assert!(det.get("timings").is_some());
+        assert!(det.get("source_scale").is_some());
         assert!(json.get("trace").expect("trace key").is_null());
+        assert_eq!(json.get("scan_width").and_then(|v| v.as_u64()), Some(SIDE as u64));
+        assert_eq!(json.get("scan_height").and_then(|v| v.as_u64()), Some(SIDE as u64));
     }
 
     #[test]
@@ -135,10 +199,13 @@ mod tests {
         let view = qrk_core::LumaView::new(&luma, SIDE, SIDE, SIDE).unwrap();
 
         let mut trace = qrk_core::Trace::new();
-        let detections = qrk_core::detect_traced(&view, &mut trace);
+        let opts = qrk_core::ScanOptions { max_working_dim: 0, refine: false };
+        let detections = qrk_core::scan_traced(&view, &opts, &mut trace);
         let result = WasmResult {
             detections,
             trace: Some(trace),
+            scan_width: SIDE as u32,
+            scan_height: SIDE as u32,
         };
         let json = serde_json::to_value(&result).unwrap();
 
@@ -155,15 +222,18 @@ mod tests {
     }
 
     #[test]
-    fn detect_with_none_and_some_trace_agree_on_a_real_fixture() {
+    fn scan_none_and_some_trace_agree_on_a_real_fixture() {
         // `find_finders`'s row scan on flat/synthetic images short-circuits
         // too early to exercise most of the detection pipeline, so this
         // loads a real golden fixture (qrk-wasm has no fixture loader of
         // its own — see `tests/common/mod.rs` in qrk-core — so read the
-        // raw bytes directly) and checks `detect_with(None)` (the
-        // `scan_rgba` no-trace path) against `detect_with(Some(..))` (the
-        // with-trace path) to confirm the shared orchestration produces
-        // identical detections either way.
+        // raw bytes directly) and checks `scan` (the `scan_rgba` no-trace
+        // path) against `scan_traced` (the with-trace path) to confirm the
+        // shared orchestration produces identical detections either way.
+        // `max_working_dim: 1280` mirrors the debug UI's default working
+        // resolution — near_00 is already exactly 1280 wide, so this
+        // exercises the no-downscale (`source_scale == 1.0`) branch of
+        // `scan`, same as `scan_rgba` would hit for this fixture.
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/near_00.luma");
         let luma = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
@@ -171,12 +241,15 @@ mod tests {
         assert_eq!(luma.len(), width * height, "near_00.luma: unexpected size");
         let view = qrk_core::LumaView::new(&luma, width, height, width).unwrap();
 
-        let a = qrk_core::detect_with(&view, None);
+        let opts = qrk_core::ScanOptions { max_working_dim: 1280, refine: false };
+        let a = qrk_core::scan(&view, &opts);
         let mut trace = qrk_core::Trace::new();
-        let b = qrk_core::detect_with(&view, Some(&mut trace));
+        let b = qrk_core::scan_traced(&view, &opts, &mut trace);
 
         assert_eq!(a.finders.len(), b.finders.len());
         assert_eq!(a.triplets.len(), b.triplets.len());
+        assert_eq!(a.source_scale, 1.0);
+        assert_eq!(b.source_scale, 1.0);
         assert!(!a.finders.is_empty(), "near_00 should yield finder candidates");
     }
 }

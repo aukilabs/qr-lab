@@ -119,6 +119,30 @@
           6,
           4,
           5
+        ],
+        "refined_corners": [
+          [
+            458.73449919531254,
+            584.2627147779426
+          ],
+          [
+            409.81159036274175,
+            440.03642482168794
+          ],
+          [
+            553.8090872294355,
+            398.85266910187784
+          ],
+          [
+            601.8856478662477,
+            548.0615396937649
+          ]
+        ],
+        "corner_refined": [
+          true,
+          true,
+          true,
+          true
         ]
       }
     ],
@@ -128,8 +152,10 @@
       "triplets_ns": 0,
       "version_ns": 0,
       "alignment_ns": 0,
-      "sample_decode_ns": 0
-    }
+      "sample_decode_ns": 0,
+      "refine_ns": 0
+    },
+    "source_scale": 1.0
   },
   "trace": {
     "tiles": {
@@ -7487,6 +7513,42 @@
         164929,
         1284991
       ]
+    },
+    "refine": {
+      "edges": [
+        {
+          "points_probed": 26,
+          "points_fit": 26,
+          "dropped_outliers": 0,
+          "valid": true
+        },
+        {
+          "points_probed": 25,
+          "points_fit": 25,
+          "dropped_outliers": 0,
+          "valid": true
+        },
+        {
+          "points_probed": 25,
+          "points_fit": 25,
+          "dropped_outliers": 0,
+          "valid": true
+        },
+        {
+          "points_probed": 30,
+          "points_fit": 30,
+          "dropped_outliers": 0,
+          "valid": true
+        }
+      ],
+      "corner_refined": [
+        true,
+        true,
+        true,
+        true
+      ]
     }
-  }
+  },
+  "scan_width": 1280,
+  "scan_height": 720
 }

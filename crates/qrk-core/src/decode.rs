@@ -12,23 +12,26 @@
 //! 1. **Timing cross-check** (only when the *current* estimate is `<= 41`
 //!    modules — [`crate::version::count_timing_transitions`]'s formula is
 //!    only meaningful there; v>=7's own version-info bits are authoritative
-//!    instead, see step 2): adopt the timing-derived dimension — snapped to
-//!    the QR dimension lattice first, see the inline note at the check —
-//!    when it's within +/-2 modules of the current estimate, else keep the
-//!    estimate and merely record the raw timing reading in the attempt
-//!    trace.
+//!    instead, see step 2): a pure cross-check, never an override —
+//!    [`DecodeAttemptTrace::timing_check`] records the raw transition-count
+//!    reading for diagnostics, but `dimension` is never reassigned from it.
+//!    (Plan 5 Task 6: this stage used to attempt to *adopt* the
+//!    lattice-snapped reading when within +/-2 modules of the current
+//!    estimate, but that branch was provably dead — see the inline
+//!    derivation at the check — and was removed in favor of a
+//!    `debug_assert` of the same lattice invariant.)
 //! 2. **Version-info bits** (only once the dimension implies `version >=
 //!    7`): [`crate::version::read_version_bits`] BCH-decodes the redundant
 //!    version-info blocks; per the plan's recorded `ver_12_v40` finding this
 //!    is authoritative over the geometric estimate when it decodes, so a
-//!    disagreement here always wins.
+//!    disagreement here always wins — the ONLY way `dimension` ever changes
+//!    from the triplet's own estimate.
 //!
-//! Between the two, a defensive bounds check rejects a dimension whose
-//! implied version would fall outside `1..=40` — [`crate::alignment::alignment_coords`]
-//! panics on an out-of-range version. With the timing reading snapped to
-//! the QR dimension lattice (see the inline note at the check) the timing
-//! stage can no longer produce an out-of-range value itself, so this guard
-//! is purely defensive against future refactors — but silently corrupting
+//! After step 2, a defensive bounds check rejects a dimension whose implied
+//! version would fall outside `1..=40` — [`crate::alignment::alignment_coords`]
+//! panics on an out-of-range version. Step 2's BCH table only ever yields
+//! `7..=40`, and step 1 never changes `dimension` at all, so this guard is
+//! purely defensive against future refactors — but silently corrupting
 //! `dimension` into something `alignment_coords` panics on would take down
 //! the whole scan, so an out-of-range value is still rejected here as a
 //! normal (traced) failed attempt rather than assumed impossible.
@@ -48,15 +51,17 @@
 //! arbitration property Gate 3 checks.
 
 use crate::alignment::{locate_alignment_patterns, AnchorSlot};
-use crate::bitmatrix::{build_reference_threshold_bits, decode_bits, DecodeFailure};
-use crate::consts::{MAX_DECODE_ATTEMPTS, MAX_OOB_FRACTION};
+use crate::bitmatrix::{build_reference_threshold_bits, decode_bits, BitMatrix, DecodeFailure};
+use crate::consts::{MAX_DECODE_ROUNDS, MAX_OOB_FRACTION};
 use crate::finder::FinderCandidate;
+use crate::refine::{refine_corners, RefinedCorners};
 use crate::sample::{
     needs_refined_br, provisional_transform, refine_fourth_corner, sample_grid, EdgeFitMode,
+    SourceView,
 };
 use crate::scanner::StageClock;
 use crate::tiles::TileGrid;
-use crate::trace::{AlignmentTraceEntry, BitsTrace, SampleRegionTrace};
+use crate::trace::{AlignmentTraceEntry, BitsTrace, RefineTrace, SampleRegionTrace};
 use crate::triplet::TripletCandidate;
 use crate::version::{count_timing_transitions, read_version_bits};
 use crate::LumaView;
@@ -107,6 +112,28 @@ pub struct DecodedCode {
     /// The three [`FinderCandidate`] indices this decode consumed —
     /// identical to the winning [`TripletCandidate::finder_indices`].
     pub finder_indices: [usize; 3],
+    /// Subpixel-refined TL/TR/BR/BL module-region corners, in SOURCE px
+    /// (Plan 5 Task 3) — `None` when `ScanOptions::refine` was `false`, or
+    /// `true` but [`crate::refine::refine_corners`] produced fewer than 2
+    /// valid edge lines (see that function's doc). `corners` above always
+    /// stays WORKING px regardless; convert it to source px yourself
+    /// (`working_px / source_scale`, per-axis via `Detections::source_scale`'s
+    /// doc) if you need to compare the two spaces directly — this field is
+    /// never a scaled copy of `corners`, it's an independent, more precise
+    /// estimate traced directly against the source image.
+    pub refined_corners: Option<[[f64; 2]; 4]>,
+    /// Per-corner refinement provenance for `refined_corners`, `[TL, TR,
+    /// BR, BL]` (final-review carried item: this was previously buried
+    /// inside the trace-only `RefineTrace::corner_refined` — `Trace` is
+    /// opt-in per call, so a caller reading `refined_corners` without a
+    /// `Trace` had no way to tell a genuinely-refined corner from one that
+    /// silently fell back to the coarse, source-scaled position — see
+    /// `refined_corners`'s own doc for that fallback rule). `[false; 4]`
+    /// when `refined_corners` is `None` (refinement didn't run, or ran and
+    /// produced fewer than 2 valid edge lines); mirrors
+    /// `crate::refine::RefinedCorners::corner_refined` field-for-field when
+    /// `refined_corners` is `Some`.
+    pub corner_refined: [bool; 4],
 }
 
 /// One decode attempt's trace, whether it succeeded or failed — every
@@ -127,13 +154,15 @@ pub struct DecodeAttemptTrace {
     /// The triplet's own snapped dimension estimate, before any
     /// cross-check.
     pub dimension_est: u32,
-    /// The dimension actually used to build the sampled grid (post timing
-    /// cross-check and/or version-bits override, whichever ran).
+    /// The dimension actually used to build the sampled grid (post
+    /// version-bits override, the only stage that can ever change it — see
+    /// the module doc).
     pub dimension_final: u32,
     /// The timing cross-check's raw reading (`transitions + 13`), if the
     /// walk completed — `None` if it wasn't run (estimate > 41) or the walk
-    /// left the image. Recorded even when the reading disagreed enough
-    /// with `dimension_est` to be discarded (see the module doc).
+    /// left the image. Diagnostic only: this reading is never adopted into
+    /// `dimension_final` (see the module doc), so it's recorded here
+    /// unconditionally rather than only on disagreement.
     pub timing_check: Option<u32>,
     /// The version decoded from the version-info bits, if it was run
     /// (implied version >= 7) and BCH-decoded successfully.
@@ -250,7 +279,7 @@ fn round_name(mode: EdgeFitMode) -> &'static str {
 /// assumes stages run one after another as whole phases — true for
 /// tiles/finders/triplets, but not for decode: version-check, alignment,
 /// and sample+decode each run *per attempt*, interleaved across up to
-/// [`MAX_DECODE_ATTEMPTS`] candidates, so there is no single contiguous
+/// [`MAX_DECODE_ROUNDS`] rounds of decode work, so there is no single contiguous
 /// span the caller could wrap per stage. Accumulating the three totals in
 /// here instead (still built from [`StageClock`], just called at this
 /// level rather than `scanner.rs`'s) is the only way to produce the plan's
@@ -267,6 +296,12 @@ pub(crate) struct DecodeTimings {
     /// together per the plan's field list, which names one
     /// `sample_decode_ns`, not two).
     pub sample_decode_ns: u64,
+    /// Subpixel corner refinement (Plan 5 Task 3), summed across every
+    /// attempt that actually ran `refine_corners` (i.e. decoded, with
+    /// `ScanOptions::refine == true`) — `0` whenever refinement is
+    /// disabled, matching every other field's "only counts attempts that
+    /// reached that stage" convention.
+    pub refine_ns: u64,
 }
 
 /// Count of finder indices `a` and `b` have in common (each triplet's three
@@ -343,6 +378,16 @@ struct AttemptResult {
     /// `Some` iff this attempt decoded (`code.is_some()`) AND `want_trace`
     /// was set — the sampled bit matrix behind that decode.
     bits_trace: Option<BitsTrace>,
+    /// This attempt's subpixel corner refinement diagnostics (Plan 5 Task
+    /// 3) — `Some` iff refinement actually ran (`refine == true` AND this
+    /// attempt decoded) AND produced a usable result (`refine_corners`
+    /// returned `Some`). Unlike `alignment_trace`/`sample_regions_trace`/
+    /// `bits_trace` this is populated regardless of `want_trace`: the data
+    /// is a fixed 4-element array of small integers/bools (no
+    /// `Vec`/homography-projection allocation), so gating it behind
+    /// `want_trace` would save essentially nothing while adding a second
+    /// code path.
+    refine_trace: Option<RefineTrace>,
 }
 
 /// Run the full per-candidate pipeline for one triplet: dimension
@@ -350,7 +395,18 @@ struct AttemptResult {
 /// doc for the stage-by-stage contract. Accumulates elapsed time for each
 /// of the three stage buckets into `timings`. `want_trace` gates the Task 6
 /// debug-trace fields on the returned `AttemptResult` (see its doc) — pass
-/// `false` from any caller that isn't collecting a `Trace` at all.
+/// `false` from any caller that isn't collecting a `Trace` at all. `source`
+/// (Plan 5 Task 2) is `Some` only when `scan()` downscaled the source image
+/// to build `view` — see [`sample_grid`]'s doc for exactly how it
+/// changes module sampling; every OTHER stage here (timing cross-check,
+/// version-info bits, alignment-pattern location) still runs on `view`
+/// (the WORKING view) regardless, per the plan's scope note. `refine`
+/// (Plan 5 Task 3) enables subpixel corner refinement on a successful
+/// decode — against `source.view` when `source` is `Some`, else against
+/// `view` itself with `sx = sy = 1.0` (source == working: refinement still
+/// runs when no downscale happened, it just has nothing to lift — see
+/// `refine::refine_corners`'s doc).
+#[allow(clippy::too_many_arguments)]
 fn attempt_candidate(
     view: &LumaView,
     grid: &TileGrid,
@@ -358,6 +414,8 @@ fn attempt_candidate(
     t: &TripletCandidate,
     timings: &mut DecodeTimings,
     want_trace: bool,
+    source: Option<SourceView>,
+    refine: bool,
 ) -> AttemptResult {
     let dimension_est = t.dimension;
 
@@ -393,11 +451,31 @@ fn attempt_candidate(
                 3 => Some(timing_dim as i64 + 1),
                 _ => None, // equidistant between two lattice values
             };
+            // Plan 5 Task 6 (perf cleanup, provably-dead branch removed):
+            // this used to be `if (snapped - dimension).abs() <= 2 &&
+            // snapped != dimension { dimension = snapped; ... }` — an
+            // "adopt the timing reading" branch that can never actually
+            // run. `snapped` (every `Some` arm above) and `dimension`
+            // (always `t.dimension`, itself always a QR lattice value from
+            // `triplet.rs`'s own snapping) are BOTH `== 1 (mod 4)`, so
+            // `snapped - dimension` is always a multiple of 4 — the only
+            // multiple of 4 with `abs(..) <= 2` is 0, which the `!=`
+            // half of the old condition excluded. So the adoption
+            // could only ever confirm `dimension`, never change it,
+            // exactly as this function's doc already says ("the brief's
+            // +/-2 adoption tolerance means the snapped reading can only
+            // ever *confirm* the estimate"). Kept as a debug_assert of
+            // that lattice invariant, rather than silent dead code, so a
+            // future change to either snapping scheme trips it instead of
+            // quietly reintroducing an unreachable branch.
             if let Some(snapped) = snapped {
-                if (snapped - dimension as i64).abs() <= 2 && snapped != dimension as i64 {
-                    dimension = snapped as u32;
-                    transform = provisional_transform(t, dimension);
-                }
+                debug_assert_eq!(
+                    (snapped - dimension as i64).rem_euclid(4),
+                    0,
+                    "lattice-snapped timing reading {snapped} and dimension estimate {dimension} \
+                     should both sit on the QR dimension lattice (== 1 mod 4), so their \
+                     difference should always be a multiple of 4",
+                );
             }
         }
     }
@@ -426,6 +504,7 @@ fn attempt_candidate(
             alignment_trace: Vec::new(),
             sample_regions_trace: Vec::new(),
             bits_trace: None,
+            refine_trace: None,
         };
     }
 
@@ -461,9 +540,10 @@ fn attempt_candidate(
         .count() as u32;
     // Task 6: only built when a trace was actually requested (review
     // finding: unconditionally building this — and the homography-heavy
-    // `sample_regions_trace`/`bits_trace` below — on every one of up to
-    // `MAX_DECODE_ATTEMPTS` attempts per frame is real, avoidable work on
-    // the untraced hot path `detect()`/`with_trace: false` take).
+    // `sample_regions_trace`/`bits_trace` below — on every attempt this
+    // frame (bounded by [`MAX_DECODE_ROUNDS`]'s per-frame round budget) is
+    // real, avoidable work on the untraced hot path
+    // `detect()`/`with_trace: false` take).
     let alignment_trace =
         if want_trace { alignment.to_trace_entries() } else { Vec::new() };
 
@@ -478,6 +558,12 @@ fn attempt_candidate(
         payload: Option<crate::bitmatrix::DecodedPayload>,
         sample_regions_trace: Vec<SampleRegionTrace>,
         bits_trace: Option<BitsTrace>,
+        /// The actual bit matrix behind a successful `payload` (`None`
+        /// otherwise) — Plan 5 Task 3's `refine_corners` needs the real
+        /// [`BitMatrix`], not just its packed `BitsTrace` form, and
+        /// unconditionally (regardless of `want_trace`), so this is a
+        /// separate field rather than reusing `bits_trace`.
+        bits: Option<BitMatrix>,
         /// `true` iff this round's `payload` came from Plan 4B Fix B's
         /// reference-threshold + sharpening retry (below) rather than the
         /// primary tile-threshold `bits` — the caller extends this round's
@@ -500,7 +586,7 @@ fn attempt_candidate(
             transform.map(1.0, 1.0),
             transform.map(0.0, 1.0),
         ];
-        let sampled = match sample_grid(view, grid, t, dimension, &alignment, refined_br) {
+        let sampled = match sample_grid(view, grid, t, dimension, &alignment, refined_br, source) {
             Some(s) => s,
             None => {
                 return RoundOutcome {
@@ -510,6 +596,7 @@ fn attempt_candidate(
                     payload: None,
                     sample_regions_trace: Vec::new(),
                     bits_trace: None,
+                    bits: None,
                     used_refbits: false,
                 }
             }
@@ -562,6 +649,7 @@ fn attempt_candidate(
                 payload: None,
                 sample_regions_trace,
                 bits_trace: None,
+                bits: None,
                 used_refbits: false,
             };
         }
@@ -605,6 +693,7 @@ fn attempt_candidate(
                         payload: Some(payload),
                         sample_regions_trace: sample_regions_trace.clone(),
                         bits_trace,
+                        bits: Some(bits.clone()),
                         used_refbits,
                     }
                 }
@@ -615,6 +704,7 @@ fn attempt_candidate(
                     payload: None,
                     sample_regions_trace: sample_regions_trace.clone(),
                     bits_trace: None,
+                    bits: None,
                     used_refbits: false,
                 },
             }
@@ -664,6 +754,7 @@ fn attempt_candidate(
     let mut payload = first.payload;
     let mut sample_regions_trace = first.sample_regions_trace;
     let mut bits_trace = first.bits_trace;
+    let mut winning_bits = first.bits;
     let mut refined_corner = false;
 
     // Task 5b: only when that round fails Reed-Solomon decode AND the
@@ -708,12 +799,37 @@ fn attempt_candidate(
                 payload = r.payload;
                 sample_regions_trace = r.sample_regions_trace;
                 bits_trace = r.bits_trace;
+                winning_bits = r.bits;
                 refined_corner = true;
                 break;
             }
         }
     }
     timings.sample_decode_ns += sample_decode_clock.elapsed_ns();
+
+    // Plan 5 Task 3: subpixel corner refinement, against the SOURCE image
+    // when a downscale happened, else `view` itself (source == working,
+    // `sx = sy = 1.0` — refinement still runs; see this function's doc).
+    // Only attempted on an actual decode (`winning_bits` is `Some` only
+    // then — see `RoundOutcome::bits`'s doc), and timed separately from
+    // `sample_decode_ns` (its own `StageTimings` row).
+    let refine_result = if refine {
+        winning_bits.as_ref().and_then(|bits| {
+            let (refine_source, sx, sy) = match source {
+                Some(sv) => (sv.view, sv.sx, sv.sy),
+                None => (view, 1.0, 1.0),
+            };
+            let refine_clock = StageClock::start();
+            let result = refine_corners(refine_source, sx, sy, &corners, bits, t.inverted);
+            timings.refine_ns += refine_clock.elapsed_ns();
+            result
+        })
+    } else {
+        None
+    };
+    let refined_corners = refine_result.as_ref().map(|r| r.corners);
+    let corner_refined = corner_refined_flags(refine_result.as_ref());
+    let refine_trace = refine_result.as_ref().map(|r| r.to_trace());
 
     AttemptResult {
         trace: DecodeAttemptTrace {
@@ -739,11 +855,27 @@ fn attempt_candidate(
             corners,
             inverted: t.inverted,
             finder_indices: t.finder_indices,
+            refined_corners,
+            corner_refined,
         }),
         alignment_trace,
         sample_regions_trace,
         bits_trace,
+        refine_trace,
     }
+}
+
+/// `DecodedCode::corner_refined`'s plumbing: `[false; 4]` when refinement
+/// didn't run or produced `None` (see `DecodedCode::refined_corners`'s doc
+/// for both cases), else a field-for-field copy of the successful
+/// [`RefinedCorners::corner_refined`] — never re-derived here, so this can
+/// never disagree with the per-corner fallback [`refine_round`] itself
+/// already decided. Pulled out as its own function (rather than inlined at
+/// the `DecodedCode` literal) so it has a unit-testable seam independent of
+/// running the full image pipeline — see the `corner_refined_flags_*` tests
+/// below.
+fn corner_refined_flags(refine_result: Option<&RefinedCorners>) -> [bool; 4] {
+    refine_result.map(|r| r.corner_refined).unwrap_or([false; 4])
 }
 
 /// Decode every plausible QR code in one frame: proximity-dedup `triplets`,
@@ -765,19 +897,30 @@ fn attempt_candidate(
 /// built only when `want_trace` is set (pass `trace.is_some()` from
 /// `detect_with` — see [`AttemptResult`]'s doc for why this matters: the
 /// per-attempt trace data is otherwise-avoidable homography/allocation work
-/// on every one of up to [`MAX_DECODE_ATTEMPTS`] attempts).
+/// on every attempt this frame runs, bounded by [`MAX_DECODE_ROUNDS`]'s
+/// round budget — see the loop below). `source` (Plan 5
+/// Task 2) is threaded straight through to every [`attempt_candidate`] call
+/// unchanged — see that function's doc; so is `refine` (Plan 5 Task 3).
 pub(crate) fn decode_candidates(
     view: &LumaView,
     grid: &TileGrid,
     finders: &[FinderCandidate],
     triplets: &[TripletCandidate],
     want_trace: bool,
+    source: Option<SourceView>,
+    refine: bool,
 ) -> (Vec<DecodedCode>, Vec<DecodeAttemptTrace>, DecodeTimings, DecodeTraceData) {
-    let mut timings = DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0 };
+    let mut timings =
+        DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0, refine_ns: 0 };
     let mut consumed = vec![false; finders.len()];
     let mut codes = Vec::new();
     let mut attempts = Vec::new();
-    let mut attempts_run = 0usize;
+    // Plan 5 Task 6: budgeted in ROUNDS (one `sample_grid`+`decode_bits`
+    // cycle each — see [`MAX_DECODE_ROUNDS`]'s doc), not attempts. Checked
+    // once per attempt (rotation), before it runs, so an attempt already
+    // under way always completes — the worst-case overrun is bounded by
+    // the most expensive single attempt (3 rounds), not unbounded.
+    let mut rounds_run = 0usize;
     // Plan 4B Fix A (trace honesty): two independent captures, resolved
     // into the actual `DecodeTraceData` after the loop (see the doc there
     // for the full rule). `first_*`: the FIRST attempt run this frame —
@@ -799,6 +942,7 @@ pub(crate) fn decode_candidates(
     let mut decoded_alignment: Vec<AlignmentTraceEntry> = Vec::new();
     let mut decoded_sample_regions: Vec<SampleRegionTrace> = Vec::new();
     let mut decoded_bits: Option<BitsTrace> = None;
+    let mut decoded_refine: Option<RefineTrace> = None;
 
     'candidates: for idx in dedup_triplet_indices(triplets) {
         let t = &triplets[idx];
@@ -812,16 +956,16 @@ pub(crate) fn decode_candidates(
         // heuristic that steep perspective can fool (observed on
         // `tilt45_04`: the detected roles were one cyclic rotation off,
         // making the sampled matrix a 90-degree-rotated read that can
-        // never decode). Each rotation is a full, capped, traced attempt —
-        // this is exactly the "3 triplet permutations" already budgeted in
-        // `MAX_DECODE_ATTEMPTS`'s pinned provenance (4 codes x 3
-        // permutations x 2 headroom). Rotations after the first only run
+        // never decode). Each rotation is a full, traced attempt, itself
+        // costing 1-3 rounds against the [`MAX_DECODE_ROUNDS`] budget below
+        // — see that constant's doc for the "3 triplet permutations * 3
+        // geometry rounds" provenance. Rotations after the first only run
         // when the previous one failed; `decode_bits` is RS-validated, so
         // a wrong rotation can never decode into a wrong payload. Cyclic
         // rotations preserve the tl/tr/bl cross-product orientation
         // convention, so the rotated candidate is still canonical.
         for rotation in 0..3 {
-            if attempts_run >= MAX_DECODE_ATTEMPTS {
+            if rounds_run >= MAX_DECODE_ROUNDS {
                 break 'candidates;
             }
             let rotated = if rotation == 0 {
@@ -836,9 +980,21 @@ pub(crate) fn decode_candidates(
                 r.finder_indices = [i[k % 3], i[(k + 1) % 3], i[(k + 2) % 3]];
                 r
             };
-            attempts_run += 1;
 
-            let result = attempt_candidate(view, grid, idx, &rotated, &mut timings, want_trace);
+            let result =
+                attempt_candidate(view, grid, idx, &rotated, &mut timings, want_trace, source, refine);
+            // Each entry in `result.trace.rounds` is one `run_round` call
+            // (`sample_grid`+`decode_bits`, optionally with Fix B's
+            // same-grays refbits retry folded in — see
+            // `MAX_DECODE_ROUNDS`'s doc for why that retry doesn't count as
+            // its own round) — the actual, honest cost of this attempt.
+            // `.max(1)`: the `invalid_dimension` early return (before any
+            // `run_round` call — see `attempt_candidate`'s bounds check)
+            // is the one path with a genuinely empty `rounds`; floored at 1
+            // so a frame full of such trivially-rejected candidates still
+            // makes bounded, budget-consuming progress rather than
+            // bypassing the cap entirely.
+            rounds_run += result.trace.rounds.len().max(1);
             let decoded = result.code.is_some();
             // Fix A: the very first attempt run this frame, full stop —
             // canonical (rotation 0) corner roles, captured once and never
@@ -858,6 +1014,7 @@ pub(crate) fn decode_candidates(
                 decoded_alignment = result.alignment_trace.clone();
                 decoded_sample_regions = result.sample_regions_trace.clone();
                 decoded_bits = result.bits_trace.clone();
+                decoded_refine = result.refine_trace.clone();
             }
             if let Some(code) = result.code {
                 for &i in &rotated.finder_indices {
@@ -883,12 +1040,14 @@ pub(crate) fn decode_candidates(
             alignment: decoded_alignment,
             sample_regions: decoded_sample_regions,
             bits: decoded_bits,
+            refine: decoded_refine,
         }
     } else {
         DecodeTraceData {
             alignment: first_alignment,
             sample_regions: first_sample_regions,
             bits: None,
+            refine: None,
         }
     };
     (codes, attempts, timings, trace_data)
@@ -930,6 +1089,11 @@ pub(crate) struct DecodeTraceData {
     /// The most recently decoded candidate's sampled bit matrix, `None` if
     /// nothing decoded this frame — unchanged from the pre-Fix-A contract.
     pub bits: Option<BitsTrace>,
+    /// The most recently decoded candidate's subpixel corner refinement
+    /// diagnostics (Plan 5 Task 3) — same selection rule as `bits`: `None`
+    /// if nothing decoded this frame, refinement was disabled, or
+    /// refinement ran but produced fewer than 2 valid edge lines.
+    pub refine: Option<RefineTrace>,
 }
 
 #[cfg(test)]
@@ -1054,7 +1218,7 @@ mod tests {
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
         assert_eq!(attempts.len(), 1);
         assert_eq!(attempts[0].outcome, "decoded");
         assert_eq!(codes.len(), 1);
@@ -1095,7 +1259,7 @@ mod tests {
         let wrong_est_dim = dim - 4; // v39's dimension (173), one version step short of the true v40 (177).
         let t = triplet_from_transform(&transform, dim, wrong_est_dim as u32);
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
         assert_eq!(attempts.len(), 1, "{attempts:?}");
         assert_eq!(attempts[0].dimension_est, wrong_est_dim as u32);
         assert_eq!(attempts[0].dimension_final, dim as u32);
@@ -1136,7 +1300,7 @@ mod tests {
         let triplets = [worse, better];
 
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), &triplets, false);
+            decode_candidates(&view, &grid, &dummy_finders(3), &triplets, false, None, false);
         assert_eq!(codes.len(), 1, "expected exactly one decode, no spurious duplicate");
         assert_eq!(attempts.len(), 1, "the duplicate must be deduped away before attempting");
         assert_eq!(attempts[0].triplet_index, 1, "the lower-snap_error (index 1) survivor must be the one attempted");
@@ -1166,7 +1330,7 @@ mod tests {
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
         assert!(codes.is_empty());
         // One attempt per corner-role rotation (all fail), each rejected
         // by the OOB gate before decode.
@@ -1192,24 +1356,39 @@ mod tests {
             finder_indices: [0, 1, 2],
         };
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
         assert!(codes.is_empty());
-        // One attempt per corner-role rotation, all failing cleanly.
+        // One attempt per corner-role rotation, all failing cleanly. Each
+        // costs exactly 1 round (confirmed via `rounds`: no alignment
+        // pattern at v1 makes `needs_refined_br` true, but on this flat
+        // 128-gray image `refine_fourth_corner` finds no usable edge
+        // transition to probe at all, so the Task 5b retry loop never
+        // actually runs a second `run_round` call) — the companion
+        // round-budget test below relies on this same cost.
         assert_eq!(attempts.len(), 3);
+        assert!(attempts.iter().all(|a| a.rounds.len() == 1), "{attempts:?}");
         assert!(attempts.iter().all(|a| a.outcome != "decoded"));
     }
 
     #[test]
-    fn attempt_cap_limits_total_attempts_even_with_many_disjoint_candidates() {
-        // MAX_DECODE_ATTEMPTS + a handful more disjoint (no shared finders)
+    fn round_budget_limits_total_rounds_even_with_many_disjoint_candidates() {
+        // MAX_DECODE_ROUNDS + a handful more disjoint (no shared finders)
         // bogus triplets over a flat image: dedup keeps all of them (no
-        // finder overlap), but the cap must stop attempts at
-        // MAX_DECODE_ATTEMPTS regardless.
+        // finder overlap), but the round budget must stop total decode
+        // work at MAX_DECODE_ROUNDS regardless of how many more candidates
+        // are supplied (Plan 5 Task 6: this test used to size `total` off
+        // `MAX_DECODE_ATTEMPTS` and assert `attempts.len() ==
+        // MAX_DECODE_ATTEMPTS`; the cap is now denominated in rounds, not
+        // attempts — see that constant's doc). This exact geometry costs
+        // 1 round/attempt (pinned by
+        // `garbage_triplet_fails_cleanly_without_panicking` just above),
+        // so the round budget and the attempt count coincide here,
+        // letting this test still assert an exact number.
         let img = vec![128u8; 64 * 64];
         let view = LumaView::new(&img, 64, 64, 64).unwrap();
         let grid = TileGrid::build(&view);
         let extra = 5;
-        let total = MAX_DECODE_ATTEMPTS + extra;
+        let total = MAX_DECODE_ROUNDS + extra;
         let triplets: Vec<TripletCandidate> = (0..total)
             .map(|i| TripletCandidate {
                 tl: [10.0, 10.0],
@@ -1223,9 +1402,11 @@ mod tests {
             })
             .collect();
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(total * 3), &triplets, false);
+            decode_candidates(&view, &grid, &dummy_finders(total * 3), &triplets, false, None, false);
         assert!(codes.is_empty());
-        assert_eq!(attempts.len(), MAX_DECODE_ATTEMPTS);
+        assert_eq!(attempts.len(), MAX_DECODE_ROUNDS);
+        let rounds_run: usize = attempts.iter().map(|a| a.rounds.len().max(1)).sum();
+        assert_eq!(rounds_run, MAX_DECODE_ROUNDS, "budget must bind exactly at 1 round/attempt on this geometry");
     }
 
     // --- Task 5b: image-derived 4th corner + corner-role rotation ---
@@ -1272,7 +1453,7 @@ mod tests {
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "KEYSTONE");
         // The decode must have come through the image-derived corner — the
@@ -1340,7 +1521,7 @@ mod tests {
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "MULTIREGIONKEYSTONE");
 
@@ -1404,7 +1585,7 @@ mod tests {
         rotated.finder_indices = [1, 2, 0];
 
         let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&rotated), false);
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&rotated), false, None, false);
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "ROTROLE");
         assert!(
@@ -1449,8 +1630,8 @@ mod tests {
         // attempt (candidate A, rotation 0 — i.e. `a` unrotated) produces,
         // computed directly via `attempt_candidate` so this test doesn't
         // need to hand-derive the sampled quad geometry itself.
-        let mut timings = DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0 };
-        let expected = attempt_candidate(&view, &grid, 0, &a, &mut timings, true);
+        let mut timings = DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0, refine_ns: 0 };
+        let expected = attempt_candidate(&view, &grid, 0, &a, &mut timings, true, None, false);
         assert!(expected.code.is_none(), "test setup: candidate A must not decode");
         assert!(
             !expected.sample_regions_trace.is_empty(),
@@ -1458,7 +1639,7 @@ mod tests {
         );
 
         let (codes, attempts, _timings, trace_data) =
-            decode_candidates(&view, &grid, &dummy_finders(6), &[a, b], true);
+            decode_candidates(&view, &grid, &dummy_finders(6), &[a, b], true, None, false);
         assert!(codes.is_empty(), "test setup: nothing in this frame should decode");
         assert!(
             attempts.len() > 1,
@@ -1514,7 +1695,7 @@ mod tests {
         garbage.finder_indices = [3, 4, 5];
 
         let (codes, attempts, _timings, trace_data) = decode_candidates(
-            &view, &grid, &dummy_finders(6), &[good, garbage], true,
+            &view, &grid, &dummy_finders(6), &[good, garbage], true, None, false,
         );
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "FIXAORDER");
@@ -1572,12 +1753,12 @@ mod tests {
 
         // Ground truth: the decoded attempt's own trace, computed directly
         // (same technique as the total-failure test above).
-        let mut timings = DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0 };
-        let expected = attempt_candidate(&view, &grid, 1, &good, &mut timings, true);
+        let mut timings = DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0, refine_ns: 0 };
+        let expected = attempt_candidate(&view, &grid, 1, &good, &mut timings, true, None, false);
         assert!(expected.code.is_some(), "test setup: the good candidate must decode on its own");
 
         let (codes, attempts, _timings, trace_data) =
-            decode_candidates(&view, &grid, &dummy_finders(6), &[garbage, good], true);
+            decode_candidates(&view, &grid, &dummy_finders(6), &[garbage, good], true, None, false);
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "LATERWINS");
         assert!(
@@ -1607,5 +1788,75 @@ mod tests {
         let want_bits = expected.bits_trace.expect("expected attempt decoded, so it carries bits");
         assert_eq!(bits.dim, want_bits.dim);
         assert_eq!(bits.words, want_bits.words, "bits must be the decoded candidate's matrix");
+    }
+
+    // --- `DecodedCode::corner_refined` plumbing (final-review carried item) ---
+
+    #[test]
+    fn corner_refined_flags_is_all_false_when_refinement_did_not_run() {
+        assert_eq!(corner_refined_flags(None), [false; 4]);
+    }
+
+    #[test]
+    fn corner_refined_flags_plumbs_a_hand_built_partial_array_unchanged() {
+        // Hand-built directly (no image, no real `refine_corners` call) with
+        // a PARTIAL flags array — two corners refined, two fell back to the
+        // coarse position — so this can't pass by accident the way an
+        // always-true or always-`[false; 4]` result would: it specifically
+        // pins that `corner_refined_flags` copies `RefinedCorners`'s array
+        // through verbatim rather than, say, collapsing it to "any true" or
+        // re-deriving it some other way.
+        let partial = [true, false, true, false];
+        let rc = RefinedCorners {
+            corners: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            edge_stats: [crate::refine::EdgeStat::default(); 4],
+            corner_refined: partial,
+        };
+        assert_eq!(corner_refined_flags(Some(&rc)), partial);
+    }
+
+    #[test]
+    fn decode_candidates_populates_corner_refined_all_true_on_a_clean_frontal_render() {
+        // Golden-fixture check (review-flagged gap: `corner_refined` was
+        // otherwise never asserted on ANY decoded code, real or synthetic —
+        // only `refined_corners.is_some()` was, which as `refine_round`'s
+        // per-corner fallback shows is not the same claim). A clean,
+        // antialiased, frontal v1 render is the easy case every edge is
+        // expected to fit in: this pins the happy path all the way through
+        // `attempt_candidate` -> `corner_refined_flags` -> `DecodedCode`,
+        // independent of the hand-built unit test above (which never
+        // exercises real image sampling or `refine_round`'s own is-this-
+        // corner-refined decision, only the copy-through afterward).
+        let version = 1i16;
+        let dim = 17 + 4 * version as usize;
+        let scale = 8.0;
+        let (quad, img_side) = axis_aligned_quad(dim, scale, 4.0);
+        let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
+        let code = qrcode::QrCode::with_version(
+            b"CORNERFLAGS", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+        )
+        .unwrap();
+        assert_eq!(code.width(), dim);
+        let img = crate::testpaint::render_module_grid_transformed_antialiased(
+            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side, 8,
+        );
+        let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
+        let grid = TileGrid::build(&view);
+
+        let t = triplet_from_transform(&transform, dim, dim as u32);
+        let (codes, attempts, _timings, ..) =
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, true);
+        assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
+        assert_eq!(codes[0].payload, "CORNERFLAGS");
+        assert!(
+            codes[0].refined_corners.is_some(),
+            "test setup: refinement must succeed on this clean render"
+        );
+        assert_eq!(
+            codes[0].corner_refined,
+            [true, true, true, true],
+            "expected every corner refined on a clean frontal render, got {:?}",
+            codes[0].corner_refined
+        );
     }
 }

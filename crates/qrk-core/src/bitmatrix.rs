@@ -15,11 +15,29 @@
 ///
 /// Coordinates are `(x, y)` = `(column, row)`, matching the `qrcode` crate's
 /// `code[(x, y)]` indexing used to build matrices in tests.
+///
+/// `Clone` (Plan 5 Task 3): `decode.rs` keeps a copy of whichever bit
+/// matrix actually decoded (tile-threshold or Fix B's reference-threshold
+/// retry) around after its originating `sample_grid`/`build_reference_
+/// threshold_bits` call returns, so `refine_corners` can read border-module
+/// darkness from it regardless of whether a `Trace` was requested — a
+/// cheap clone (a `Vec<u32>` of at most `ceil(177/32) * 177 ≈ 1062` words
+/// even at the largest QR version).
+#[derive(Clone)]
 pub struct BitMatrix {
     /// Row/column count (QR codes are always square).
     pub dim: usize,
     /// Row-major packed storage: `ceil(dim/32)` `u32` words per row.
     words: Vec<u32>,
+    /// `dim.div_ceil(32).max(1)`, hoisted at construction time (Plan 5 Task
+    /// 6 perf cleanup). `dim` never changes after `new`, so re-deriving
+    /// this via integer division on every single `get`/`set` call was
+    /// duplicated work at the hottest possible call site: a v40 grid is
+    /// 177x177 = 31,329 modules, and `sample_grid`/`decode_bits`/
+    /// `refine_corners` each sweep the whole grid at least once per decode
+    /// attempt — tens of thousands of avoidable divisions per attempt at
+    /// the largest version.
+    words_per_row: usize,
 }
 
 impl BitMatrix {
@@ -29,23 +47,24 @@ impl BitMatrix {
         BitMatrix {
             dim,
             words: vec![0u32; words_per_row * dim],
+            words_per_row,
         }
     }
 
     /// Number of `u32` words used to store one row.
     pub fn words_per_row(&self) -> usize {
-        self.dim.div_ceil(32).max(1)
+        self.words_per_row
     }
 
     /// Read the module at column `x`, row `y`. `true` = dark.
     pub fn get(&self, x: usize, y: usize) -> bool {
-        let word = self.words[y * self.words_per_row() + x / 32];
+        let word = self.words[y * self.words_per_row + x / 32];
         (word >> (x % 32)) & 1 != 0
     }
 
     /// Set the module at column `x`, row `y`. `true` = dark.
     pub fn set(&mut self, x: usize, y: usize, v: bool) {
-        let idx = y * self.words_per_row() + x / 32;
+        let idx = y * self.words_per_row + x / 32;
         let bit = 1u32 << (x % 32);
         if v {
             self.words[idx] |= bit;

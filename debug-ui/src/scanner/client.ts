@@ -57,6 +57,14 @@ export class WorkerInitTimeoutError extends Error {
 export interface ScanOptions {
   maxDim: number;
   withTrace: boolean;
+  /** Enables subpixel corner refinement (Plan 5 Task 3 — see
+   * `qrk_core::ScanOptions::refine`'s doc): when `true`, each decoded
+   * code's `refined_corners` is populated (source px) instead of staying
+   * `null`. Optional, defaulting to `false` in `start()` — media mode's
+   * `App.tsx` passes `refine: true` explicitly (Plan 5 Task 7 QA fix), and
+   * Scene3D hardcodes it the same way; a caller that omits this field
+   * entirely still gets the `false` default. */
+  refine?: boolean;
 }
 
 export interface ScanOutcome {
@@ -74,6 +82,7 @@ interface ScanRequestMessage {
   height: number;
   maxDim: number;
   withTrace: boolean;
+  refine: boolean;
 }
 
 interface PendingScan {
@@ -211,6 +220,7 @@ export class ScannerClient {
       height: pending.height,
       maxDim: pending.opts.maxDim,
       withTrace: pending.opts.withTrace,
+      refine: pending.opts.refine ?? false,
     };
     this.worker.postMessage(message, [buffer]);
   }

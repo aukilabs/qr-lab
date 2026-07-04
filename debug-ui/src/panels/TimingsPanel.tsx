@@ -79,8 +79,9 @@ function drawSparkline(ctx: CanvasRenderingContext2D, values: readonly number[])
 
 /**
  * Table of per-stage detection timings (tiles/finders/triplets plus the
- * Plan 4 decode-stage totals version/alignment/sample+decode, from
- * `detections.timings` — real wasm `StageClock` measurements as of Plan 3
+ * Plan 4 decode-stage totals version/alignment/sample+decode, and Plan 5
+ * Task 3's refine, from `detections.timings` — real wasm `StageClock`
+ * measurements as of Plan 3
  * Task 5, ms-resolution via `js_sys::Date::now()`) plus worker wall time
  * and main-thread round-trip time, each with a 60-sample rolling
  * sparkline. Values format via `formatNs`/`formatMs` (timings-model.ts) —
@@ -114,6 +115,10 @@ export function TimingsPanel({ sample, sampleId }: TimingsPanelProps) {
         format: formatNs,
         pick: (s) => s.timings.sample_decode_ns,
       },
+      // Plan 5 Task 3: subpixel corner refinement — 0ns whenever
+      // `ScanOptions.refine` is `false` (the default), same "n/a" reading
+      // `formatNs` already gives any other stage that didn't run.
+      { label: "refine", buffer: new RollingBuffer(), format: formatNs, pick: (s) => s.timings.refine_ns },
       { label: "worker wall", buffer: new RollingBuffer(), format: formatMs, pick: (s) => s.wallMs },
       { label: "round trip", buffer: new RollingBuffer(), format: formatMs, pick: (s) => s.roundTripMs },
     ],

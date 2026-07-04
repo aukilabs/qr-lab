@@ -37,7 +37,9 @@ describe("alignmentLayer", () => {
           version_ns: 0,
           alignment_ns: 0,
           sample_decode_ns: 0,
+          refine_ns: 0,
         },
+        source_scale: 1,
       },
       trace: null,
     };
@@ -60,7 +62,9 @@ describe("alignmentLayer", () => {
           version_ns: 0,
           alignment_ns: 0,
           sample_decode_ns: 0,
+          refine_ns: 0,
         },
+        source_scale: 1,
       },
       trace: {
         tiles: null,
@@ -70,6 +74,7 @@ describe("alignmentLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     alignmentLayer.draw(ctx);
@@ -91,7 +96,9 @@ describe("alignmentLayer", () => {
           version_ns: 0,
           alignment_ns: 0,
           sample_decode_ns: 0,
+          refine_ns: 0,
         },
+        source_scale: 1,
       },
       trace: {
         tiles: null,
@@ -101,6 +108,7 @@ describe("alignmentLayer", () => {
         alignment: [{ predicted: [10, 20], found: null }],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     alignmentLayer.draw(ctx);
@@ -128,7 +136,9 @@ describe("alignmentLayer", () => {
           version_ns: 0,
           alignment_ns: 0,
           sample_decode_ns: 0,
+          refine_ns: 0,
         },
+        source_scale: 1,
       },
       trace: {
         tiles: null,
@@ -141,6 +151,7 @@ describe("alignmentLayer", () => {
         ],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     alignmentLayer.draw(ctx);

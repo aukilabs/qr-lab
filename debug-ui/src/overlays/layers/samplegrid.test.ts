@@ -22,6 +22,7 @@ const EMPTY_TIMINGS = {
   version_ns: 0,
   alignment_ns: 0,
   sample_decode_ns: 0,
+  refine_ns: 0,
 };
 
 describe("samplegridLayer", () => {
@@ -35,7 +36,7 @@ describe("samplegridLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],
@@ -44,6 +45,7 @@ describe("samplegridLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     samplegridLayer.draw(ctx);
@@ -54,7 +56,7 @@ describe("samplegridLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],
@@ -82,6 +84,7 @@ describe("samplegridLayer", () => {
           },
         ],
         bits: null,
+        refine: null,
       },
     };
     samplegridLayer.draw(ctx);
@@ -98,7 +101,7 @@ describe("samplegridLayer", () => {
     const ctx = baseContext(fake);
     ctx.view = { scale: 2, tx: 10, ty: 5 };
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],
@@ -117,6 +120,7 @@ describe("samplegridLayer", () => {
           },
         ],
         bits: null,
+        refine: null,
       },
     };
     samplegridLayer.draw(ctx);

@@ -22,11 +22,43 @@ full design.
   6 stage rows: tiles/finders/triplets/version/alignment/sample+decode).
   Gate: 81/81 synthetic fixtures + 93/93 codes decode correctly, plus both
   real-photo captures' payloads (OpenCV-confirmed).
-- **Corner refinement / subpixel accuracy (Plan 5): not started.** The
-  current per-code `corners` are the triplet/alignment-anchored homography
-  corners, not yet subpixel-refined against the source-resolution image —
-  see Plan 4's carried-forward follow-ups (`docs/superpowers/plans/`) for
-  the "decimate-detect, full-res-sample" approach this depends on.
+- **Corner refinement / subpixel accuracy (Plan 5): complete.** Each
+  decoded code's four module-region corners are refined against
+  full-SOURCE-resolution luma (Devernay edge localization + gradient-
+  weighted TLS line fit + intersection) and exposed as
+  `DecodedCode::refined_corners` (source px) alongside `source_scale`.
+  The pipeline is restructured around `scan()`: detection still runs at a
+  capped working resolution, but sampling and refinement read the source
+  view through a scale-composed transform, so far/small codes that
+  couldn't be sampled at working resolution now decode (`IMG_4832.png`
+  @1280 working: 3 triplets detect but 0 decode without this; 1 decodes
+  with it). Gates: fixture accuracy gate (`tests/refine_gate.rs`) locked
+  at **≤0.10px mean corner error, uniformly across every fixture prefix**
+  (near/rot/ver/far/tilt45/combo/trans/inv/invtrans/mirror/multi — the
+  controller extended the nominal-prefix bar to all of them once the
+  first green run measured every prefix at 0.008-0.039px, well inside
+  it); e.g. the `near_00` fixture (a rendered, blurred/noised image, not a
+  literal camera photo) goes from a 1.445px coarse mean to a **0.028px**
+  refined mean (98% error reduction). A debug-UI "3D Scene" mode (an
+  orbitable react-three-fiber scene with a live per-corner error panel)
+  is the plan's headline dev-tool feature — see `debug-ui/README.md`'s
+  "Mode 1" section for its architecture and QA-measured behavior.
+
+  **Perf** (release build, M-series host; `scan()` incl. refinement —
+  see `.superpowers/sdd/task-6-report.md` for the full re-baseline):
+
+  | Target | codes | tiles | finders | sample+decode | refine |
+  |---|---|---|---|---|---|
+  | `near_00` | 1 | 3.2ms | 6.9ms | 253us | 227us |
+  | `multi_07` | 4 | 3.2ms | 6.6ms | 775us | 369us |
+  | `ver_12_v40` (v40, worst case) | 1 | 3.1ms | 7.0ms | 19.6ms | 158us |
+  | `real_1.png` @1280 | 2 | 1.5ms | 1.7ms | 456us | 153us |
+  | `IMG_4832.png` @1280 | 1 | 1.5ms | 2.0ms | 1.2ms | 74us |
+
+  Refinement itself is consistently sub-millisecond (74-370us) even on
+  the largest legal QR (v40); `sample+decode` dominates, with v40's dense
+  177×177-module grid the clear outlier (19.6ms) — flagged as the
+  biggest target for the device/NEON plan, not addressed here.
 
 ## Layout
 

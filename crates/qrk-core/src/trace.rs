@@ -89,6 +89,39 @@ pub struct BitsTrace {
     pub words: Vec<u32>,
 }
 
+/// One outer module-region edge's subpixel refinement point counts (Plan 5
+/// Task 3) — mirrors `refine::EdgeStat`. Kept as a separate DTO (not a
+/// direct re-export) so `refine.rs`'s internal representation can evolve
+/// without touching the wire contract — the same separation
+/// `AlignmentTraceEntry`/`SampleRegionTrace` already establish for their
+/// own source modules.
+#[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct EdgeRefineTrace {
+    pub points_probed: u32,
+    pub points_fit: u32,
+    pub dropped_outliers: u32,
+    pub valid: bool,
+}
+
+/// Subpixel corner refinement diagnostics for the LAST decoded candidate
+/// this frame (Plan 5 Task 3) — same selection rule as
+/// `bits`/`alignment`/`sample_regions` (see `decode::DecodeTraceData`'s
+/// doc): `None` when nothing decoded this frame, refinement was disabled
+/// (`ScanOptions::refine == false`), or refinement ran but produced fewer
+/// than 2 valid edge lines (`refine::refine_corners` returned `None`).
+/// `edges` is `[top, right, bottom, left]` (module-space `y=0`, `x=dim`,
+/// `y=dim`, `x=0` — see `refine::EDGE_TO_CORNERS`'s doc); `corner_refined`
+/// is `[TL, TR, BR, BL]`, `true` where the corner came from intersecting
+/// its two adjacent edge lines rather than keeping the caller's unrefined
+/// (coarse, source-scaled) corner.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct RefineTrace {
+    pub edges: [EdgeRefineTrace; 4],
+    pub corner_refined: [bool; 4],
+}
+
 #[cfg(feature = "debug-trace")]
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -130,6 +163,10 @@ pub struct Trace {
     /// brought `alignment`/`sample_regions` INTO agreement with this field
     /// whenever anything decodes.
     pub bits: Option<BitsTrace>,
+    /// This frame's subpixel corner refinement diagnostics (Plan 5 Task 3)
+    /// — see [`RefineTrace`]'s doc for the selection rule and `None`
+    /// cases.
+    pub refine: Option<RefineTrace>,
 }
 
 #[cfg(feature = "debug-trace")]
@@ -172,6 +209,11 @@ impl Trace {
     pub fn record_bits(&mut self, bits: BitsTrace) {
         self.bits = Some(bits);
     }
+
+    #[inline]
+    pub fn record_refine(&mut self, refine: RefineTrace) {
+        self.refine = Some(refine);
+    }
 }
 
 /// Zero-field unit struct: `debug-trace` off. No-op inline methods let
@@ -209,4 +251,7 @@ impl Trace {
 
     #[inline]
     pub fn record_bits(&mut self, _bits: BitsTrace) {}
+
+    #[inline]
+    pub fn record_refine(&mut self, _refine: RefineTrace) {}
 }

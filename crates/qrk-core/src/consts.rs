@@ -62,15 +62,49 @@ pub const ALIGNMENT_PROBE_HALF_MODULES: f64 = 2.25;
 /// computes and returns `oob_fraction`; `decode.rs` applies this threshold.
 pub(crate) const MAX_OOB_FRACTION: f64 = 0.02;
 
-/// Candidate cap for `decode.rs`'s per-frame arbitration loop (Plan 4's
-/// Global Constraints, transcribed verbatim): `4 codes/frame worst case * 3
-/// triplet permutations/code * 2 headroom = 24`. A "triplet permutation"
-/// here is the observed failure mode from multi-code fixtures where more
-/// than one finder triple can plausibly group around the same handful of
-/// real finders before proximity dedup and consumption prune them — capping
-/// total attempts bounds worst-case per-frame decode work even when a scene
-/// is unusually cluttered with finder-like noise.
-pub(crate) const MAX_DECODE_ATTEMPTS: usize = 24;
+/// Per-frame round budget for `decode.rs`'s arbitration loop (Plan 5 Task 6,
+/// replacing the old `MAX_DECODE_ATTEMPTS` attempt-counted cap — see the
+/// plan's Global Constraints and Plan 4's recorded follow-up (c) for the
+/// full history). Same provenance chain, extended by one more factor:
+/// `4 codes/frame worst case * 3 triplet permutations/code * 2 headroom * 3
+/// geometry rounds/attempt = 72`.
+///
+/// The first three factors are Plan 4's original `MAX_DECODE_ATTEMPTS`
+/// derivation, unchanged: a "triplet permutation" is the observed failure
+/// mode from multi-code fixtures where more than one finder triple can
+/// plausibly group around the same handful of real finders before
+/// proximity dedup and consumption prune them.
+///
+/// The new `* 3` factor is why the cap moved from attempts to rounds:
+/// `decode_candidates` counts one attempt as one corner-role rotation of
+/// one triplet (`attempt_candidate`'s single call), but since Plan 4 Task
+/// 5b + Plan 4B Fix B, a single attempt internally runs up to 3 "geometry
+/// rounds" — one `sample_grid`+`decode_bits` cycle each, tagged
+/// `parallelogram`/`anchor_line`/`outer_hull` in
+/// [`crate::decode::DecodeAttemptTrace::rounds`] — when the first
+/// (parallelogram) round fails and no alignment-pattern anchor was found
+/// (`sample::needs_refined_br`). A round counts as ONE unit of budget
+/// regardless of whether Fix B's reference-threshold retry also ran inside
+/// it: that retry is one extra `decode_bits` (rqrr) call on the SAME
+/// sampled grays, no resampling — real, but strictly cheaper than a whole
+/// additional round, and "a round is a sampling cycle" keeps the budget's
+/// unit simple and honest (the retry's extra rqrr-call cost is absorbed
+/// into the per-round budget rather than tracked as its own thing). So
+/// budgeting attempts at their old worst-case cost (3 rounds each) instead
+/// of a flat 1 reproduces the exact old worst-case total work
+/// (`24 attempts * 3 rounds = 72`), while an attempt that only needs 1
+/// round (the common case — most decodes succeed on the first round, and a
+/// non-decoding v7+ candidate with a located alignment pattern never enters
+/// the Task 5b retry loop at all) now correctly costs only 1 unit instead
+/// of being charged for headroom it never uses — letting MORE cheap
+/// attempts run per frame before the budget binds, exactly the fixtures'
+/// everyday case (see `tests/decode_trace_gate.rs`'s
+/// `round_budget_never_binds_on_the_golden_fixture_suite`). The budget is
+/// checked once per attempt, before it runs (not
+/// mid-attempt), so the hard worst case is a small, bounded overrun: up to
+/// 2 extra rounds beyond 72 if the very last attempt let through costs the
+/// maximum 3.
+pub(crate) const MAX_DECODE_ROUNDS: usize = 72;
 
 /// Number of boundary probes per edge for `sample.rs`'s
 /// `refine_fourth_corner` (Plan 4 Task 5b). Line-fit noise scales as
@@ -189,3 +223,100 @@ pub(crate) const BR_ANCHOR_FILTER_TOL_MODULES: f64 = 0.75;
 /// below), and per this task's gate-failure protocol no other K value may
 /// be tried without reporting it.
 pub(crate) const SHARPEN_K: f32 = 0.25;
+
+// --- Plan 5 Task 3: subpixel corner refinement (`refine.rs`) ---
+// Every constant below is transcribed verbatim from the plan's Global
+// Constraints ("Pinned refinement constants") — no value here may be
+// tuned against a fixture; see that section's gate-failure protocol.
+
+/// Sub-module-fraction probe positions along a dark border module's own
+/// length (0.35, 0.70 — the original GPU scanner's own two-probes-per-
+/// dark-module scheme). Symmetric about the module's center and
+/// comfortably inside its own boundaries, so a probe's
+/// [`REFINE_PROFILE_SAMPLES`]-point perpendicular profile samples the
+/// module-region's outer edge crossing, not a neighboring module's own.
+pub(crate) const REFINE_PROBE_MODULE_FRACTIONS: [f64; 2] = [0.35, 0.70];
+
+/// Margin excluded from each end of an outer module-region edge before
+/// `refine.rs` probes it, in modules — corner rounding (anti-aliasing and
+/// blur soften the true corner into a curve over roughly a module) would
+/// otherwise bias a probe landing there off the straight edge line the fit
+/// assumes. Skipping 1.5 modules at each end keeps the "middle ~80%" of a
+/// v1 edge (21 modules: `21 - 2*1.5 = 18`, `18/21 ≈ 86%`); the kept
+/// fraction grows toward the whole edge as `dim` increases, since the
+/// corner-rounding zone is a fixed few modules, not a fraction of the
+/// edge.
+pub(crate) const REFINE_EDGE_MARGIN_MODULES: f64 = 1.5;
+
+/// Hard cap on probe points per edge: bounds refinement's worst-case
+/// per-frame cost independent of the code's dimension — v40's 177-module
+/// edge, probed at up to 2 points per dark border module, could otherwise
+/// contribute on the order of 170 candidate points to a single edge fit.
+pub(crate) const REFINE_MAX_POINTS_PER_EDGE: usize = 64;
+
+/// Bilinear samples per Devernay sub-pixel edge-localization profile — an
+/// odd count centered on the coarse edge position (the module-region
+/// boundary the caller's, possibly-imprecise, corners predict), leaving 5
+/// interior samples with a same-spacing neighbor on both sides for the
+/// central-difference gradient, 3 of which (around whichever peaks) feed
+/// the 3-point quadratic (Devernay) sub-sample interpolation.
+pub(crate) const REFINE_PROFILE_SAMPLES: usize = 7;
+
+/// Spacing between consecutive [`REFINE_PROFILE_SAMPLES`] profile samples,
+/// in source-image modules: half a module, so the full 7-sample profile
+/// spans +/-1.5 modules around the coarse edge position — wide enough to
+/// bracket the true boundary despite ordinary coarse-corner imprecision,
+/// while staying tight enough that the profile doesn't reach into a
+/// neighboring module's own transition.
+pub(crate) const REFINE_PROFILE_STEP_MODULES: f64 = 0.5;
+
+/// Multiplier on the median residual for `refine.rs`'s one-pass outlier
+/// refit ("drop residuals > max(0.15 source-module, 2x median residual)"):
+/// keeps the threshold adaptive to each edge's own fit quality (a noisy
+/// edge's median residual dominates) while [`REFINE_OUTLIER_FLOOR_MODULES`]
+/// guards a near-perfect edge (median ~ 0) against rejecting points on
+/// floating-point noise alone.
+pub(crate) const REFINE_OUTLIER_MEDIAN_MULTIPLIER: f64 = 2.0;
+
+/// Flat floor on the outlier-refit threshold, in source modules — see
+/// [`REFINE_OUTLIER_MEDIAN_MULTIPLIER`]'s doc for why a floor is needed
+/// alongside the adaptive multiplier.
+pub(crate) const REFINE_OUTLIER_FLOOR_MODULES: f64 = 0.15;
+
+/// Minimum surviving points an edge's outlier refit must keep before
+/// `refine.rs` trusts its line — a line has 2 degrees of freedom, so 6
+/// points leave 4 of redundancy, comfortably more than
+/// [`BR_MIN_EDGE_POINTS`]'s own 5-point bar for the coarser Task 5b
+/// BR-corner estimator this stage supersedes in precision (not in role —
+/// that estimator still runs first, at decode time, making the corners
+/// this stage refines possible in the first place).
+pub(crate) const REFINE_MIN_EDGE_POINTS: usize = 6;
+
+// --- Plan 5 Task 4 (carried review nit from Task 3): pin the two
+// structural iteration counts `refine.rs` previously expressed only as
+// literal repeated call sites (two sequential `refine_round` calls; three
+// sequential `localize_edge_point_pass` calls) into named, documented
+// constants — a mechanical move, no behavior change (still exactly 2
+// rounds, still exactly 3 passes).
+
+/// Number of `refine_round` invocations `refine_corners` runs, each
+/// re-anchored on the previous round's own output corners (see
+/// `refine_corners`'s "two rounds" doc for the full derivation): round 1
+/// leaves the anchor-derived probe geometry accurate to ~0.2%, at which
+/// point the coherent per-probe bias that geometry error causes (measured
+/// ~0.1px at a ±0.3-module round-1 input error) falls far below the gate's
+/// budget — a further round was not shown to move the measured accuracy
+/// (Task 3 review), so this is fixed at 2 for a small, predictable
+/// per-code cost rather than iterating to convergence.
+pub(crate) const REFINE_ROUNDS: usize = 2;
+
+/// Number of `localize_edge_point_pass` iterations `localize_edge_point`
+/// runs before Aitken Δ² extrapolation (see that function's doc for the
+/// phase-gain-error derivation the extrapolation corrects). This is not a
+/// free-standing tunable: the closed-form Aitken step `x* = x_2 -
+/// (x_2-x_1)^2 / (x_2-2x_1+x_0)` is derived from exactly 3 consecutive
+/// iterates of a locally-linear fixed-point map, so changing this value
+/// requires re-deriving the extrapolation itself, not just editing a loop
+/// bound — `localize_edge_point` asserts this invariant with a
+/// `debug_assert!`.
+pub(crate) const REFINE_LOCALIZE_PASSES: usize = 3;

@@ -23,6 +23,7 @@ const EMPTY_TIMINGS = {
   version_ns: 0,
   alignment_ns: 0,
   sample_decode_ns: 0,
+  refine_ns: 0,
 };
 
 function code(corners: DecodedCode["corners"]): DecodedCode {
@@ -36,6 +37,8 @@ function code(corners: DecodedCode["corners"]): DecodedCode {
     corners,
     inverted: false,
     finder_indices: [0, 1, 2],
+    refined_corners: null,
+    corner_refined: [false, false, false, false],
   };
 }
 
@@ -62,7 +65,7 @@ describe("bitsLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [code(AXIS_ALIGNED_QUAD)], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [code(AXIS_ALIGNED_QUAD)], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],
@@ -71,6 +74,7 @@ describe("bitsLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     bitsLayer.draw(ctx);
@@ -81,7 +85,7 @@ describe("bitsLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],
@@ -90,6 +94,7 @@ describe("bitsLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: BITS_2X2,
+        refine: null,
       },
     };
     bitsLayer.draw(ctx);
@@ -102,7 +107,7 @@ describe("bitsLayer", () => {
     // module_px = 20/2 = 10; view.scale=0.1 -> 1 screen px/module < 4.
     ctx.view = { scale: 0.1, tx: 0, ty: 0 };
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [code(AXIS_ALIGNED_QUAD)], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [code(AXIS_ALIGNED_QUAD)], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],
@@ -111,6 +116,7 @@ describe("bitsLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: BITS_2X2,
+        refine: null,
       },
     };
     bitsLayer.draw(ctx);
@@ -129,6 +135,7 @@ describe("bitsLayer", () => {
         // NOT use — only the last entry matters (see the layer's doc).
         codes: [code([[0, 0], [0, 0], [0, 0], [0, 0]]), code(AXIS_ALIGNED_QUAD)],
         timings: EMPTY_TIMINGS,
+        source_scale: 1,
       },
       trace: {
         tiles: null,
@@ -138,6 +145,7 @@ describe("bitsLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: BITS_2X2,
+        refine: null,
       },
     };
     bitsLayer.draw(ctx);

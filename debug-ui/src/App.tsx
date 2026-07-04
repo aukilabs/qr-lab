@@ -5,9 +5,9 @@
 //
 // Scan pipeline (binding decision, see task-6-brief.md): a source change,
 // a resolution change, or a new video frame produces a full-resolution RGBA
-// readout, which goes to `ScannerClient.scan` (the worker downscales
-// internally via `downscaleRgba` and runs `scan_rgba` on the result; the
-// client copies the frame up front, so the caller's rgba stays readable).
+// readout, which goes to `ScannerClient.scan` (since Plan 5 Task 1 the
+// downscale happens in Rust inside `scan_rgba`; the client copies the
+// frame up front, so the caller's rgba stays readable).
 // While that scan runs, this file downscales the SAME rgba with the SAME
 // `downscaleRgba` call (same maxDim) to build the bitmap actually drawn in
 // the `Viewport` — guaranteeing the displayed pixels and the overlay
@@ -27,11 +27,13 @@ import { bitsLayer } from "./overlays/layers/bits";
 import { decodedLayer } from "./overlays/layers/decoded";
 import { findersLayer } from "./overlays/layers/finders";
 import { groundtruthLayer } from "./overlays/layers/groundtruth";
+import { refinedLayer } from "./overlays/layers/refined";
 import { samplegridLayer } from "./overlays/layers/samplegrid";
 import { tilesLayer } from "./overlays/layers/tiles";
 import { tripletsLayer } from "./overlays/layers/triplets";
 import { parseGroundTruth, type GroundTruthCode } from "./overlays/groundtruth-types";
 import { createRegistry, type OverlayContext } from "./overlays/registry";
+import { Scene3D } from "./scene3d/Scene3D";
 import { LayerPanel } from "./panels/LayerPanel";
 import {
   DEFAULT_RESOLUTION,
@@ -60,6 +62,7 @@ const overlayRegistry = createRegistry([
   samplegridLayer,
   bitsLayer,
   decodedLayer,
+  refinedLayer,
 ]);
 
 interface ScanState {
@@ -91,7 +94,19 @@ function videoInputFor(source: SourceDescriptor | null): File | null {
   return source.file;
 }
 
+/** Task 5: the debug UI's two top-level modes — "media" is everything
+ * Tasks 3-4 built (image/video source, viewport, fixture-driven ground
+ * truth); "scene3d" is the new orbitable 3D scene (`Scene3D.tsx`), the
+ * plan's headline debug-UI feature. Both modes share the same
+ * `ScannerClient`/worker (one scanner per `App` mount, see the
+ * client-lifecycle effect below) and the same `overlayRegistry` (layer
+ * enable/disable state — and therefore the "Layers" panel — is shared
+ * across modes, since `registry.enabled` lives at module scope
+ * independent of which mode is currently drawing from it). */
+type Mode = "media" | "scene3d";
+
 export function App() {
+  const [mode, setMode] = useState<Mode>("media");
   const clientRef = useRef<ScannerClient | null>(null);
   const [scannerReady, setScannerReady] = useState(false);
   const [initError, setInitError] = useState<string | null>(null);
@@ -192,7 +207,13 @@ export function App() {
       // Wrapped into an always-resolving "settled" shape so the promise
       // can sit unawaited through the display work below without an early
       // rejection being flagged as unhandled during that window.
-      const scanSettled = client.scan(rgba, width, height, { maxDim, withTrace: true }).then(
+      // `refine: true` (Plan 5 Task 7 QA fix): media mode never passed this
+      // before, so `refined_corners` stayed `null` on every scan — the
+      // `refinedLayer` overlay and the timings panel's `refine` row were
+      // both permanently dead in this mode (Scene3D already hardcodes
+      // `refine: true` the same way; per Task 6's re-baseline the cost is
+      // ~0.1-0.4ms/frame, negligible for a dev tool with no UI toggle).
+      const scanSettled = client.scan(rgba, width, height, { maxDim, withTrace: true, refine: true }).then(
         (outcome) => ({ ok: true as const, outcome }),
         (err: unknown) => ({ ok: false as const, err }),
       );
@@ -259,22 +280,56 @@ export function App() {
 
   const imageSourceState = useImageSource(imageInput);
 
+  // Mode gating (Plan 5 Task 5 review fix): the app has ONE ScannerClient,
+  // and in "scene3d" mode the 3D scene's own per-frame scan loop is its
+  // sole intended producer. Without this gate, a video left playing in
+  // media mode keeps firing `requestVideoFrameCallback` scans after the
+  // switch — two producers then contend for the single latest-wins queue,
+  // starving the 3D scene's live error panel (each producer keeps
+  // superseding the other's queued request). Video frames are dropped
+  // here whenever `mode !== "media"`; belt-and-braces on top of the
+  // pause-on-switch effect below (a frame callback already in flight when
+  // the mode flips can still land after the pause call).
   const handleVideoFrame = useCallback(
     (frame: VideoFrame) => {
+      if (mode !== "media") return; // scene3d owns the scanner — see the gating doc above
       void runScan(frame.rgba, frame.width, frame.height);
     },
-    [runScan],
+    [runScan, mode],
   );
   const videoState = useVideoSource(videoInput, handleVideoFrame);
+
+  // Pause the (hidden, still-mounted) video element on leaving media mode
+  // so playback — and with it the rVFC frame-callback stream — actually
+  // stops rather than burning decode work into dropped frames. On
+  // switching back it stays paused; resuming is the user's call (review
+  // decision). `pause` is read through a ref because `useVideoSource`
+  // recreates its closures every render — depending on `videoState` here
+  // would re-run this effect (and call `pause()`) once per render instead
+  // of once per mode change. No pure seam worth unit-testing here (the
+  // predicate is a bare `mode !== "media"`); covered by Task 7 manual QA:
+  // play a video, switch to 3D Scene (video pauses, error panel updates
+  // live), switch back (video still paused).
+  const videoPauseRef = useRef(videoState.pause);
+  videoPauseRef.current = videoState.pause;
+  useEffect(() => {
+    if (mode !== "media") videoPauseRef.current();
+  }, [mode]);
 
   // Image mode: (re-)scan whenever the decoded source or the resolution
   // changes. `runScan`'s identity already changes with `resolution` (and
   // `scannerReady`), so listing it here covers both "source change" and
   // "resolution change" from the brief without duplicating that logic.
+  // Mode-gated like `handleVideoFrame` above — and since `mode` is a dep,
+  // switching BACK to media re-fires this effect and re-scans the current
+  // image, repopulating the media viewport's overlays after the 3D scene
+  // had the scanner to itself.
   useEffect(() => {
+    if (mode !== "media") return; // scene3d owns the scanner — see the gating doc above
     if (imageSourceState.loading || imageSourceState.error || !imageSourceState.rgba) return;
     void runScan(imageSourceState.rgba, imageSourceState.width, imageSourceState.height);
   }, [
+    mode,
     imageSourceState.rgba,
     imageSourceState.width,
     imageSourceState.height,
@@ -394,78 +449,105 @@ export function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <SourcePanel
-          source={source}
-          onSourceChange={handleSourceChange}
-          resolution={resolution}
-          onResolutionChange={handleResolutionChange}
-          onRescan={handleRescan}
-          rescanDisabled={rescanDisabled}
-        />
+        <div className="mode-tabs">
+          <button
+            type="button"
+            className={mode === "media" ? "mode-tab mode-tab-active" : "mode-tab"}
+            onClick={() => setMode("media")}
+          >
+            Media
+          </button>
+          <button
+            type="button"
+            className={mode === "scene3d" ? "mode-tab mode-tab-active" : "mode-tab"}
+            onClick={() => setMode("scene3d")}
+          >
+            3D Scene
+          </button>
+        </div>
+
+        {mode === "media" && (
+          <SourcePanel
+            source={source}
+            onSourceChange={handleSourceChange}
+            resolution={resolution}
+            onResolutionChange={handleResolutionChange}
+            onRescan={handleRescan}
+            rescanDisabled={rescanDisabled}
+          />
+        )}
         <section className="panel-section">
           <h2 className="panel-title">Layers</h2>
           <LayerPanel registry={overlayRegistry} onToggle={handleLayerToggle} />
         </section>
-        <section className="panel-section">
-          <h2 className="panel-title">Timings</h2>
-          <TimingsPanel sample={timingsSample} sampleId={sampleId} />
-        </section>
+        {mode === "media" && (
+          <section className="panel-section">
+            <h2 className="panel-title">Timings</h2>
+            <TimingsPanel sample={timingsSample} sampleId={sampleId} />
+          </section>
+        )}
       </aside>
 
-      <main className="main">
-        {initError && (
-          <div className="banner banner-error">Scanner worker failed to start: {initError}</div>
-        )}
-        {scanError && <div className="banner banner-error">Scan failed: {scanError}</div>}
-        {imageSourceState.error && (
-          <div className="banner banner-error">Source load failed: {imageSourceState.error}</div>
-        )}
-        {videoState.error && <div className="banner banner-error">Video error: {videoState.error}</div>}
+      {mode === "media" ? (
+        <main className="main">
+          {initError && (
+            <div className="banner banner-error">Scanner worker failed to start: {initError}</div>
+          )}
+          {scanError && <div className="banner banner-error">Scan failed: {scanError}</div>}
+          {imageSourceState.error && (
+            <div className="banner banner-error">Source load failed: {imageSourceState.error}</div>
+          )}
+          {videoState.error && (
+            <div className="banner banner-error">Video error: {videoState.error}</div>
+          )}
 
-        <div className="viewport-wrap">
-          <Viewport image={displayBitmap} overlays={handleOverlays} onCursorImagePos={setCursorPos} />
-          {!scannerReady && !initError && <div className="loading-overlay">Loading scanner…</div>}
-        </div>
-
-        {isVideoMode && (
-          <div className="video-controls">
-            <button type="button" onClick={() => videoState.stepFrame(-1)} disabled={videoState.playing}>
-              ◀ frame
-            </button>
-            <button
-              type="button"
-              onClick={() => (videoState.playing ? videoState.pause() : videoState.play())}
-            >
-              {videoState.playing ? "Pause" : "Play"}
-            </button>
-            <button type="button" onClick={() => videoState.stepFrame(1)} disabled={videoState.playing}>
-              frame ▶
-            </button>
-            <span className="video-frame-counter">
-              frame {videoState.frameIndex} · {videoState.currentTime.toFixed(2)}s /{" "}
-              {videoState.duration.toFixed(2)}s
-            </span>
-            {!videoState.supportsFrameCallback && (
-              <span className="video-warn">no requestVideoFrameCallback — degraded capture rate</span>
-            )}
+          <div className="viewport-wrap">
+            <Viewport image={displayBitmap} overlays={handleOverlays} onCursorImagePos={setCursorPos} />
+            {!scannerReady && !initError && <div className="loading-overlay">Loading scanner…</div>}
           </div>
-        )}
 
-        <div className="status-bar">
-          <span>
-            source: {sourceDims ? `${sourceDims.width}×${sourceDims.height}` : "–"}
-          </span>
-          <span>
-            working: {scanState ? `${scanState.scanWidth}×${scanState.scanHeight}` : "–"}
-          </span>
-          <span>scale: {workingScale.toFixed(3)}</span>
-          <span>
-            cursor:{" "}
-            {cursorPos ? `${Math.round(cursorPos[0])}, ${Math.round(cursorPos[1])}` : "–"}
-          </span>
-          <span>luma: {cursorLuma ?? "–"}</span>
-        </div>
-      </main>
+          {isVideoMode && (
+            <div className="video-controls">
+              <button type="button" onClick={() => videoState.stepFrame(-1)} disabled={videoState.playing}>
+                ◀ frame
+              </button>
+              <button
+                type="button"
+                onClick={() => (videoState.playing ? videoState.pause() : videoState.play())}
+              >
+                {videoState.playing ? "Pause" : "Play"}
+              </button>
+              <button type="button" onClick={() => videoState.stepFrame(1)} disabled={videoState.playing}>
+                frame ▶
+              </button>
+              <span className="video-frame-counter">
+                frame {videoState.frameIndex} · {videoState.currentTime.toFixed(2)}s /{" "}
+                {videoState.duration.toFixed(2)}s
+              </span>
+              {!videoState.supportsFrameCallback && (
+                <span className="video-warn">no requestVideoFrameCallback — degraded capture rate</span>
+              )}
+            </div>
+          )}
+
+          <div className="status-bar">
+            <span>
+              source: {sourceDims ? `${sourceDims.width}×${sourceDims.height}` : "–"}
+            </span>
+            <span>
+              working: {scanState ? `${scanState.scanWidth}×${scanState.scanHeight}` : "–"}
+            </span>
+            <span>scale: {workingScale.toFixed(3)}</span>
+            <span>
+              cursor:{" "}
+              {cursorPos ? `${Math.round(cursorPos[0])}, ${Math.round(cursorPos[1])}` : "–"}
+            </span>
+            <span>luma: {cursorLuma ?? "–"}</span>
+          </div>
+        </main>
+      ) : (
+        <Scene3D client={clientRef.current} scannerReady={scannerReady} overlayRegistry={overlayRegistry} />
+      )}
 
       {/* Hidden decode surface for video mode — the visible bitmap is the
           downscaled frame drawn in `Viewport`, not this element itself. */}

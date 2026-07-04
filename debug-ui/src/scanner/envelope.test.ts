@@ -48,6 +48,28 @@ describe("parseScanResult", () => {
     expect(parsed.trace?.bits?.words.length).toBeGreaterThan(0);
   });
 
+  // Plan 5 Task 3: the committed snapshot was regenerated with `refine:
+  // true` specifically so this shape is populated (not just `null`) — see
+  // `envelope_snapshot.rs`'s own `REFINE` constant doc.
+  it("accepts the new Plan 5 Task 3 refined-corners fields on near_00", () => {
+    const parsed = parseScanResult(loadSnapshot());
+
+    expect(parsed.detections.codes[0]?.refined_corners).not.toBeNull();
+    expect(parsed.detections.codes[0]?.refined_corners).toHaveLength(4);
+
+    // Final-review carried item: `corner_refined` promotes the same
+    // per-corner provenance `trace.refine.corner_refined` already carried
+    // to the public (non-trace-gated) `DecodedCode` shape.
+    expect(parsed.detections.codes[0]?.corner_refined).toEqual([true, true, true, true]);
+
+    expect(parsed.trace?.refine).not.toBeNull();
+    expect(parsed.trace?.refine?.edges).toHaveLength(4);
+    expect(parsed.trace?.refine?.corner_refined).toHaveLength(4);
+    for (const edge of parsed.trace?.refine?.edges ?? []) {
+      expect(edge.points_probed).toBeGreaterThanOrEqual(0);
+    }
+  });
+
   it("round-trips every field the snapshot carries", () => {
     const raw = loadSnapshot() as any;
     const parsed = parseScanResult(raw);
@@ -63,6 +85,7 @@ describe("parseScanResult", () => {
     expect(parsed.trace?.alignment).toEqual(raw.trace.alignment);
     expect(parsed.trace?.sample_regions).toEqual(raw.trace.sample_regions);
     expect(parsed.trace?.bits).toEqual(raw.trace.bits);
+    expect(parsed.trace?.refine).toEqual(raw.trace.refine);
   });
 
   it("throws with a path when a required array is missing", () => {
@@ -135,8 +158,20 @@ describe("parseScanResult", () => {
     expect(() => parseScanResult(raw)).toThrowError(/detections\.codes\[0\]\.corners/);
   });
 
-  it("throws with a path when a StageTimings field is missing (the 3 new Task 5/6 fields)", () => {
-    for (const field of ["version_ns", "alignment_ns", "sample_decode_ns"]) {
+  it("throws with a path when a decoded code's corner_refined is missing", () => {
+    const raw = loadSnapshot() as any;
+    delete raw.detections.codes[0].corner_refined;
+    expect(() => parseScanResult(raw)).toThrowError(/detections\.codes\[0\]\.corner_refined/);
+  });
+
+  it("throws with a path when a decoded code's corner_refined has the wrong element type", () => {
+    const raw = loadSnapshot() as any;
+    raw.detections.codes[0].corner_refined = [true, true, "yes", true];
+    expect(() => parseScanResult(raw)).toThrowError(/detections\.codes\[0\]\.corner_refined\[2\]/);
+  });
+
+  it("throws with a path when a StageTimings field is missing (the 3 new Task 5/6 fields, plus Plan 5 Task 3's refine_ns)", () => {
+    for (const field of ["version_ns", "alignment_ns", "sample_decode_ns", "refine_ns"]) {
       const raw = loadSnapshot() as any;
       delete raw.detections.timings[field];
       expect(() => parseScanResult(raw)).toThrowError(
@@ -212,6 +247,17 @@ describe("parseScanResult", () => {
     raw.trace.bits = undefined;
     const parsed = parseScanResult(raw);
     expect(parsed.trace?.bits).toBeNull();
+  });
+
+  // Plan 5 Task 3 — same "undefined must parse like null" wasm-binding
+  // regression as `bits`/`version_bits` above, for the new refine fields.
+  it("accepts a decoded code's refined_corners: null and trace.refine: undefined", () => {
+    const raw = loadSnapshot() as any;
+    raw.detections.codes[0].refined_corners = null;
+    raw.trace.refine = undefined;
+    const parsed = parseScanResult(raw);
+    expect(parsed.detections.codes[0]?.refined_corners).toBeNull();
+    expect(parsed.trace?.refine).toBeNull();
   });
 
   it("throws with a path when trace.bits.words has the wrong element type", () => {

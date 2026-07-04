@@ -63,7 +63,7 @@ use crate::homography::PerspectiveTransform;
 use crate::tiles::TileGrid;
 use crate::trace::SampleRegionTrace;
 use crate::triplet::TripletCandidate;
-use crate::version::{sample_module_gray, sample_module_ink};
+use crate::version::{sample_module_gray, sample_module_gray_bilinear, sample_module_ink};
 use crate::LumaView;
 
 /// One tile of a sampled grid: the half-open module rectangle it covers —
@@ -303,25 +303,47 @@ fn binarized_at(view: &LumaView, grid: &TileGrid, x: f64, y: f64, inverted: bool
 }
 
 /// A fitted edge line: total-least-squares centroid + unit direction.
-struct EdgeFit {
-    centroid: [f64; 2],
-    dir: [f64; 2],
+///
+/// `pub(crate)` (Plan 5 Task 3): `refine.rs`'s subpixel edge fit reuses
+/// this exact shape (and [`fit_line_tls_weighted`]/[`intersect_lines`]
+/// below) rather than duplicating the closed-form 2x2 eigenvector line fit
+/// a second time in a second module.
+pub(crate) struct EdgeFit {
+    pub(crate) centroid: [f64; 2],
+    pub(crate) dir: [f64; 2],
 }
 
 /// Total-least-squares line through `pts` (principal axis of the 2x2
 /// scatter matrix — the closed-form eigenvector via the half-angle
 /// identity, the standard orthogonal-regression result). `pts` must have
-/// >= 2 entries.
+/// at least 2 entries. Thin unweighted wrapper over [`fit_line_tls_weighted`]
+/// (Plan 5 Task 3 extracted the weighted core out of this function; equal
+/// weights reduce to the exact same arithmetic this always did).
 fn fit_line_tls(pts: &[[f64; 2]]) -> EdgeFit {
-    let n = pts.len() as f64;
-    let cx = pts.iter().map(|p| p[0]).sum::<f64>() / n;
-    let cy = pts.iter().map(|p| p[1]).sum::<f64>() / n;
+    let weights = vec![1.0; pts.len()];
+    fit_line_tls_weighted(pts, &weights)
+}
+
+/// Weighted total-least-squares line through `pts` (Plan 5 Task 3):
+/// `refine.rs`'s edge fit weights each point by its Devernay profile's
+/// gradient magnitude (a stronger-contrast localization should out-vote a
+/// weaker one), so the plain unweighted centroid/scatter this module used
+/// pre-Task-3 is generalized here to a per-point weight — the closed-form
+/// principal-axis-of-the-scatter-matrix result is unchanged, just every
+/// sum is now weighted. `pts` and `weights` must be the same non-empty
+/// length; a zero (or all-zero) weight is the caller's problem (produces a
+/// `NaN` centroid) — every caller here always has a strictly positive
+/// gradient-magnitude weight for any point that reached the fit at all.
+pub(crate) fn fit_line_tls_weighted(pts: &[[f64; 2]], weights: &[f64]) -> EdgeFit {
+    let wsum: f64 = weights.iter().sum();
+    let cx = pts.iter().zip(weights).map(|(p, w)| p[0] * w).sum::<f64>() / wsum;
+    let cy = pts.iter().zip(weights).map(|(p, w)| p[1] * w).sum::<f64>() / wsum;
     let (mut sxx, mut sxy, mut syy) = (0.0f64, 0.0f64, 0.0f64);
-    for p in pts {
+    for (p, w) in pts.iter().zip(weights) {
         let (dx, dy) = (p[0] - cx, p[1] - cy);
-        sxx += dx * dx;
-        sxy += dx * dy;
-        syy += dy * dy;
+        sxx += w * dx * dx;
+        sxy += w * dx * dy;
+        syy += w * dy * dy;
     }
     let theta = 0.5 * (2.0 * sxy).atan2(sxx - syy);
     EdgeFit { centroid: [cx, cy], dir: [theta.cos(), theta.sin()] }
@@ -330,7 +352,7 @@ fn fit_line_tls(pts: &[[f64; 2]]) -> EdgeFit {
 /// Intersection of two `EdgeFit` lines; `None` when near-parallel (the two
 /// edges of a real quadrilateral meet at a healthy angle, so a
 /// near-parallel pair means at least one fit is garbage).
-fn intersect_lines(a: &EdgeFit, b: &EdgeFit) -> Option<[f64; 2]> {
+pub(crate) fn intersect_lines(a: &EdgeFit, b: &EdgeFit) -> Option<[f64; 2]> {
     let cross = a.dir[0] * b.dir[1] - a.dir[1] * b.dir[0];
     if cross.abs() < 1e-9 {
         return None;
@@ -668,6 +690,91 @@ pub(crate) fn refine_fourth_corner(
     intersect_lines(&bottom, &right)
 }
 
+/// Plan 5 Task 2's source-resolution module sampling: the SOURCE view
+/// [`sample_grid`] samples module GRAYS from (instead of the WORKING
+/// `view`/`grid` every other stage — tiling, alignment, timing/version-bits
+/// — still runs on) whenever a downscale actually happened, plus the
+/// PER-AXIS working/source scales needed to lift a region's module→working
+/// `transform` to module→source (see [`Self::lift`]).
+///
+/// Per-axis, not one scalar: `downscale_luma` rounds each destination axis
+/// independently (`round(dim * max_dim / longest)` per axis — see its
+/// doc), so for a non-cleanly-scaling source the two axes' true ratios
+/// genuinely differ (e.g. 191x144 at max-dim 128 → 128x97: `sx = 128/191 ≈
+/// 0.6702`, `sy = 97/144 ≈ 0.6736`). Applying the width ratio to BOTH axes
+/// — as this struct's first draft did — mis-lifts the far (bottom) edge by
+/// up to ~0.75 source px (~0.25 module at IMG_4832's scale), real error
+/// against Plan 5's ≤0.1 px Task 3 refinement budget.
+/// `Detections::source_scale` (the public scalar) deliberately stays
+/// width-pinned per the plan; these two fields are the internal, exact
+/// per-axis form.
+///
+/// Convention per axis, matching `Detections::source_scale`'s direction:
+/// `working_px = source_px * s`, each `<= 1`.
+#[derive(Clone, Copy)]
+pub(crate) struct SourceView<'a> {
+    pub view: &'a LumaView<'a>,
+    /// `working_width / source_width`.
+    pub sx: f64,
+    /// `working_height / source_height`.
+    pub sy: f64,
+}
+
+impl SourceView<'_> {
+    /// Lift a module→WORKING transform to module→SOURCE: compose with the
+    /// per-axis inverse scale `scaled(1/sx, 1/sy)` (`source_px =
+    /// working_px / s`, per axis). [`sample_grid`]'s one lift site,
+    /// factored onto the struct so the per-axis correctness is
+    /// unit-testable against `downscale_luma`'s actual independent-axis
+    /// rounding (see
+    /// `lift_uses_per_axis_scales_when_downscale_rounding_diverges`).
+    pub(crate) fn lift(&self, module_to_working: &PerspectiveTransform) -> PerspectiveTransform {
+        module_to_working.then(&PerspectiveTransform::scaled(1.0 / self.sx, 1.0 / self.sy))
+    }
+}
+
+/// Map a module center to its WORKING-resolution tile-threshold lookup
+/// coordinates, clamped to `view`'s bounds. Used only by [`sample_grid`]'s
+/// source-resolution path (Plan 5 Task 2): the tile-threshold table
+/// ([`TileGrid`]) is only ever built at working resolution, so a module
+/// sampled in source space still needs a WORKING pixel coordinate to look
+/// one up.
+///
+/// This is exactly `transform.map(col / dim, row / dim)` rounded — i.e.
+/// the *same* working-space position the source-space sample would reach
+/// by computing `source_px = SourceView::lift(transform).map(...)` and
+/// then multiplying back by `(sx, sy)` per axis (the plan's literal
+/// "source pixel -> working tile via coordinate division" framing):
+/// `working.then(&scaled(1/sx,1/sy)).map(p)` is `working.map(p)` divided
+/// per-axis by `(sx, sy)`, so re-multiplying by `(sx, sy)` recovers
+/// `working.map(p)` again, up to a floating-point epsilon from the extra
+/// multiply/divide that is irrelevant to a value only ever used for a
+/// rounded table lookup. Computing it directly through the untouched
+/// working `transform` (rather than round-tripping through the lifted
+/// transform) is simpler and marginally more precise, not a different
+/// coordinate.
+///
+/// Clamped rather than `None`-on-OOB (unlike every other sampling
+/// primitive in this file): a threshold lookup is a lookup table, not
+/// sample data, and [`TileGrid::threshold_at`] panics on an out-of-bounds
+/// index — real OOB accounting for a source-resolution sample is entirely
+/// the source-space bilinear read's job (see [`sample_grid`]'s "OOB
+/// accounting" note), so this only ever needs to produce *some* valid
+/// working-space tile, never report missing data itself.
+fn working_tile_coords(
+    view: &LumaView,
+    transform: &PerspectiveTransform,
+    dimension: u32,
+    col: f64,
+    row: f64,
+) -> (usize, usize) {
+    let dim = dimension as f64;
+    let [px, py] = transform.map(col / dim, row / dim);
+    let xu = (px.round() as i64).clamp(0, view.width() as i64 - 1) as usize;
+    let yu = (py.round() as i64).clamp(0, view.height() as i64 - 1) as usize;
+    (xu, yu)
+}
+
 /// Build the per-region sampling grid for one candidate.
 ///
 /// - **No usable alignment patterns** (v1 — `alignment.coords` is empty —
@@ -697,6 +804,32 @@ pub(crate) fn refine_fourth_corner(
 /// polarity-aware via `t.inverted`); a sample landing outside the source
 /// image counts toward `oob_fraction` and is recorded as `false`.
 ///
+/// # Plan 5 Task 2: source-resolution module sampling
+/// `source` is `None` whenever `scan()` didn't downscale (or the caller is
+/// `detect`/`detect_with`, which never does) — sampling then behaves
+/// EXACTLY as before, reading nearest-neighbor grays off `view` (the
+/// bit-identical regression pin for the 3 near-res golden fixtures relies
+/// on this branch being untouched). When `Some`, every module's GRAY is
+/// instead read via [`crate::version::sample_module_gray_bilinear`] off
+/// the SOURCE view, through the region's `transform` lifted to
+/// module→source by [`SourceView::lift`] (per-axis inverse scales — see
+/// that method's and the struct's docs) — the fix
+/// for far codes that DETECT fine at working resolution but can't sample
+/// at ~2 working px/module (real-photo evidence: `IMG_4832`). The
+/// tile-threshold lookup that binarizes that gray still comes from the
+/// WORKING `grid` (there is no source-resolution threshold table — see
+/// [`working_tile_coords`]'s doc), so the resulting `ink`/`bits` are a
+/// working-threshold-against-source-gray hybrid, same as the plan's
+/// "document the approximation" note calls for. **OOB accounting is
+/// entirely in source space** in this branch: a module's contribution to
+/// `oob_fraction` (and its `bits` entry, forced `false`) is decided solely
+/// by whether the source-space bilinear sample succeeded, never by the
+/// working-space threshold lookup (which is clamped, so it can't itself
+/// produce a `None`). Scope note: detection itself (tiling, finder/triplet
+/// grouping, alignment-pattern location, timing/version-bits reads) is
+/// unaffected either way — only this function's module sampling moves to
+/// source resolution.
+///
 /// Returns `None` only if a region's `quad_to_quad` construction is
 /// degenerate (a located alignment pattern or a finder center placed such
 /// that some region's four corners are collinear) — sampling that region
@@ -708,6 +841,7 @@ pub(crate) fn sample_grid(
     dimension: u32,
     alignment: &AlignmentGrid,
     refined_br: Option<[f64; 2]>,
+    source: Option<SourceView>,
 ) -> Option<SampledGrid> {
     let dim = dimension as usize;
     let n = alignment.coords.len();
@@ -775,11 +909,30 @@ pub(crate) fn sample_grid(
     let mut grays = vec![f32::NAN; dim * dim];
     let mut oob = 0u64;
     for region in &regions {
+        // Lifted once per region (not per module — every module in a
+        // region shares the same module→working `region.transform`, so the
+        // module→source composition is invariant across the whole loop
+        // below).
+        let source_transform = source.map(|src| src.lift(&region.transform));
+
         let [x0, y0, x1, y1] = region.module_rect;
         for y in y0..y1 {
             for x in x0..x1 {
                 let (mx, my) = (x as f64 + 0.5, y as f64 + 0.5);
-                let ink = sample_module_ink(view, grid, &region.transform, dimension, mx, my, t.inverted);
+                let (ink, gray) = match (source, &source_transform) {
+                    (Some(src), Some(src_transform)) => {
+                        let gray = sample_module_gray_bilinear(src.view, src_transform, dimension, mx, my);
+                        let ink = gray.map(|g| {
+                            let (xu, yu) = working_tile_coords(view, &region.transform, dimension, mx, my);
+                            (g < grid.threshold_at(xu, yu) as f32) != t.inverted
+                        });
+                        (ink, gray)
+                    }
+                    _ => (
+                        sample_module_ink(view, grid, &region.transform, dimension, mx, my, t.inverted),
+                        sample_module_gray(view, &region.transform, dimension, mx, my),
+                    ),
+                };
                 match ink {
                     Some(v) => bits.set(x as usize, y as usize, v),
                     None => {
@@ -787,7 +940,7 @@ pub(crate) fn sample_grid(
                         bits.set(x as usize, y as usize, false);
                     }
                 }
-                if let Some(gray) = sample_module_gray(view, &region.transform, dimension, mx, my) {
+                if let Some(gray) = gray {
                     grays[y as usize * dim + x as usize] = gray;
                 }
             }
@@ -801,6 +954,7 @@ pub(crate) fn sample_grid(
 mod tests {
     use super::*;
     use crate::alignment::locate_alignment_patterns;
+    use crate::downscale::downscale_luma;
     use crate::testpaint::render_module_grid_transformed;
     use crate::tiles::TileGrid;
 
@@ -971,7 +1125,7 @@ mod tests {
         let provisional = provisional_transform(&t, dim as u32);
         let alignment =
             locate_alignment_patterns(&view, &tile_grid, &provisional, version as u32, false, false);
-        let sampled = sample_grid(&view, &tile_grid, &t, dim as u32, &alignment, None)
+        let sampled = sample_grid(&view, &tile_grid, &t, dim as u32, &alignment, None, None)
             .unwrap_or_else(|| panic!("{label}: sample_grid returned None"));
         assert_bit_for_bit(&sampled.bits, &code, label);
     }
@@ -1078,12 +1232,229 @@ mod tests {
         let provisional = provisional_transform(&t, dim as u32);
         let alignment =
             locate_alignment_patterns(&view, &tile_grid, &provisional, version as u32, false, false);
-        let sampled = sample_grid(&view, &tile_grid, &t, dim as u32, &alignment, None)
+        let sampled = sample_grid(&view, &tile_grid, &t, dim as u32, &alignment, None, None)
             .expect("sample_grid should still return a (bad) result, not None");
         assert!(
             sampled.oob_fraction > 0.02,
             "expected oob_fraction > 0.02 for a half-cropped frame, got {}",
             sampled.oob_fraction
+        );
+    }
+
+    // --- Plan 5 Task 2: source-resolution module sampling ---
+
+    /// Render `payload` at high resolution (`source_scale_px` px/module —
+    /// the SOURCE), NN-downscale it (the production formula, same as
+    /// `scan()` uses) to a working resolution whose OWN module scale is
+    /// `working_module_px` px/module — deliberately as coarse as the
+    /// `IMG_4832` real-photo regime this task's binding design targets
+    /// (~2 working px/module: DETECT succeeds, nearest-neighbor SAMPLING at
+    /// that scale is unreliable) — then runs the real
+    /// `provisional_transform` -> `locate_alignment_patterns` ->
+    /// `sample_grid` pipeline with `sample_grid`'s new `source` parameter
+    /// pointing back at the SOURCE view. Returns the sampled bits, the
+    /// `qrcode` crate's own ground-truth matrix, and the working/source
+    /// scale actually used, so callers can assert bit-for-bit correctness
+    /// exactly like this file's existing working-resolution-only gate does.
+    ///
+    /// The working-space `TripletCandidate`/`provisional_transform`/
+    /// `locate_alignment_patterns` calls all run on a transform derived
+    /// EXACTLY the way Task 2's own lifting works in reverse — the
+    /// known SOURCE transform composed with `scaled(scale, scale)` — the
+    /// same relationship `Detections::source_scale`'s doc documents
+    /// (`working_px = source_px * scale`), so this test's own working
+    /// geometry is consistent with what a real `scan()` call would hand
+    /// `decode_candidates`.
+    fn run_source_resolution_pipeline(
+        payload: &[u8],
+        version: i16,
+        source_scale_px: f64,
+        working_module_px: f64,
+    ) -> (BitMatrix, qrcode::QrCode, f64) {
+        let dim = 17 + 4 * version as usize;
+        let (quad, img_side) = axis_aligned_quad(dim, source_scale_px, 4.0);
+        let source_transform = PerspectiveTransform::square_to_quad(quad).unwrap();
+        let (source_img, code) = render_code(payload, version, &source_transform, img_side);
+        let source_view = LumaView::new(&source_img, img_side, img_side, img_side).unwrap();
+
+        // Downscale (production NN formula) to a working resolution whose
+        // own module scale is `working_module_px` px/module.
+        let max_working_dim = (img_side as f64 * working_module_px / source_scale_px).round() as u32;
+        let (working_buf, working_w, working_h) = downscale_luma(&source_view, max_working_dim)
+            .expect("test setup: a downscale must actually be needed here");
+        let working_view = LumaView::new(&working_buf, working_w, working_h, working_w).unwrap();
+        let working_tile_grid = TileGrid::build(&working_view);
+        // Per-axis, matching `SourceView`'s own convention (a square canvas
+        // downscales to equal per-axis ratios here, but computing each from
+        // its own axis keeps the helper honest either way).
+        let sx = working_w as f64 / img_side as f64;
+        let sy = working_h as f64 / img_side as f64;
+
+        // The working-space transform a real `scan()` downscale would have
+        // implied: the known SOURCE transform lifted DOWN to working px —
+        // the inverse direction of Task 2's own module->source lift.
+        let working_transform = source_transform.then(&PerspectiveTransform::scaled(sx, sy));
+        let t = triplet_from_transform(&working_transform, dim);
+        let provisional = provisional_transform(&t, dim as u32);
+        let alignment = locate_alignment_patterns(
+            &working_view, &working_tile_grid, &provisional, version as u32, false, false,
+        );
+
+        let sampled = sample_grid(
+            &working_view,
+            &working_tile_grid,
+            &t,
+            dim as u32,
+            &alignment,
+            None,
+            Some(SourceView { view: &source_view, sx, sy }),
+        )
+        .unwrap_or_else(|| panic!("sample_grid returned None"));
+        (sampled.bits, code, sx)
+    }
+
+    #[test]
+    fn source_resolution_sampling_is_bit_exact_at_2px_per_module_working_v1() {
+        let (bits, code, scale) = run_source_resolution_pipeline(b"SRCRES1", 1, 16.0, 2.0);
+        assert_bit_for_bit(&bits, &code, &format!("v1 source-res (working scale {scale:.4})"));
+    }
+
+    #[test]
+    fn source_resolution_sampling_is_bit_exact_at_2px_per_module_working_v7_multiregion() {
+        let (bits, code, scale) =
+            run_source_resolution_pipeline(b"SRCRESMULTIREGION", 7, 16.0, 2.0);
+        assert_bit_for_bit(
+            &bits, &code, &format!("v7 source-res multi-region (working scale {scale:.4})"),
+        );
+    }
+
+    // Note: an analogous "working-only (source: None) sampling is measurably
+    // WORSE at this same coarse scale" counter-check was deliberately tried
+    // and dropped here — on a clean, noise-free axis-aligned synthetic
+    // render, NN downscaling by an exact integer ratio (as this file's
+    // helpers produce) lands every module boundary back on an exact pixel
+    // boundary, so nearest-neighbor-only sampling stays bit-exact even at
+    // 2 working px/module. That's a property of noise-free synthetic
+    // renders, not evidence the mechanism above is a no-op: real capture
+    // noise/blur/sub-pixel misalignment is exactly what source-resolution
+    // sampling helps with, and that's what `plan5_gate3_img4832_decodes_at_source_resolution`
+    // (`decode_gate.rs`) demonstrates on an actual photo instead.
+
+    /// [`run_source_resolution_pipeline`]'s working-view module scale is
+    /// reported so a caller can confirm the scenario is actually as coarse
+    /// as intended (a regression here — e.g. an accidental change to
+    /// `axis_aligned_quad`'s quiet-zone margin — could silently make the
+    /// working view coarser or finer than the `2.0` px/module this test
+    /// suite documents targeting).
+    #[test]
+    fn run_source_resolution_pipeline_actually_hits_the_targeted_working_scale() {
+        let (_bits, _code, scale) = run_source_resolution_pipeline(b"SCALECHK", 1, 16.0, 2.0);
+        // scale = working_px / source_px, and working_module_px =
+        // source_scale_px * scale by construction (see the helper's doc).
+        let working_module_px = 16.0 * scale;
+        assert!(
+            (working_module_px - 2.0).abs() < 1e-6,
+            "expected ~2.0 working px/module, got {working_module_px}"
+        );
+    }
+
+    /// Review finding (post-Task-2, pre-Task-3): `downscale_luma` rounds
+    /// each destination axis INDEPENDENTLY, so for a non-cleanly-scaling
+    /// source the width and height ratios genuinely differ — and a lift
+    /// that applies the width ratio to both axes (the first draft's single
+    /// scalar) mis-places the far edge by most of a source pixel, real
+    /// error against Task 3's ≤0.1 px refinement budget.
+    ///
+    /// Concretely, through the REAL production downscale (not hand-picked
+    /// ratios): 191x144 at max-dim 128 → `dst_w = round(191·128/191) =
+    /// 128`, `dst_h = round(144·128/191) = round(96.503) = 97`, so `sx =
+    /// 128/191 ≈ 0.67016` but `sy = 97/144 ≈ 0.67361`. Lifting the
+    /// bottom-right working corner `(128, 97)` with per-axis scales lands
+    /// exactly on source `(191, 144)`; lifting with the width scalar on
+    /// both axes lands at y `= 97/sx ≈ 144.742` — 0.742 source px off.
+    /// This test drives `SourceView::lift` (the production lift used by
+    /// `sample_grid`) and FAILS against the pre-fix scalar behavior
+    /// (verified by temporarily constructing `sy = sx`: the 0.05 px
+    /// assertion trips at 0.742 px).
+    #[test]
+    fn lift_uses_per_axis_scales_when_downscale_rounding_diverges() {
+        let (src_w, src_h, max_dim) = (191usize, 144usize, 128u32);
+        let source_buf = vec![128u8; src_w * src_h];
+        let source_view = LumaView::new(&source_buf, src_w, src_h, src_w).unwrap();
+        let (_working_buf, working_w, working_h) = downscale_luma(&source_view, max_dim)
+            .expect("test setup: a downscale must actually be needed here");
+        assert_eq!((working_w, working_h), (128, 97), "production rounding changed?");
+
+        let sx = working_w as f64 / src_w as f64;
+        let sy = working_h as f64 / src_h as f64;
+        assert!(
+            (sx - sy).abs() > 1e-3,
+            "test setup: axis ratios must actually diverge (sx={sx}, sy={sy}) — \
+             pick different dims otherwise"
+        );
+
+        // Module→working transform spanning the full working frame (any
+        // non-degenerate transform works; full-frame makes the analytic
+        // source truth trivial: unit (1,1) → source (src_w, src_h)).
+        let working = PerspectiveTransform::square_to_quad([
+            [0.0, 0.0],
+            [working_w as f64, 0.0],
+            [working_w as f64, working_h as f64],
+            [0.0, working_h as f64],
+        ])
+        .unwrap();
+
+        let src = SourceView { view: &source_view, sx, sy };
+        let lifted = src.lift(&working);
+        let got = lifted.map(1.0, 1.0); // bottom-right corner
+        let want = [src_w as f64, src_h as f64];
+        let err = ((got[0] - want[0]).powi(2) + (got[1] - want[1]).powi(2)).sqrt();
+        assert!(
+            err <= 0.05,
+            "per-axis lift of the bottom-right corner is {err:.4} px off: got {got:?}, want {want:?}"
+        );
+
+        // Pin WHY per-axis matters: the scalar (width-ratio-on-both-axes)
+        // lift is measurably wrong at this same corner — if this stops
+        // holding, the fixture dims no longer exercise the divergence and
+        // the test above has gone vacuous.
+        let scalar_lift = working.then(&PerspectiveTransform::scaled(1.0 / sx, 1.0 / sx));
+        let scalar_got = scalar_lift.map(1.0, 1.0);
+        let scalar_err =
+            ((scalar_got[0] - want[0]).powi(2) + (scalar_got[1] - want[1]).powi(2)).sqrt();
+        assert!(
+            scalar_err > 0.5,
+            "expected the scalar lift to be >0.5 px off at the bottom-right corner \
+             (measured 0.742 px at these dims), got {scalar_err:.4} px"
+        );
+    }
+
+    // --- fit_line_tls_weighted (Plan 5 Task 3 extraction) ---
+
+    #[test]
+    fn fit_line_tls_weighted_with_equal_weights_matches_unweighted() {
+        let pts = [[0.0, 0.1], [1.0, -0.1], [2.0, 0.15], [3.0, -0.05], [4.0, 0.0]];
+        let unweighted = fit_line_tls(&pts);
+        let weighted = fit_line_tls_weighted(&pts, &[1.0; 5]);
+        assert!((unweighted.centroid[0] - weighted.centroid[0]).abs() < 1e-12);
+        assert!((unweighted.centroid[1] - weighted.centroid[1]).abs() < 1e-12);
+        assert!((unweighted.dir[0] - weighted.dir[0]).abs() < 1e-12);
+        assert!((unweighted.dir[1] - weighted.dir[1]).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fit_line_tls_weighted_favors_the_heavily_weighted_points() {
+        // Two clusters of points on two different horizontal lines
+        // (y=0 and y=10); a heavy weight on the y=0 cluster should pull
+        // the fitted line's centroid toward it, away from the unweighted
+        // midpoint (y=5).
+        let pts = [[0.0, 0.0], [1.0, 0.0], [0.0, 10.0], [1.0, 10.0]];
+        let weights = [100.0, 100.0, 1.0, 1.0];
+        let fit = fit_line_tls_weighted(&pts, &weights);
+        assert!(
+            fit.centroid[1] < 1.0,
+            "expected the heavily-weighted y=0 cluster to dominate the centroid, got {:?}",
+            fit.centroid
         );
     }
 }

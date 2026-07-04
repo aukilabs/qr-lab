@@ -23,6 +23,7 @@ const EMPTY_TIMINGS = {
   version_ns: 0,
   alignment_ns: 0,
   sample_decode_ns: 0,
+  refine_ns: 0,
 };
 
 function code(overrides: Partial<DecodedCode> = {}): DecodedCode {
@@ -41,6 +42,8 @@ function code(overrides: Partial<DecodedCode> = {}): DecodedCode {
     ],
     inverted: false,
     finder_indices: [0, 1, 2],
+    refined_corners: null,
+    corner_refined: [false, false, false, false],
     ...overrides,
   };
 }
@@ -61,6 +64,7 @@ describe("decodedLayer", () => {
         triplets: [],
         codes: [code({ payload: "Q:near_00:0", version: 1, ecc: "M", mirrored: false })],
         timings: EMPTY_TIMINGS,
+        source_scale: 1,
       },
       trace: null,
     };
@@ -83,6 +87,7 @@ describe("decodedLayer", () => {
         triplets: [],
         codes: [code({ version: 7, ecc: "Q", mirrored: true })],
         timings: EMPTY_TIMINGS,
+        source_scale: 1,
       },
       trace: null,
     };
@@ -96,7 +101,7 @@ describe("decodedLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: null,
     };
     decodedLayer.draw(ctx);
@@ -114,6 +119,7 @@ describe("decodedLayer", () => {
         ],
         codes: [],
         timings: EMPTY_TIMINGS,
+        source_scale: 1,
       },
       trace: {
         tiles: null,
@@ -150,6 +156,7 @@ describe("decodedLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     decodedLayer.draw(ctx);
@@ -172,7 +179,7 @@ describe("decodedLayer", () => {
     const fake = createFakeCanvas();
     const ctx = baseContext(fake);
     ctx.scan = {
-      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS },
+      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS, source_scale: 1 },
       trace: {
         tiles: null,
         finders: [],
@@ -195,6 +202,7 @@ describe("decodedLayer", () => {
         alignment: [],
         sample_regions: [],
         bits: null,
+        refine: null,
       },
     };
     decodedLayer.draw(ctx);
