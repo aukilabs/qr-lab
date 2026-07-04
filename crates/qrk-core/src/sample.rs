@@ -558,6 +558,45 @@ mod tests {
         }
     }
 
+    /// Pins the *superiority* of the AP-anchored correction over the
+    /// finder-only single-transform fallback — the entire reason the
+    /// per-region tiling (and the single-AP 4th-anchor override) exists.
+    /// At keystone `narrow = 0.90` (a 10% top/bottom width difference),
+    /// v1 — which has NO alignment patterns, so its sampling is bounded by
+    /// `provisional_transform`'s 3-finders-plus-parallelogram
+    /// reconstruction — measurably fails bit-for-bit **by design** (it
+    /// already fails at the milder 0.94 keystone with 3/441 mismatches at
+    /// the bottom-right corner; see `perspective_quad`'s doc). Versions
+    /// 2/7/20, whose located alignment patterns feed real correction
+    /// (v2: the single BR AP as 4th anchor; v7/v20: full region tiling),
+    /// must still sample bit-for-bit exact at this same 0.90 keystone
+    /// through the same real pipeline. Without this test, a regression in
+    /// the AP-anchored paths could hide behind the main gate's
+    /// deliberately mild 3% warp (chosen there only so v1 can pass too).
+    ///
+    /// Do NOT pin a harsher keystone than 0.90: 0.90 is the strongest
+    /// value empirically confirmed for all three versions; harsher warps
+    /// (e.g. 0.85, where v20 was observed to fail) are outside this task's
+    /// verified envelope.
+    #[test]
+    fn ap_anchored_versions_survive_keystone_that_defeats_v1_fallback() {
+        let scale = 4.0;
+        let narrow = 0.90;
+        for &version in &[2i16, 7, 20] {
+            let dim = 17 + 4 * version as usize;
+            let img_side = rotated_img_side(dim, scale);
+            let quad = perspective_quad(dim, scale, narrow, img_side);
+            let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
+            run_pipeline_and_assert(
+                format!("KS{version}").as_bytes(),
+                version,
+                &transform,
+                img_side,
+                &format!("v{version} keystone-0.90 (AP-anchored)"),
+            );
+        }
+    }
+
     /// A code whose frame only captures its left half: sampling therefore
     /// reads far more than 2% of modules out of image, so `oob_fraction`
     /// must reflect that (the caller, `decode.rs`, is what actually rejects
