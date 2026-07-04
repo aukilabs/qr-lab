@@ -11,6 +11,7 @@ mod testpaint;
 mod tiles;
 mod trace;
 mod triplet;
+mod version;
 
 pub use bitmatrix::{decode_bits, BitMatrix, DecodeFailure, DecodedPayload};
 pub use finder::{find_finders, FinderCandidate};
