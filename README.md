@@ -33,7 +33,9 @@ full design.
 - `crates/qrk-core` — the scanner core: tiling/binarization, finder-pattern
   and triplet detection, homography, and decoding (version cross-checks,
   alignment location, grid sampling, rqrr bit-matrix decode, arbitration).
-  Dependency-free on non-wasm targets.
+  `rqrr` (plus its small transitive tail) is a required dependency for the
+  bit-matrix decode step; `serde` is optional (only pulled in behind the
+  `serde` feature) and `js-sys` is only pulled in on the `wasm32` target.
 - `crates/qrk-wasm` — `wasm-pack`-built bindings exposing `scan_rgba` to
   the debug UI's Web Worker; built via `scripts/build-wasm.sh` /
   `npm run build:wasm` (from `debug-ui/`).

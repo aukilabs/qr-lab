@@ -76,10 +76,23 @@ pub struct DecodedCode {
     /// The module dimension of the grid that was actually sampled and
     /// decoded (post every timing-check/version-bits override).
     pub dimension: u32,
-    /// TL, TR, BR, BL image-pixel corners of the module region, mapped
-    /// through the FINAL whole-grid transform (the one `dimension` and the
-    /// alignment search settled on) at unit-square points `(0,0)`, `(1,0)`,
-    /// `(1,1)`, `(0,1)` respectively.
+    /// TL, TR, BR, BL image-pixel corners of the module region — module-space
+    /// `(0,0)`, `(dimension,0)`, `(dimension,dimension)`, `(0,dimension)`
+    /// respectively. Each corner is mapped through the FINAL sample
+    /// region (from the round that actually decoded) whose `module_rect`
+    /// touches it, at that region's own unit-square point (`(0,0)`,
+    /// `(1,0)`, `(1,1)`, or `(0,1)`). For a single-region candidate (v1..6,
+    /// or any candidate whose sampling used one located/refined 4th
+    /// anchor for the whole grid) all four corners come from that same
+    /// whole-grid transform, so this is unchanged from the pre-multi-region
+    /// behavior. For a multi-region candidate (v7+, with interior
+    /// alignment patterns actually located and tiled — see
+    /// [`crate::sample::sample_grid`]), each corner instead comes from
+    /// ITS OWN corner region's transform — e.g. the BR corner is anchored
+    /// by the alignment-pattern evidence nearest the bottom-right, not
+    /// extrapolated from the whole-grid finder-only parallelogram, which
+    /// under keystone perspective would otherwise be off by whole modules
+    /// at exactly that corner.
     pub corners: [[f64; 2]; 4],
     /// `true` when the code's polarity is inverted (light-on-dark).
     pub inverted: bool,
@@ -457,11 +470,12 @@ fn attempt_candidate(
     }
 
     // One sample+decode round for a given (optional) refined BR corner.
-    // `corners`/`sample_regions_trace` come from the FINAL transform: the
-    // single region's own transform when sampling ran through one region —
-    // v1/no-AP, the Task 5b refined rebuild, and the classic single-AP case
-    // — else the whole-grid provisional, since the multi-region tiling has
-    // no single whole-grid transform.
+    // `corners`/`sample_regions_trace` come from the FINAL sampled grid:
+    // each corner through the region whose `module_rect` touches it (see
+    // `DecodedCode::corners`'s doc) — the single region's own transform for
+    // every corner when sampling ran through one region (v1/no-AP, the
+    // Task 5b refined rebuild, and the classic single-AP case), else each
+    // corner's own AP-anchored tile for the multi-region case.
     let run_round = |refined_br: Option<[f64; 2]>| -> RoundOutcome {
         let fallback_corners = [
             transform.map(0.0, 0.0),
@@ -482,16 +496,40 @@ fn attempt_candidate(
                 }
             }
         };
-        let corner_transform = if sampled.regions.len() == 1 {
-            &sampled.regions[0].transform
-        } else {
-            &transform
+        // Each grid corner (module-space `0`/`dimension` on each axis) is
+        // mapped through the SPECIFIC region whose `module_rect` touches
+        // it, never through the whole-grid finder-only provisional. The
+        // regions tile `[0,dimension) x [0,dimension)` with no gaps or
+        // overlaps (see `sample_grid`'s tiling loop, which stretches the
+        // outermost interval on each axis to reach `0`/`dimension`), so
+        // exactly one region's `module_rect` touches any given grid
+        // corner. For a single-region candidate that region spans the
+        // whole grid, so this reduces to the previous whole-grid mapping;
+        // for the multi-region tiling (v7+, real interior alignment
+        // patterns) it instead uses the corner's OWN nearest AP-anchored
+        // region — critically, the BR corner then reflects the alignment
+        // pattern(s) located near it, not a whole-grid parallelogram
+        // extrapolation that silently discards that evidence and, under
+        // keystone perspective, is off by whole modules there.
+        let corner_via_region = |mx: u32, my: u32| -> [f64; 2] {
+            let region = sampled
+                .regions
+                .iter()
+                .find(|r| {
+                    let [x0, y0, x1, y1] = r.module_rect;
+                    (x0 == mx || x1 == mx) && (y0 == my || y1 == my)
+                })
+                .expect(
+                    "sample_grid's regions tile [0,dimension) x [0,dimension) with no \
+                     gaps, so every grid corner touches at least one region's module_rect",
+                );
+            region.transform.map(mx as f64 / dimension as f64, my as f64 / dimension as f64)
         };
         let corners = [
-            corner_transform.map(0.0, 0.0),
-            corner_transform.map(1.0, 0.0),
-            corner_transform.map(1.0, 1.0),
-            corner_transform.map(0.0, 1.0),
+            corner_via_region(0, 0),
+            corner_via_region(dimension, 0),
+            corner_via_region(dimension, dimension),
+            corner_via_region(0, dimension),
         ];
         let sample_regions_trace: Vec<SampleRegionTrace> = if want_trace {
             sampled.regions.iter().map(|r| r.to_trace(dimension)).collect()
@@ -1157,6 +1195,70 @@ mod tests {
             "expected the last recorded round to be the one that actually decoded, got: {:?}",
             decoded_attempt.rounds
         );
+    }
+
+    // --- Final-review fix: per-region corners for multi-region decodes ---
+
+    #[test]
+    fn multi_region_decode_reports_per_region_anchored_corners_under_keystone() {
+        // Pins the final-review fix to `DecodedCode::corners`: a
+        // multi-region decode (v7+, real interior alignment patterns
+        // located and tiled — see `sample::sample_grid`) must report each
+        // corner from the region whose `module_rect` touches it, not from
+        // the whole-grid finder-only parallelogram transform. The BR
+        // corner is the one that actually moves: under this same
+        // narrow=0.90 keystone `sample.rs`'s own AP-superiority test
+        // already proves the AP-anchored regions sample bit-for-bit
+        // correctly for v7 — this test instead checks that the CORNER
+        // OUTPUT reflects that same AP-anchored evidence, comparing
+        // against the true render homography (not a parallelogram
+        // approximation of it).
+        let version = 7i16;
+        let dim = 17 + 4 * version as usize; // 45
+        let scale = 4.0;
+        let img_side = ((dim as f64 * scale) * std::f64::consts::SQRT_2 + 40.0).ceil() as usize;
+        let quad = keystone_quad(dim, scale, 0.90, img_side);
+        let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
+        let code = qrcode::QrCode::with_version(
+            b"MULTIREGIONKEYSTONE", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+        )
+        .unwrap();
+        assert_eq!(code.width(), dim);
+        let img = render_module_grid_transformed(
+            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+        );
+        let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
+        let grid = TileGrid::build(&view);
+
+        let t = triplet_from_transform(&transform, dim, dim as u32);
+        let (codes, attempts, _timings, ..) =
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false);
+        assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
+        assert_eq!(codes[0].payload, "MULTIREGIONKEYSTONE");
+
+        // Ground truth: the render homography itself (`transform`) is the
+        // TRUE perspective transform the image was rendered through, not
+        // a parallelogram approximation of it — its own unit-square
+        // corners are exactly the module-grid corners' true image
+        // positions, the same convention `DecodedCode::corners` documents
+        // (`(0,0)`, `(1,0)`, `(1,1)`, `(0,1)` -> TL, TR, BR, BL).
+        let ground_truth = [
+            transform.map(0.0, 0.0),
+            transform.map(1.0, 0.0),
+            transform.map(1.0, 1.0),
+            transform.map(0.0, 1.0),
+        ];
+        let tol = (2.0f64).max(scale); // max(2.0px, 1 module in px)
+        let labels = ["TL", "TR", "BR", "BL"];
+        for (i, label) in labels.iter().enumerate() {
+            let got = codes[0].corners[i];
+            let want = ground_truth[i];
+            let err = ((got[0] - want[0]).powi(2) + (got[1] - want[1]).powi(2)).sqrt();
+            assert!(
+                err <= tol,
+                "{label} corner error {err:.3}px exceeds tolerance {tol:.3}px: got {got:?}, want {want:?}",
+            );
+        }
     }
 
     #[test]
