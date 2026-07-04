@@ -298,6 +298,12 @@ fn read_version_block(
 ///
 /// Returns the first of {TR-forward, TR-reversed, BL-forward, BL-reversed}
 /// that BCH-decodes successfully.
+///
+/// The two blocks are sampled independently: if one lands (partially)
+/// outside the image (`read_version_block` returns `None`) the other is
+/// still tried on its own — a candidate near a frame edge may have only
+/// one of its two redundant version-info blocks in-frame, and the whole
+/// point of the redundancy is to tolerate exactly that.
 pub(crate) fn read_version_bits(
     view: &LumaView,
     grid: &TileGrid,
@@ -305,14 +311,12 @@ pub(crate) fn read_version_bits(
     dimension_est: u32,
     inverted: bool,
 ) -> Option<u32> {
-    let tr = read_version_block(view, grid, transform, dimension_est, inverted, true)?;
-    let bl = read_version_block(view, grid, transform, dimension_est, inverted, false)?;
-    for candidate in [tr, reverse_bits(tr, 18), bl, reverse_bits(bl, 18)] {
-        if let Some(v) = bch_decode_version(candidate) {
-            return Some(v);
-        }
-    }
-    None
+    let tr = read_version_block(view, grid, transform, dimension_est, inverted, true);
+    let bl = read_version_block(view, grid, transform, dimension_est, inverted, false);
+    [tr, tr.map(|b| reverse_bits(b, 18)), bl, bl.map(|b| reverse_bits(b, 18))]
+        .into_iter()
+        .flatten()
+        .find_map(bch_decode_version)
 }
 
 #[cfg(test)]
@@ -435,6 +439,35 @@ mod tests {
             let got = read_version_bits(&view, &grid, &transform, dim as u32, false);
             assert_eq!(got, Some(version as u32), "v{version}");
         }
+    }
+
+    /// `read_version_bits` must not give up entirely just because one of
+    /// the two redundant version-info blocks is unreachable — crop the
+    /// rendered image so only the BL block (near rows `dim-11..dim-9`,
+    /// bottom of the code) falls outside the image, leaving the TR block
+    /// (near the top, rows `0..5`) intact, and confirm the TR block alone
+    /// still recovers the version.
+    #[test]
+    fn read_version_bits_falls_back_when_one_block_is_out_of_frame() {
+        let version = 7i16;
+        let dim = 17 + 4 * version as usize; // 45
+        let (transform, img_side) = axis_aligned_transform(dim, 4.0, 4.0);
+        let (img, _) = render(b"CROPPED", version, qrcode::EcLevel::M, &transform, img_side);
+
+        // TR block's sampled rows (0..5) land at pixel y in roughly
+        // [16 + 0.5*4, 16 + 5.5*4] = [18, 38]; BL block's sampled rows
+        // (dim-11..dim-9 = 34..36) land at roughly [154, 162] (quiet=4,
+        // scale=4 -> code top at pixel y=16). Cropping to 100 rows keeps
+        // the TR block fully in-frame while placing the BL block's rows
+        // entirely outside the cropped image.
+        let crop_h = 100usize;
+        assert!(crop_h < img_side, "test assumption: crop must be a real crop");
+        let cropped = &img[..img_side * crop_h];
+        let view = LumaView::new(cropped, img_side, crop_h, img_side).unwrap();
+        let grid = TileGrid::build(&view);
+
+        let got = read_version_bits(&view, &grid, &transform, dim as u32, false);
+        assert_eq!(got, Some(version as u32));
     }
 
     #[test]
