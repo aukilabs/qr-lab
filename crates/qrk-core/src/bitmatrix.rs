@@ -7,7 +7,9 @@
 //!
 //! Decoding itself is delegated to `rqrr`, a pure-Rust QR bit-matrix decoder
 //! (Reed-Solomon error correction + ISO 18004 data-stream parsing). We only
-//! provide the `rqrr::BitGrid` glue and a mirrored-read retry.
+//! provide the `rqrr::BitGrid` glue and independent mirrored-orientation
+//! detection (rqrr handles mirrored *content* itself but does not report
+//! which orientation it used).
 
 /// A packed, square bit matrix: one bit per QR module.
 ///
@@ -71,7 +73,8 @@ impl rqrr::BitGrid for &BitMatrix {
     }
 }
 
-/// A view over a `BitMatrix` with x/y swapped, for the mirrored-read retry.
+/// A view over a `BitMatrix` with x/y swapped, used by the mirrored-
+/// orientation detection in `is_mirrored`.
 ///
 /// rqrr 0.10.1's own `MirroredGrid` has a private inner field (no public
 /// constructor), so it cannot be built outside the `rqrr` crate. This is the
@@ -101,8 +104,9 @@ pub struct DecodedPayload {
     /// Error-correction level: one of `'L'`, `'M'`, `'Q'`, `'H'`, or `'?'`
     /// if it could not be determined.
     pub ecc: char,
-    /// `true` when the payload only decoded via the transposed (mirrored)
-    /// read — i.e. the source image was mirrored.
+    /// `true` when the grid's true reading orientation is x/y-swapped —
+    /// i.e. the source image was mirrored. Determined independently of
+    /// content decoding; see `is_mirrored`.
     pub mirrored: bool,
 }
 
@@ -161,71 +165,79 @@ fn ecc_char(ecc_level: u16) -> char {
     }
 }
 
-fn decode_grid<G: rqrr::BitGrid>(grid: G) -> Result<DecodedPayload, DecodeFailure> {
-    let (meta, payload) = rqrr::Grid::new(grid).decode().map_err(map_err)?;
-    Ok(DecodedPayload {
-        payload_bytes: payload.as_bytes().to_vec(),
-        payload,
-        version: meta.version.0 as u32,
-        ecc: ecc_char(meta.ecc_level),
-        mirrored: false,
-    })
-}
-
-/// Is the ISO 18004 "dark module" set?
+/// Detect whether the grid is mirrored (must be read with x/y swapped).
 ///
-/// Every valid QR code has exactly one module that is unconditionally dark,
-/// at (row = 4*version + 9, col = 8), regardless of content, mask, or ECC
-/// level. It's cheap to check and orientation-*sensitive*: unlike the
-/// format-info cross (symmetric by construction) or the finder patterns
-/// (symmetric individually), this single bit's transpose position falls
-/// inside the content-dependent redundant format-info strip, so it is not
-/// generally also dark under a swapped reading. That makes it a reliable,
-/// standards-grounded tiebreaker (see `decode_bits`) rather than a fit to
-/// any specific test payload.
-fn dark_module_set<G: rqrr::BitGrid>(grid: G, version: u32) -> bool {
-    let row = 4 * version as usize + 9;
-    grid.bit(row, 8)
+/// Orientation must NOT be inferred from `Grid::decode` success/failure:
+/// rqrr 0.10.1's `decode::decode` internally retries the mirrored reading
+/// (`src/decode.rs`: `_decode(code)` falling back to
+/// `_decode(&MirroredGrid(code))`), so direct and transposed calls always
+/// agree and carry zero orientation signal. Nor is mere format-info
+/// *validity* per orientation enough: empirically the transposed 15-bit
+/// format read (same cells, scrambled order) frequently corrects to some
+/// *other* valid BCH(15,5) codeword — e.g. a true (L, mask 2) reads as a
+/// "valid" (Q, mask 6) when transposed.
+///
+/// Two signals, checked in order:
+///
+/// 1. **Format metadata match against the RS-verified truth** (primary).
+///    `verified` is the `(ecc_level, mask)` from `Grid::decode`'s returned
+///    `MetaData` — rqrr reports the metadata of whichever orientation
+///    passed the full Reed-Solomon data check (`codestream_ecc`), i.e. the
+///    true one; a wrong-orientation full decode would require transposed
+///    data codewords to satisfy RS, which garbage data does not.
+///    `Grid::get_raw_data` -> `decode::get_raw` -> `read_format` has NO
+///    mirror retry (verified in rqrr 0.10.1 source), so it reads each
+///    orientation's format info as laid out. The orientation whose format
+///    read yields `verified` — and whose counterpart doesn't — is the true
+///    one, even when the counterpart's read happens to be BCH-valid noise.
+/// 2. **ISO 18004 dark module** (tiebreaker, for when signal 1 ties).
+///    Every QR code has one unconditionally dark module at
+///    (row = 4*version + 9, col = 8). Its transpose position
+///    (row 8, col = 4*version + 9) lands in the content-dependent second
+///    format-info copy, so comparing the two cells breaks the tie whenever
+///    they differ; the true orientation always has its dark module set.
+///
+/// If both signals tie the grid is reported as not mirrored — at that
+/// point the two orientations are genuinely indistinguishable at the bit
+/// level (coincidentally matching format reads AND equal dark cells).
+fn is_mirrored(m: &BitMatrix, verified: (u16, u16), version: u32) -> bool {
+    fn format_meta<G: rqrr::BitGrid>(grid: G) -> Option<(u16, u16)> {
+        rqrr::Grid::new(grid)
+            .get_raw_data()
+            .ok()
+            .map(|(meta, _)| (meta.ecc_level, meta.mask))
+    }
+    let direct_matches = format_meta(m) == Some(verified);
+    let transposed_matches = format_meta(Transposed(m)) == Some(verified);
+    match (direct_matches, transposed_matches) {
+        (true, false) => false,
+        (false, true) => true,
+        _ => {
+            let dm = 4 * version as usize + 9; // dark module row (== dim - 8)
+            let direct_dark = m.get(8, dm); // (row = dm, col = 8)
+            let transposed_dark = m.get(dm, 8); // transposed reading's dark module
+            !direct_dark && transposed_dark
+        }
+    }
 }
 
 /// Decode a QR payload from a sampled bit matrix.
 ///
-/// Tries the matrix as given and with x/y swapped (`Transposed`, to handle
-/// QR codes sampled from a mirrored source image — e.g. a front-facing
-/// camera or a code viewed through a reflective surface). `mirrored = true`
-/// iff only the transposed read succeeded.
-///
-/// Format-info placement is symmetric under transpose by construction (ISO
-/// 18004's redundant copy is laid out as a symmetric cross), and typical
-/// mask choices are too, so it's common for *both* readings to decode the
-/// grid successfully (to the identical payload — the ambiguity is real, not
-/// a bug: such a grid is genuinely readable either way). When that happens,
-/// the dark module (see `dark_module_set`) breaks the tie in favor of
-/// whichever orientation actually has it set, since only one meaningfully
-/// can.
+/// Content decoding is a single `rqrr::Grid::decode` call — rqrr itself
+/// retries the mirrored reading internally, so a mirrored matrix decodes
+/// to the correct payload without any orientation handling on our side.
+/// The `mirrored` flag is then determined independently by `is_mirrored`
+/// (rqrr does not report which orientation its internal retry used).
 pub fn decode_bits(m: &BitMatrix) -> Result<DecodedPayload, DecodeFailure> {
-    let direct = decode_grid(m);
-    let transposed = decode_grid(Transposed(m));
-    match (direct, transposed) {
-        (Ok(d), Err(_)) => Ok(d),
-        (Err(_), Ok(t)) => Ok(DecodedPayload {
-            mirrored: true,
-            ..t
-        }),
-        (Err(direct_err), Err(_)) => Err(direct_err),
-        (Ok(d), Ok(t)) => {
-            let direct_dark = dark_module_set(m, d.version);
-            let transposed_dark = dark_module_set(Transposed(m), d.version);
-            if !direct_dark && transposed_dark {
-                Ok(DecodedPayload {
-                    mirrored: true,
-                    ..t
-                })
-            } else {
-                Ok(d)
-            }
-        }
-    }
+    let (meta, payload) = rqrr::Grid::new(m).decode().map_err(map_err)?;
+    let version = meta.version.0 as u32;
+    Ok(DecodedPayload {
+        payload_bytes: payload.as_bytes().to_vec(),
+        payload,
+        version,
+        ecc: ecc_char(meta.ecc_level),
+        mirrored: is_mirrored(m, (meta.ecc_level, meta.mask), version),
+    })
 }
 
 #[cfg(test)]
@@ -265,14 +277,51 @@ mod tests {
         }
     }
 
+    /// Orientation must be detected reliably across versions, ECC levels,
+    /// and payloads — not by luck of a single mask choice. 100 combos, each
+    /// checked in both orientations (200 mirrored-flag assertions).
     #[test]
-    fn decodes_mirrored() {
-        let m = qr_matrix("Q:mirror:1", 1, qrcode::EcLevel::M);
-        let mut t = BitMatrix::new(m.dim);
-        for y in 0..m.dim { for x in 0..m.dim { t.set(y, x, m.get(x, y)); } }
-        let d = decode_bits(&t).unwrap();
-        assert_eq!(d.payload, "Q:mirror:1");
-        assert!(d.mirrored);
+    fn mirrored_flag_sweep() {
+        let ecc_levels = [
+            (qrcode::EcLevel::L, "L"),
+            (qrcode::EcLevel::M, "M"),
+            (qrcode::EcLevel::Q, "Q"),
+            (qrcode::EcLevel::H, "H"),
+        ];
+        let mut failures = Vec::new();
+        for v in 1i16..=5 {
+            for (ecc, ecc_name) in ecc_levels {
+                for i in 0..5 {
+                    // Compact but distinct per combo: v1-H byte capacity is
+                    // only 7, so the payload must stay short.
+                    let payload = format!("Q{v}{ecc_name}{i}");
+                    let m = qr_matrix(&payload, v, ecc);
+                    let mut t = BitMatrix::new(m.dim);
+                    for y in 0..m.dim {
+                        for x in 0..m.dim {
+                            t.set(y, x, m.get(x, y));
+                        }
+                    }
+                    let d = decode_bits(&m).unwrap_or_else(|e| panic!("{payload} direct: {e:?}"));
+                    let dt =
+                        decode_bits(&t).unwrap_or_else(|e| panic!("{payload} transposed: {e:?}"));
+                    assert_eq!(d.payload, payload, "{payload} direct payload");
+                    assert_eq!(dt.payload, payload, "{payload} transposed payload");
+                    if d.mirrored {
+                        failures.push(format!("{payload}: direct claims mirrored"));
+                    }
+                    if !dt.mirrored {
+                        failures.push(format!("{payload}: transposed missed mirrored"));
+                    }
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} / 200 orientation assertions failed:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
     }
 
     #[test]
