@@ -69,6 +69,12 @@ pub struct Detections {
     /// approximation the debug UI's pre-Plan-5 `workingScaleFor` already
     /// made (`scanWidth / sourceWidth`, width only) — carried forward
     /// rather than introduced here.
+    ///
+    /// Note this width-pinning is a PUBLIC-scalar approximation only:
+    /// internally, `scan`'s source-resolution module sampling (Plan 5
+    /// Task 2) lifts working→source through exact PER-AXIS ratios (see
+    /// `sample::SourceView`), so sampling precision does not inherit this
+    /// field's height-axis rounding slack.
     pub source_scale: f64,
 }
 
@@ -157,7 +163,7 @@ pub fn detect_with(view: &LumaView, trace: Option<&mut Trace>) -> Detections {
 /// [`detect_with`]'s real body, additionally threading an optional SOURCE
 /// view through to [`decode_candidates`] (Plan 5 Task 2): `scan.rs`'s
 /// `scan_with` calls this directly (not `detect_with`) with
-/// `Some(SourceView { view: source, scale })` whenever it downscaled `view`
+/// `Some(SourceView { view: source, sx, sy })` whenever it downscaled `view`
 /// from `source`, so module sampling
 /// can read the SOURCE image instead of the (lossier, at ~2 working
 /// px/module) working `view` — see `sample::sample_grid`'s doc for exactly

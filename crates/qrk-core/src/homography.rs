@@ -98,10 +98,13 @@ impl PerspectiveTransform {
     /// Diagonal scaling homography: `(u, v) -> (sx*u, sy*v)`. Plan 5 Task
     /// 2's source-resolution sampling composes this with a module→working
     /// transform (via [`Self::then`]) to lift it to a module→SOURCE
-    /// transform: `working.then(&PerspectiveTransform::scaled(1.0 /
-    /// source_scale, 1.0 / source_scale))` maps a module coordinate straight
-    /// to source-image pixels, since `source_px = working_px / source_scale`
-    /// (see `Detections::source_scale`'s doc for that convention). Not
+    /// transform: `working.then(&PerspectiveTransform::scaled(1.0 / sx,
+    /// 1.0 / sy))` — with `(sx, sy)` the PER-AXIS working/source ratios,
+    /// which `scan`'s downscale rounds independently — maps a module
+    /// coordinate straight to source-image pixels, since `source_px =
+    /// working_px / s` per axis (see `sample::SourceView`'s doc for the
+    /// convention, and `Detections::source_scale` for the width-pinned
+    /// public scalar it deliberately differs from on the height axis). Not
     /// itself projective (`a13 == a23 == 0.0`), just the diagonal special
     /// case expressed in the same 3x3 form so [`Self::then`]'s matrix
     /// composition applies unchanged.

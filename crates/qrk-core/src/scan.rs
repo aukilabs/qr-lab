@@ -67,13 +67,15 @@ fn scan_with(source: &LumaView, opts: &ScanOptions, trace: Option<&mut Trace>) -
             let working = LumaView::new(&buf, w, h, w).expect(
                 "downscale_luma always returns a non-empty, tightly packed (stride == width) buffer",
             );
-            // Width-based ratio — see `Detections::source_scale`'s doc
-            // comment for why width (rather than height) is the pinned
-            // axis when the two disagree by a rounding hair on a
-            // non-square image.
-            let scale = w as f64 / source.width() as f64;
-            // Plan 5 Task 2: hand the SOURCE view (plus this same ratio,
-            // `SourceView::scale`'s convention) down through
+            // Per-axis ratios: `downscale_luma` rounds width and height
+            // independently, so on a non-cleanly-scaling source the two
+            // genuinely differ (see `SourceView`'s doc for the measured
+            // ~0.75 source-px far-edge lift error a shared width scalar
+            // causes). The internal sampling lift uses both exactly.
+            let sx = w as f64 / source.width() as f64;
+            let sy = h as f64 / source.height() as f64;
+            // Plan 5 Task 2: hand the SOURCE view (plus the per-axis
+            // ratios, `SourceView`'s convention) down through
             // `detect_with_source` so `decode.rs`'s module sampling can read
             // it instead of `working` — the fix for far codes that DETECT
             // fine at working resolution but can't SAMPLE at ~2 working
@@ -82,8 +84,11 @@ fn scan_with(source: &LumaView, opts: &ScanOptions, trace: Option<&mut Trace>) -
             // before; only the sampling calls deep inside `decode_candidates`
             // see `source` at all.
             let mut detections =
-                detect_with_source(&working, Some(SourceView { view: source, scale }), trace);
-            detections.source_scale = scale;
+                detect_with_source(&working, Some(SourceView { view: source, sx, sy }), trace);
+            // The PUBLIC scalar stays width-pinned per the plan (see
+            // `Detections::source_scale`'s doc) even though the internal
+            // sampling lift above is per-axis.
+            detections.source_scale = sx;
             detections
         }
         // No downscale needed: `detect_with` already defaults

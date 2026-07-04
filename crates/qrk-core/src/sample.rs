@@ -672,14 +672,43 @@ pub(crate) fn refine_fourth_corner(
 /// [`sample_grid`] samples module GRAYS from (instead of the WORKING
 /// `view`/`grid` every other stage — tiling, alignment, timing/version-bits
 /// — still runs on) whenever a downscale actually happened, plus the
-/// working/source scale needed to lift a region's module→working
-/// `transform` to module→source (see [`PerspectiveTransform::scaled`]'s
-/// doc). `scale` follows `Detections::source_scale`'s own convention:
-/// `working_px = source_px * scale`, always `<= 1`.
+/// PER-AXIS working/source scales needed to lift a region's module→working
+/// `transform` to module→source (see [`Self::lift`]).
+///
+/// Per-axis, not one scalar: `downscale_luma` rounds each destination axis
+/// independently (`round(dim * max_dim / longest)` per axis — see its
+/// doc), so for a non-cleanly-scaling source the two axes' true ratios
+/// genuinely differ (e.g. 191x144 at max-dim 128 → 128x97: `sx = 128/191 ≈
+/// 0.6702`, `sy = 97/144 ≈ 0.6736`). Applying the width ratio to BOTH axes
+/// — as this struct's first draft did — mis-lifts the far (bottom) edge by
+/// up to ~0.75 source px (~0.25 module at IMG_4832's scale), real error
+/// against Plan 5's ≤0.1 px Task 3 refinement budget.
+/// `Detections::source_scale` (the public scalar) deliberately stays
+/// width-pinned per the plan; these two fields are the internal, exact
+/// per-axis form.
+///
+/// Convention per axis, matching `Detections::source_scale`'s direction:
+/// `working_px = source_px * s`, each `<= 1`.
 #[derive(Clone, Copy)]
 pub(crate) struct SourceView<'a> {
     pub view: &'a LumaView<'a>,
-    pub scale: f64,
+    /// `working_width / source_width`.
+    pub sx: f64,
+    /// `working_height / source_height`.
+    pub sy: f64,
+}
+
+impl SourceView<'_> {
+    /// Lift a module→WORKING transform to module→SOURCE: compose with the
+    /// per-axis inverse scale `scaled(1/sx, 1/sy)` (`source_px =
+    /// working_px / s`, per axis). [`sample_grid`]'s one lift site,
+    /// factored onto the struct so the per-axis correctness is
+    /// unit-testable against `downscale_luma`'s actual independent-axis
+    /// rounding (see
+    /// `lift_uses_per_axis_scales_when_downscale_rounding_diverges`).
+    pub(crate) fn lift(&self, module_to_working: &PerspectiveTransform) -> PerspectiveTransform {
+        module_to_working.then(&PerspectiveTransform::scaled(1.0 / self.sx, 1.0 / self.sy))
+    }
 }
 
 /// Map a module center to its WORKING-resolution tile-threshold lookup
@@ -691,16 +720,17 @@ pub(crate) struct SourceView<'a> {
 ///
 /// This is exactly `transform.map(col / dim, row / dim)` rounded — i.e.
 /// the *same* working-space position the source-space sample would reach
-/// by computing `source_px = transform.then(&scaled(1/scale,
-/// 1/scale)).map(...)` and then multiplying back by `scale` (the plan's
-/// literal "source pixel -> working tile via coordinate division"
-/// framing): `working.then(&scaled(1/s,1/s)).map(p) == working.map(p) /
-/// s`, so `(working.map(p) / s) * s == working.map(p)` again, up to a
-/// floating-point epsilon from the extra multiply/divide that is
-/// irrelevant to a value only ever used for a rounded table lookup.
-/// Computing it directly through the untouched working `transform`
-/// (rather than round-tripping through the lifted transform) is simpler
-/// and marginally more precise, not a different coordinate.
+/// by computing `source_px = SourceView::lift(transform).map(...)` and
+/// then multiplying back by `(sx, sy)` per axis (the plan's literal
+/// "source pixel -> working tile via coordinate division" framing):
+/// `working.then(&scaled(1/sx,1/sy)).map(p)` is `working.map(p)` divided
+/// per-axis by `(sx, sy)`, so re-multiplying by `(sx, sy)` recovers
+/// `working.map(p)` again, up to a floating-point epsilon from the extra
+/// multiply/divide that is irrelevant to a value only ever used for a
+/// rounded table lookup. Computing it directly through the untouched
+/// working `transform` (rather than round-tripping through the lifted
+/// transform) is simpler and marginally more precise, not a different
+/// coordinate.
 ///
 /// Clamped rather than `None`-on-OOB (unlike every other sampling
 /// primitive in this file): a threshold lookup is a lookup table, not
@@ -760,8 +790,8 @@ fn working_tile_coords(
 /// on this branch being untouched). When `Some`, every module's GRAY is
 /// instead read via [`crate::version::sample_module_gray_bilinear`] off
 /// the SOURCE view, through the region's `transform` lifted to
-/// module→source by composing with `PerspectiveTransform::scaled(1.0 /
-/// source.scale, 1.0 / source.scale)` (see that method's doc) — the fix
+/// module→source by [`SourceView::lift`] (per-axis inverse scales — see
+/// that method's and the struct's docs) — the fix
 /// for far codes that DETECT fine at working resolution but can't sample
 /// at ~2 working px/module (real-photo evidence: `IMG_4832`). The
 /// tile-threshold lookup that binarizes that gray still comes from the
@@ -861,8 +891,7 @@ pub(crate) fn sample_grid(
         // region shares the same module→working `region.transform`, so the
         // module→source composition is invariant across the whole loop
         // below).
-        let source_transform =
-            source.map(|src| region.transform.then(&PerspectiveTransform::scaled(1.0 / src.scale, 1.0 / src.scale)));
+        let source_transform = source.map(|src| src.lift(&region.transform));
 
         let [x0, y0, x1, y1] = region.module_rect;
         for y in y0..y1 {
@@ -1233,12 +1262,16 @@ mod tests {
             .expect("test setup: a downscale must actually be needed here");
         let working_view = LumaView::new(&working_buf, working_w, working_h, working_w).unwrap();
         let working_tile_grid = TileGrid::build(&working_view);
-        let scale = working_w as f64 / img_side as f64;
+        // Per-axis, matching `SourceView`'s own convention (a square canvas
+        // downscales to equal per-axis ratios here, but computing each from
+        // its own axis keeps the helper honest either way).
+        let sx = working_w as f64 / img_side as f64;
+        let sy = working_h as f64 / img_side as f64;
 
         // The working-space transform a real `scan()` downscale would have
         // implied: the known SOURCE transform lifted DOWN to working px —
         // the inverse direction of Task 2's own module->source lift.
-        let working_transform = source_transform.then(&PerspectiveTransform::scaled(scale, scale));
+        let working_transform = source_transform.then(&PerspectiveTransform::scaled(sx, sy));
         let t = triplet_from_transform(&working_transform, dim);
         let provisional = provisional_transform(&t, dim as u32);
         let alignment = locate_alignment_patterns(
@@ -1252,10 +1285,10 @@ mod tests {
             dim as u32,
             &alignment,
             None,
-            Some(SourceView { view: &source_view, scale }),
+            Some(SourceView { view: &source_view, sx, sy }),
         )
         .unwrap_or_else(|| panic!("sample_grid returned None"));
-        (sampled.bits, code, scale)
+        (sampled.bits, code, sx)
     }
 
     #[test]
@@ -1300,6 +1333,77 @@ mod tests {
         assert!(
             (working_module_px - 2.0).abs() < 1e-6,
             "expected ~2.0 working px/module, got {working_module_px}"
+        );
+    }
+
+    /// Review finding (post-Task-2, pre-Task-3): `downscale_luma` rounds
+    /// each destination axis INDEPENDENTLY, so for a non-cleanly-scaling
+    /// source the width and height ratios genuinely differ — and a lift
+    /// that applies the width ratio to both axes (the first draft's single
+    /// scalar) mis-places the far edge by most of a source pixel, real
+    /// error against Task 3's ≤0.1 px refinement budget.
+    ///
+    /// Concretely, through the REAL production downscale (not hand-picked
+    /// ratios): 191x144 at max-dim 128 → `dst_w = round(191·128/191) =
+    /// 128`, `dst_h = round(144·128/191) = round(96.503) = 97`, so `sx =
+    /// 128/191 ≈ 0.67016` but `sy = 97/144 ≈ 0.67361`. Lifting the
+    /// bottom-right working corner `(128, 97)` with per-axis scales lands
+    /// exactly on source `(191, 144)`; lifting with the width scalar on
+    /// both axes lands at y `= 97/sx ≈ 144.742` — 0.742 source px off.
+    /// This test drives `SourceView::lift` (the production lift used by
+    /// `sample_grid`) and FAILS against the pre-fix scalar behavior
+    /// (verified by temporarily constructing `sy = sx`: the 0.05 px
+    /// assertion trips at 0.742 px).
+    #[test]
+    fn lift_uses_per_axis_scales_when_downscale_rounding_diverges() {
+        let (src_w, src_h, max_dim) = (191usize, 144usize, 128u32);
+        let source_buf = vec![128u8; src_w * src_h];
+        let source_view = LumaView::new(&source_buf, src_w, src_h, src_w).unwrap();
+        let (_working_buf, working_w, working_h) = downscale_luma(&source_view, max_dim)
+            .expect("test setup: a downscale must actually be needed here");
+        assert_eq!((working_w, working_h), (128, 97), "production rounding changed?");
+
+        let sx = working_w as f64 / src_w as f64;
+        let sy = working_h as f64 / src_h as f64;
+        assert!(
+            (sx - sy).abs() > 1e-3,
+            "test setup: axis ratios must actually diverge (sx={sx}, sy={sy}) — \
+             pick different dims otherwise"
+        );
+
+        // Module→working transform spanning the full working frame (any
+        // non-degenerate transform works; full-frame makes the analytic
+        // source truth trivial: unit (1,1) → source (src_w, src_h)).
+        let working = PerspectiveTransform::square_to_quad([
+            [0.0, 0.0],
+            [working_w as f64, 0.0],
+            [working_w as f64, working_h as f64],
+            [0.0, working_h as f64],
+        ])
+        .unwrap();
+
+        let src = SourceView { view: &source_view, sx, sy };
+        let lifted = src.lift(&working);
+        let got = lifted.map(1.0, 1.0); // bottom-right corner
+        let want = [src_w as f64, src_h as f64];
+        let err = ((got[0] - want[0]).powi(2) + (got[1] - want[1]).powi(2)).sqrt();
+        assert!(
+            err <= 0.05,
+            "per-axis lift of the bottom-right corner is {err:.4} px off: got {got:?}, want {want:?}"
+        );
+
+        // Pin WHY per-axis matters: the scalar (width-ratio-on-both-axes)
+        // lift is measurably wrong at this same corner — if this stops
+        // holding, the fixture dims no longer exercise the divergence and
+        // the test above has gone vacuous.
+        let scalar_lift = working.then(&PerspectiveTransform::scaled(1.0 / sx, 1.0 / sx));
+        let scalar_got = scalar_lift.map(1.0, 1.0);
+        let scalar_err =
+            ((scalar_got[0] - want[0]).powi(2) + (scalar_got[1] - want[1]).powi(2)).sqrt();
+        assert!(
+            scalar_err > 0.5,
+            "expected the scalar lift to be >0.5 px off at the bottom-right corner \
+             (measured 0.742 px at these dims), got {scalar_err:.4} px"
         );
     }
 }

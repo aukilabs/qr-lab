@@ -387,6 +387,15 @@ fn plan5_regression_pin_scan_matches_detect_on_near_res_fixtures() {
         assert_eq!(scanned.finders.len(), detected.finders.len(), "{name}: finders count");
         assert_eq!(scanned.triplets.len(), detected.triplets.len(), "{name}: triplets count");
         assert_eq!(scanned.codes.len(), detected.codes.len(), "{name}: codes count");
+        // All three fixtures carry ground-truth codes gate 1 decodes, so
+        // an empty `codes` here would mean the field-comparison loop below
+        // is comparing nothing at all — fail loudly instead of passing
+        // vacuously.
+        assert!(
+            !scanned.codes.is_empty(),
+            "{name}: expected at least one decoded code — the pin's field comparison \
+             must not be vacuous"
+        );
         for (i, (a, b)) in scanned.codes.iter().zip(detected.codes.iter()).enumerate() {
             assert_eq!(a.payload, b.payload, "{name}: code {i} payload");
             assert_eq!(a.payload_bytes, b.payload_bytes, "{name}: code {i} payload_bytes");
