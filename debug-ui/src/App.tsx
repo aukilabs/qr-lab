@@ -6,8 +6,9 @@
 // Scan pipeline (binding decision, see task-6-brief.md): a source change,
 // a resolution change, or a new video frame produces a full-resolution RGBA
 // readout, which goes to `ScannerClient.scan` (the worker downscales
-// internally via `downscaleRgba` and runs `scan_rgba` on the result). Once
-// that scan resolves, this file downscales the SAME rgba with the SAME
+// internally via `downscaleRgba` and runs `scan_rgba` on the result; the
+// client copies the frame up front, so the caller's rgba stays readable).
+// While that scan runs, this file downscales the SAME rgba with the SAME
 // `downscaleRgba` call (same maxDim) to build the bitmap actually drawn in
 // the `Viewport` — guaranteeing the displayed pixels and the overlay
 // coordinates (which are in the worker's `scanWidth`/`scanHeight` space)
@@ -153,10 +154,19 @@ export function App() {
   }, []);
 
   /**
-   * Scan one full-resolution rgba frame and, once the scan itself succeeds,
-   * rebuild the display bitmap/status-bar state from the same frame. Runs
-   * for both image mode (one call per source/resolution change) and video
-   * mode (one call per presented frame — see `handleVideoFrame`).
+   * Scan one full-resolution rgba frame, and rebuild the display bitmap /
+   * status-bar state from the same frame. Runs for both image mode (one
+   * call per source/resolution change) and video mode (one call per
+   * presented frame — see `handleVideoFrame`).
+   *
+   * Ordering: the scan request is POSTED first (so the worker starts
+   * immediately), but the display downscale + bitmap are built and
+   * committed BEFORE the scan result is awaited — first paint doesn't
+   * wait on scan latency, and the display path's read of `rgba` is
+   * independent of the scan transport. (`ScannerClient.scan` copies the
+   * frame up front and never consumes the caller's buffer — see its
+   * ownership doc comment — so this ordering is belt-and-braces on top of
+   * that, not the only thing keeping `rgba` readable.)
    */
   const runScan = useCallback(
     async (rgba: Uint8ClampedArray, width: number, height: number) => {
@@ -166,26 +176,18 @@ export function App() {
 
       const maxDim = maxDimFor(resolution);
       const startedAt = performance.now();
-      let outcome;
-      try {
-        outcome = await client.scan(rgba, width, height, { maxDim, withTrace: true });
-      } catch (err) {
-        if (err instanceof StaleScanError) return; // superseded — a fresher frame is already on its way
-        if (sourceGenerationRef.current === generation) {
-          setScanError(err instanceof Error ? err.message : String(err));
-        }
-        return;
-      }
-      // The source changed while this scan was in flight (see
-      // `sourceGenerationRef`'s doc comment) — drop these now-stale
-      // results instead of flashing them over the new source's state.
-      if (sourceGenerationRef.current !== generation) return;
-      const roundTripMs = performance.now() - startedAt;
+      // Wrapped into an always-resolving "settled" shape so the promise
+      // can sit unawaited through the display work below without an early
+      // rejection being flagged as unhandled during that window.
+      const scanSettled = client.scan(rgba, width, height, { maxDim, withTrace: true }).then(
+        (outcome) => ({ ok: true as const, outcome }),
+        (err: unknown) => ({ ok: false as const, err }),
+      );
 
-      // Same downscale, same maxDim, same source pixels the worker just
-      // used internally — guarantees the bitmap drawn in the Viewport is
-      // pixel-for-pixel the space `outcome.scanWidth`/`scanHeight` (and
-      // every overlay layer) is drawn in.
+      // Display path: same downscale, same maxDim, same source pixels the
+      // worker is scanning right now — guarantees the bitmap drawn in the
+      // Viewport is pixel-for-pixel the space the scan's coordinates (and
+      // every overlay layer) live in.
       const down = downscaleRgba(rgba, width, height, maxDim);
       let bitmap: ImageBitmap | null = null;
       try {
@@ -201,11 +203,13 @@ export function App() {
       } catch (err) {
         console.error("failed to build display bitmap", err);
       }
+      // The source changed while the bitmap was being built (see
+      // `sourceGenerationRef`'s doc comment) — this frame belongs to the
+      // previous source; don't paint it over the new source's reset state.
       if (sourceGenerationRef.current !== generation) {
-        bitmap?.close(); // this source is gone too — nothing left to show it in
+        bitmap?.close();
         return;
       }
-
       displayFrameRef.current = down;
       if (bitmap) {
         displayBitmapRef.current?.close();
@@ -213,13 +217,23 @@ export function App() {
         setDisplayBitmap(bitmap);
       }
       setSourceDims({ width, height });
+
+      const settled = await scanSettled;
+      if (sourceGenerationRef.current !== generation) return; // stale — see above
+      if (!settled.ok) {
+        if (settled.err instanceof StaleScanError) return; // superseded — a fresher frame is already on its way
+        setScanError(settled.err instanceof Error ? settled.err.message : String(settled.err));
+        return;
+      }
+      const roundTripMs = performance.now() - startedAt;
+
       setScanError(null);
       setScanState({
-        result: outcome.result,
-        wallMs: outcome.wallMs,
+        result: settled.outcome.result,
+        wallMs: settled.outcome.wallMs,
         roundTripMs,
-        scanWidth: outcome.scanWidth,
-        scanHeight: outcome.scanHeight,
+        scanWidth: settled.outcome.scanWidth,
+        scanHeight: settled.outcome.scanHeight,
       });
       setSampleId((n) => n + 1);
     },

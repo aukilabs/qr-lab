@@ -90,6 +90,13 @@ export class ScannerClient {
   private readonly worker: ScannerWorkerLike;
   private nextId = 1;
   private isReady = false;
+  /** Latched true when the init timeout fires. Once set, a late "ready"
+   * from the worker is ignored (see `handleMessage`) — `init()` already
+   * rejected and told callers the client is permanently broken, so letting
+   * a straggler ready flip `isReady` back on would resurrect a client the
+   * caller has likely already replaced (or surfaced an error banner for),
+   * with two clients then racing over one UI. */
+  private initFailed = false;
   private readyResolve: (() => void) | null = null;
   private readyPromise: Promise<void> | null = null;
   private initTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -120,6 +127,7 @@ export class ScannerClient {
         this.readyResolve = resolve;
         this.initTimeoutId = setTimeout(() => {
           this.initTimeoutId = null;
+          this.initFailed = true;
           reject(new WorkerInitTimeoutError(INIT_TIMEOUT_MS));
         }, INIT_TIMEOUT_MS);
       });
@@ -133,6 +141,18 @@ export class ScannerClient {
    * queued (not-yet-started) request — that older queued request's promise
    * rejects immediately with {@link StaleScanError} rather than waiting
    * for the in-flight scan to finish.
+   *
+   * Ownership: `scan()` does NOT consume the caller's buffer. The frame is
+   * copied exactly once, up front (`rgba.slice()` — copies just this
+   * view's bytes into a fresh, whole-owned buffer), and it's the COPY's
+   * buffer that later transfers to the worker — so the caller can keep
+   * reading `rgba` after this returns (e.g. to downscale the same pixels
+   * into a display bitmap) and can pass the same array to a later `scan()`
+   * (re-scan / resolution change) without hitting a detached buffer. Cost:
+   * one `rgba.byteLength`-byte copy per call. If a caller that never
+   * reuses its frame ever needs to skip that copy, add an opt-in
+   * `{ transfer: true }` option rather than changing this default —
+   * App.tsx's display path depends on the caller keeping its bytes.
    */
   scan(
     rgba: Uint8ClampedArray,
@@ -143,7 +163,11 @@ export class ScannerClient {
     return new Promise<ScanOutcome>((resolve, reject) => {
       const pending: PendingScan = {
         id: this.nextId++,
-        rgba,
+        // The one copy per scan (see the ownership doc comment above).
+        // Made here — not in start() — so a queued request holds its own
+        // snapshot of the frame even if the caller mutates/reuses `rgba`
+        // while an earlier scan is still in flight.
+        rgba: rgba.slice(),
         width,
         height,
         opts,
@@ -173,19 +197,12 @@ export class ScannerClient {
 
   private start(pending: PendingScan): void {
     this.inFlight = pending;
-    const { rgba } = pending;
-    // Transferring rgba.buffer directly hands the worker the *entire*
-    // underlying ArrayBuffer, not just this view's slice of it. That's
-    // correct (and zero-copy) for the common case — a typed array that
-    // owns its whole buffer — but would silently ship extra/wrong bytes if
-    // `rgba` were ever a subarray view (nonzero byteOffset or a shorter
-    // byteLength), which the worker has no way to detect from a bare
-    // ArrayBuffer. Copy only the view's bytes in that case.
-    const buffer = (
-      rgba.byteOffset === 0 && rgba.byteLength === rgba.buffer.byteLength
-        ? rgba.buffer
-        : rgba.buffer.slice(rgba.byteOffset, rgba.byteOffset + rgba.byteLength)
-    ) as ArrayBuffer;
+    // `pending.rgba` is always the private copy `scan()` made (a fresh
+    // `slice()`, so it owns its whole buffer with byteOffset 0 — even when
+    // the caller passed a subarray view of a larger buffer). Transferring
+    // its buffer is therefore exact (just this frame's bytes) and detaches
+    // only the copy, never anything the caller holds.
+    const buffer = pending.rgba.buffer as ArrayBuffer;
     const message: ScanRequestMessage = {
       type: "scan",
       id: pending.id,
@@ -201,6 +218,7 @@ export class ScannerClient {
   private readonly handleMessage = (ev: MessageEvent): void => {
     const msg = ev.data as { type?: unknown };
     if (msg?.type === "ready") {
+      if (this.initFailed) return; // too late — init() already rejected; see `initFailed`
       this.isReady = true;
       if (this.initTimeoutId != null) {
         clearTimeout(this.initTimeoutId);

@@ -11,13 +11,34 @@ import { ScanResultParseError } from "./types";
 /** Minimal in-memory stand-in for the real Worker, driven manually by
  * tests: `emit()` synchronously dispatches a fake `MessageEvent` to
  * whatever listener ScannerClient registered, so tests control exactly
- * when (and in what order) "worker" responses arrive. */
+ * when (and in what order) "worker" responses arrive.
+ *
+ * `postMessage` simulates the structured-clone TRANSFER semantics the real
+ * Worker has: every `ArrayBuffer` in the transfer list is detached on the
+ * "sending" side via `ArrayBuffer.prototype.transfer()` (the message's
+ * `rgba` field is swapped to the moved — still readable — buffer, mirroring
+ * what the receiving context would see). Without this, a bug where the
+ * client transfers a buffer the caller still needs would be invisible to
+ * these tests — the caller's view would silently stay intact in the fake
+ * while detaching for real in a browser. */
 class FakeWorker implements ScannerWorkerLike {
   posted: Array<{ message: any; transfer?: Transferable[] }> = [];
   terminated = false;
   private listeners: Array<(ev: MessageEvent) => void> = [];
 
   postMessage(message: unknown, transfer?: Transferable[]): void {
+    if (transfer) {
+      const msg = message as { rgba?: ArrayBuffer };
+      for (const t of transfer) {
+        if (!(t instanceof ArrayBuffer)) continue;
+        // `.transfer()` detaches `t` exactly like a real postMessage
+        // would. It's an ES2024 API (supported by the Node this runs on)
+        // that this project's ES2022 `lib` doesn't type yet — cast locally
+        // rather than widening the whole project's lib for one test fake.
+        const moved = (t as ArrayBuffer & { transfer(): ArrayBuffer }).transfer();
+        if (msg.rgba === t) msg.rgba = moved;
+      }
+    }
     this.posted.push(transfer === undefined ? { message } : { message, transfer });
   }
 
@@ -109,6 +130,24 @@ describe("ScannerClient", () => {
 
       await expect(client.init()).rejects.toBeInstanceOf(WorkerInitTimeoutError);
     });
+
+    it("a late ready arriving after the timeout does not resurrect the failed client", async () => {
+      vi.useFakeTimers();
+      const worker = new FakeWorker();
+      const client = new ScannerClient(worker);
+
+      const first = client.init();
+      const firstRejection = expect(first).rejects.toBeInstanceOf(WorkerInitTimeoutError);
+      await vi.advanceTimersByTimeAsync(INIT_TIMEOUT_MS);
+      await firstRejection;
+
+      // Worker limps to life AFTER init() already rejected — the client is
+      // documented as permanently failed at this point (callers were told
+      // to build a fresh client to retry), so the late ready must be
+      // ignored: a second init() still rejects rather than resolving.
+      worker.emit({ type: "ready" });
+      await expect(client.init()).rejects.toBeInstanceOf(WorkerInitTimeoutError);
+    });
   });
 
   it("init() resolves once the worker posts a ready message", async () => {
@@ -187,6 +226,52 @@ describe("ScannerClient", () => {
     expect(sent.byteLength).toBe(16);
     expect(Array.from(sent)).toEqual(new Array(16).fill(0x42));
     expect(req.transfer).toEqual([req.message.rgba]);
+  });
+
+  it("does not detach the caller's buffer — the same rgba stays readable and re-scannable", async () => {
+    const worker = new FakeWorker();
+    const client = new ScannerClient(worker);
+    worker.emit({ type: "ready" });
+    await client.init();
+
+    const rgba = makeRgba(2 * 2 * 4);
+    rgba.fill(0x42);
+
+    const first = client.scan(rgba, 2, 2, { maxDim: 0, withTrace: false });
+
+    // The transferred buffer must be a COPY, never the caller's own buffer
+    // (FakeWorker.postMessage detaches whatever was in the transfer list,
+    // so a violation shows up both as identity equality and as the
+    // caller's view detaching to byteLength 0).
+    const firstReq = worker.posted[0]!;
+    expect(firstReq.message.rgba).not.toBe(rgba.buffer);
+    expect(rgba.byteLength).toBe(16);
+    expect(Array.from(rgba)).toEqual(new Array(16).fill(0x42));
+    // ...and the copy carries the right bytes.
+    expect(Array.from(new Uint8Array(firstReq.message.rgba as ArrayBuffer))).toEqual(
+      new Array(16).fill(0x42),
+    );
+
+    worker.emit({
+      type: "scan-result",
+      id: firstReq.message.id,
+      ok: true,
+      result: minimalScanResultJson(),
+      wallMs: 1,
+      scanWidth: 2,
+      scanHeight: 2,
+    });
+    await first;
+
+    // Re-scan with the SAME array (App's re-scan button / resolution
+    // change path) — must not throw "already detached" and must ship the
+    // same bytes again.
+    client.scan(rgba, 2, 2, { maxDim: 0, withTrace: false });
+    const secondReq = worker.posted[1]!;
+    expect(Array.from(new Uint8Array(secondReq.message.rgba as ArrayBuffer))).toEqual(
+      new Array(16).fill(0x42),
+    );
+    expect(rgba.byteLength).toBe(16);
   });
 
   it("rejects with the worker-reported error on ok: false", async () => {

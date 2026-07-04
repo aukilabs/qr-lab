@@ -136,7 +136,18 @@ export function Viewport({ image, overlays, onCursorImagePos }: ViewportProps) {
 
   useEffect(() => {
     return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        // Must reset the ref, not just cancel: under StrictMode's
+        // simulated unmount/remount this cleanup runs BEFORE the pending
+        // rAF ever fires, and the canceled callback (the only other thing
+        // that nulls the ref) never runs. Leaving the stale handle in
+        // place made every scheduleRedraw() for the remounted component's
+        // whole lifetime early-return on `rafRef.current != null` — a
+        // permanently black viewport in dev (found by Task 6's
+        // headless-browser smoke; invisible to the node-env unit tests).
+        rafRef.current = null;
+      }
     };
   }, []);
 
