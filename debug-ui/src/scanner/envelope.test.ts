@@ -170,6 +170,20 @@ describe("parseScanResult", () => {
     expect(parsed.trace?.attempts[0]?.version_bits).toBeNull();
   });
 
+  // QA regression (Plan 4 Task 7): the committed snapshot is JSON text, so
+  // every `Option::None` in it is `null`. The LIVE wasm binding
+  // (`serde_wasm_bindgen::to_value`) instead renders `None` as `undefined`
+  // (key present, value `undefined`) — a real live-browser scan of any
+  // fixture below version 7 hit exactly this on `version_bits` before the
+  // "OrNull" parsers below were widened to treat `undefined` the same as
+  // `null`. See the doc comment on `parseNumberOrNull`.
+  it("accepts an attempt's optional version_bits: undefined (the real wasm-binding shape)", () => {
+    const raw = loadSnapshot() as any;
+    raw.trace.attempts[0].version_bits = undefined;
+    const parsed = parseScanResult(raw);
+    expect(parsed.trace?.attempts[0]?.version_bits).toBeNull();
+  });
+
   it("throws with a path when trace.sample_regions is missing", () => {
     const raw = loadSnapshot() as any;
     delete raw.trace.sample_regions;
@@ -187,6 +201,15 @@ describe("parseScanResult", () => {
   it("accepts trace.bits: null (no candidate decoded this frame)", () => {
     const raw = loadSnapshot() as any;
     raw.trace.bits = null;
+    const parsed = parseScanResult(raw);
+    expect(parsed.trace?.bits).toBeNull();
+  });
+
+  // QA regression (Plan 4 Task 7) — see the `version_bits: undefined` test
+  // above for why `undefined` (not just `null`) must be accepted here too.
+  it("accepts trace.bits: undefined (the real wasm-binding shape)", () => {
+    const raw = loadSnapshot() as any;
+    raw.trace.bits = undefined;
     const parsed = parseScanResult(raw);
     expect(parsed.trace?.bits).toBeNull();
   });
@@ -229,6 +252,16 @@ describe("parseScanResult", () => {
   it("accepts a well-formed synthetic trace.alignment entry with found: null", () => {
     const raw = loadSnapshot() as any;
     raw.trace.alignment = [{ predicted: [1.5, 2.5], found: null }];
+    const parsed = parseScanResult(raw);
+    expect(parsed.trace?.alignment).toEqual([{ predicted: [1.5, 2.5], found: null }]);
+  });
+
+  // QA regression (Plan 4 Task 7) — see the `version_bits: undefined` test
+  // above; `found: undefined` is the real wasm-binding shape for a
+  // not-located alignment slot.
+  it("accepts a synthetic trace.alignment entry with found: undefined (the real wasm-binding shape)", () => {
+    const raw = loadSnapshot() as any;
+    raw.trace.alignment = [{ predicted: [1.5, 2.5], found: undefined }];
     const parsed = parseScanResult(raw);
     expect(parsed.trace?.alignment).toEqual([{ predicted: [1.5, 2.5], found: null }]);
   });

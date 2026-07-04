@@ -97,7 +97,19 @@ Key modules:
   `WasmResult`'s Rust shape changes, regenerate the snapshot
   (`UPDATE_SNAPSHOT=1 cargo test -p qrk-wasm --test envelope_snapshot`) and
   update `parseScanResult` to match — `envelope.test.ts` fails loudly on
-  drift.
+  drift. **Gotcha (found by Plan 4 Task 7's live-browser QA, fixed in the
+  same task):** the snapshot is JSON text (`serde_json`), which renders a
+  Rust `Option::None` as `null` — but the REAL `scan_rgba` binding
+  (`serde_wasm_bindgen::to_value`, `qrk-wasm/src/lib.rs`) renders `None` as
+  `undefined` instead (key present, value `undefined`), `serde-wasm-bindgen`'s
+  documented default. Every "OrNull" parser in this file (`parseNumberOrNull`,
+  `parsePairOrNull`, `parseBitsTraceOrNull`, `parseTileTraceOrNull`,
+  `parseTraceOrNull`) treats both the same way — if a new optional field's
+  parser only checks `=== null`, it will throw on every real scan where that
+  `Option` is `None` (e.g. `version_bits` for any code below version 7),
+  while `envelope.test.ts` stays green (it only exercises the JSON-shaped
+  snapshot). Add an `undefined` regression test alongside the `null` one, not
+  just the latter.
 - `scanner/client.ts` / `scanner/worker.ts` — main-thread request/response
   wrapper around the Worker; "latest-wins" queueing so video mode can fire
   a scan per presented frame without an unbounded backlog when frames

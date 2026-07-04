@@ -6,10 +6,33 @@ corner output for AR pose estimation, with WASM as a first-class target.
 See `docs/superpowers/specs/2026-07-03-rust-qr-scanner-design.md` for the
 full design.
 
+## Pipeline status
+
+- **Detection (Plans 1–3): complete.** Tiling/binarization, finder-pattern
+  and triplet detection, homography, and the debug UI (image/video sources,
+  per-stage overlays, timings panel) all land and gate on the fixture suite
+  + real captures.
+- **Decode (Plan 4): complete.** Version cross-checks (timing pattern +
+  BCH version-info bits, both orientations), Annex E alignment-pattern
+  location, piecewise perspective sampling with a single-transform
+  fallback, rqrr-based bit-matrix decoding (mirrored-orientation retry
+  included), and per-triplet arbitration (dimension/version cross-checks,
+  candidate cap) are all wired into `detect()`'s output (`codes`) and
+  traced end-to-end in the debug UI (8 overlay layers; timings panel with
+  6 stage rows: tiles/finders/triplets/version/alignment/sample+decode).
+  Gate: 81/81 synthetic fixtures + 93/93 codes decode correctly, plus both
+  real-photo captures' payloads (OpenCV-confirmed).
+- **Corner refinement / subpixel accuracy (Plan 5): not started.** The
+  current per-code `corners` are the triplet/alignment-anchored homography
+  corners, not yet subpixel-refined against the source-resolution image —
+  see Plan 4's carried-forward follow-ups (`docs/superpowers/plans/`) for
+  the "decimate-detect, full-res-sample" approach this depends on.
+
 ## Layout
 
 - `crates/qrk-core` — the scanner core: tiling/binarization, finder-pattern
-  and triplet detection, homography, and (as later plans land) decoding.
+  and triplet detection, homography, and decoding (version cross-checks,
+  alignment location, grid sampling, rqrr bit-matrix decode, arbitration).
   Dependency-free on non-wasm targets.
 - `crates/qrk-wasm` — `wasm-pack`-built bindings exposing `scan_rgba` to
   the debug UI's Web Worker; built via `scripts/build-wasm.sh` /

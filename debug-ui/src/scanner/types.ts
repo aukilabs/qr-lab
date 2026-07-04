@@ -269,13 +269,23 @@ function parseStringArray(v: unknown, path: string): string[] {
   return arr.map((item, i) => expectString(item, indexPath(path, i)));
 }
 
+// QA finding (Plan 4 Task 7): the committed envelope snapshot (JSON text,
+// via `serde_json`) renders a Rust `None` as `null`, but the LIVE wasm
+// binding (`serde_wasm_bindgen::to_value`, `qrk-wasm/src/lib.rs`) renders it
+// as `undefined` instead — `serde-wasm-bindgen`'s documented default for
+// `Option::None` fields, distinct from JSON's own `null`. Every "OrNull"
+// parser below must treat both the same, or every scan whose trace has at
+// least one `None` optional field (e.g. `version_bits` for any version < 7 —
+// nearly every synthetic fixture below `ver_12_v40`) throws "expected X, got
+// undefined" instead of parsing. Caught by this task's live-browser QA, not
+// by `envelope.test.ts` (which only exercises the JSON-text snapshot).
 function parseNumberOrNull(v: unknown, path: string): number | null {
-  if (v === null) return null;
+  if (v === null || v === undefined) return null;
   return expectNumber(v, path);
 }
 
 function parsePairOrNull(v: unknown, path: string): [number, number] | null {
-  if (v === null) return null;
+  if (v === null || v === undefined) return null;
   return parsePair(v, path);
 }
 
@@ -452,7 +462,7 @@ function parseBitsTrace(v: unknown, path: string): BitsTrace {
 }
 
 function parseBitsTraceOrNull(v: unknown, path: string): BitsTrace | null {
-  if (v === null) return null;
+  if (v === null || v === undefined) return null;
   return parseBitsTrace(v, path);
 }
 
@@ -538,7 +548,7 @@ function parseTileTrace(v: unknown, path: string): TileTrace {
 }
 
 function parseTileTraceOrNull(v: unknown, path: string): TileTrace | null {
-  if (v === null) return null;
+  if (v === null || v === undefined) return null;
   return parseTileTrace(v, path);
 }
 
@@ -574,7 +584,7 @@ function parseTrace(v: unknown, path: string): Trace {
 }
 
 function parseTraceOrNull(v: unknown, path: string): Trace | null {
-  if (v === null) return null;
+  if (v === null || v === undefined) return null;
   return parseTrace(v, path);
 }
 
