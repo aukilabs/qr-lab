@@ -423,37 +423,65 @@ fn plan5_regression_pin_scan_matches_detect_on_near_res_fixtures() {
 /// on a REAL golden fixture, not just a synthetic render): on `near_00`
 /// (source == working, a single v1 code — see the Plan 5 Task 2 regression
 /// pin above), `refine: true` populates `refined_corners` for the decoded
-/// code, and it lands within a generous sanity bound of the fixture's own
-/// `corners_px` ground truth. This is deliberately a loose smoke bound
-/// (catches "refinement is wildly broken or wired to the wrong corners"),
-/// NOT `tests/refine_gate.rs`'s own precise, measured-then-locked
-/// per-fixture accuracy gate (Plan 5 Task 4, out of this task's scope).
+/// code, and refinement RECOVERS error: the refined corners' mean distance
+/// to the fixture's `corners_px` ground truth must be strictly below the
+/// coarse corners' own — an anti-"coarse echo" bound (review follow-up: a
+/// refinement stage whose output merely restates the coarse error would
+/// pass any absolute sanity bound while doing nothing). The per-corner
+/// 5px absolute bound stays as the wiring smoke check. Neither is
+/// `tests/refine_gate.rs`'s precise, measured-then-locked per-fixture
+/// accuracy gate (Plan 5 Task 4, out of this task's scope). Both mean
+/// errors are printed (`--nocapture`) for reporting. `inv_00` (a REAL
+/// inverted-polarity fixture) is included alongside `near_00` because
+/// `refine.rs`'s peak selection is genuinely polarity-sensitive (the
+/// expected gradient SIGN flips with `inverted` — see
+/// `localize_edge_point_pass`'s sign-convention doc): a backwards sign
+/// derivation would lock onto the inward imposter transitions on one of
+/// the two polarities and fail this test's improvement bound by a wide
+/// margin.
 #[test]
-fn plan5_scan_refine_populates_refined_corners_on_a_real_fixture() {
-    let fx = common::load("near_00");
-    let view = fx.view();
-    let det = scan(&view, &ScanOptions { max_working_dim: 0, refine: true });
-    assert_eq!(det.codes.len(), 1, "near_00: expected exactly one decoded code");
-    let refined = det.codes[0]
-        .refined_corners
-        .expect("refine: true must populate refined_corners on a clean synthetic fixture");
-    let truth = fx.codes[0].corners_px;
-    for i in 0..4 {
-        let dx = refined[i][0] - truth[i][0];
-        let dy = refined[i][1] - truth[i][1];
-        let err = (dx * dx + dy * dy).sqrt();
+fn plan5_scan_refine_populates_refined_corners_on_real_fixtures() {
+    for name in ["near_00", "inv_00"] {
+        let fx = common::load(name);
+        let view = fx.view();
+        let det = scan(&view, &ScanOptions { max_working_dim: 0, refine: true });
+        assert_eq!(det.codes.len(), 1, "{name}: expected exactly one decoded code");
+        let refined = det.codes[0]
+            .refined_corners
+            .expect("refine: true must populate refined_corners on a clean synthetic fixture");
+        let coarse = det.codes[0].corners; // working == source here, so directly comparable
+        let truth = fx.codes[0].corners_px;
+        let err = |p: [f64; 2], t: [f64; 2]| ((p[0] - t[0]).powi(2) + (p[1] - t[1]).powi(2)).sqrt();
+        let mut refined_sum = 0.0;
+        let mut coarse_sum = 0.0;
+        for i in 0..4 {
+            let re = err(refined[i], truth[i]);
+            let ce = err(coarse[i], truth[i]);
+            eprintln!("{name} corner {i}: coarse={ce:.3}px refined={re:.3}px");
+            refined_sum += re;
+            coarse_sum += ce;
+            assert!(
+                re < 5.0,
+                "{name}: refined corner {i} is {re:.3}px from ground truth ({:?} vs {:?}) — \
+                 refinement wiring looks broken, not just imprecise",
+                refined[i],
+                truth[i]
+            );
+        }
+        let refined_mean = refined_sum / 4.0;
+        let coarse_mean = coarse_sum / 4.0;
+        eprintln!("{name} mean: coarse={coarse_mean:.3}px refined={refined_mean:.3}px");
         assert!(
-            err < 5.0,
-            "near_00: refined corner {i} is {err:.3}px from ground truth ({:?} vs {:?}) — \
-             refinement wiring looks broken, not just imprecise",
-            refined[i],
-            truth[i]
+            refined_mean < coarse_mean,
+            "{name}: refinement must strictly improve on the coarse corners \
+             (coarse mean {coarse_mean:.3}px, refined mean {refined_mean:.3}px)"
         );
+        // `refine: false` (the default) must still leave it `None` — the
+        // two fields are independently gated, not just "whichever ran
+        // last".
+        let det_off = scan(&view, &ScanOptions { max_working_dim: 0, refine: false });
+        assert!(det_off.codes[0].refined_corners.is_none());
     }
-    // `refine: false` (the default) must still leave it `None` — the two
-    // fields are independently gated, not just "whichever ran last".
-    let det_off = scan(&view, &ScanOptions { max_working_dim: 0, refine: false });
-    assert!(det_off.codes[0].refined_corners.is_none());
 }
 
 /// Global Constraints gate 3 (source-resolution sampling): `IMG_4832.png` —

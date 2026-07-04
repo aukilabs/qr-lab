@@ -15,14 +15,21 @@
 //!    sub-positions per module ([`REFINE_PROBE_MODULE_FRACTIONS`]), capped
 //!    at [`REFINE_MAX_POINTS_PER_EDGE`].
 //! 2. **Devernay profile**: [`REFINE_PROFILE_SAMPLES`] bilinear samples at
-//!    [`REFINE_PROFILE_STEP_MODULES`]-module spacing along the edge's
-//!    outward normal, centered on the coarse edge position; central-
-//!    difference gradient; 3-point quadratic peak interpolation locates the
-//!    sub-sample gradient crossing nearest the profile's own center (see
-//!    [`localize_edge_point`]'s doc for why "nearest", not "largest
-//!    magnitude", and for how it handles the second, unrelated transition
-//!    QR's checkerboard-like border modules routinely place one module
-//!    further inward).
+//!    [`REFINE_PROFILE_STEP_MODULES`]-module spacing along the probe's
+//!    LOCAL outward normal (derived per probe, like `sample.rs`'s
+//!    `probe_edge_pass` — see [`refine_round`]'s probe loop); central-
+//!    difference gradient, bar-unfolded when the probed module's inward
+//!    neighbor differs in color; 3-point quadratic peak interpolation on
+//!    the CORRECT-SIGN gradient peak nearest the profile's center — the
+//!    true outer edge's gradient sign is categorically determined by the
+//!    code's polarity and the outward direction, which rejects the
+//!    second, oppositely-signed transition QR's checkerboard-like border
+//!    modules routinely place one module further inward (see
+//!    [`localize_edge_point_pass`]'s sign-convention and bar-unfolding
+//!    docs). Each probe runs three re-centered passes with Aitken Δ²
+//!    extrapolation (see [`localize_edge_point`]). A probe with no usable
+//!    correct-sign peak is REJECTED (contributes nothing) — never
+//!    substituted with any coarse-derived fallback position.
 //! 3. **Weighted TLS fit + one outlier refit**: gradient-magnitude-weighted
 //!    total-least-squares line through the located points ([`fit_line_tls_weighted`]);
 //!    drop residuals over `max(`[`REFINE_OUTLIER_FLOOR_MODULES`]`, `[`REFINE_OUTLIER_MEDIAN_MULTIPLIER`]` * median residual)`;
@@ -34,6 +41,13 @@
 //!    instead. Fewer than 2 valid edge lines overall -> [`None`] (nothing
 //!    to refine with).
 //!
+//! The whole edge-probe/fit/intersect round runs TWICE — the second round
+//! re-anchored on the first round's refined corners, so every quantity
+//! the probes derive from the anchor quad (normals, steps, the
+//! bar-unfolding's exact 1-module offset) is computed from near-exact
+//! geometry rather than the coarse input — see [`refine_corners`]'s
+//! two-round doc.
+//!
 //! # Bit polarity
 //! [`BitMatrix::get`] already encodes the LOGICAL bit (dark == the
 //! finder-pattern-black convention), independent of `inverted` — see
@@ -42,12 +56,12 @@
 //! zone either way: physically dark-ink-on-light-background when
 //! `!inverted`, physically light-ink-on-dark-background when `inverted`
 //! (a code's whole scene polarity flips together, quiet zone included) —
-//! so edge/probe SELECTION needs no separate polarity branch, and the
-//! Devernay profile locates the transition by gradient MAGNITUDE (not
-//! signed direction), which is polarity-agnostic by construction. `inverted`
-//! is accepted (and threaded through the call site) purely so a future
-//! reader isn't left wondering why a bit-polarity-sensitive stage doesn't
-//! take it — not because this module currently branches on it.
+//! so probe SELECTION needs no separate polarity branch. Localization,
+//! however, is genuinely polarity-SENSITIVE: the true outer edge's
+//! gradient SIGN along the outward normal flips with `inverted` (dark→
+//! light vs light→dark), and [`localize_edge_point_pass`] relies on
+//! exactly that sign to categorically reject the oppositely-signed inward
+//! imposter transition — see its sign-convention doc for the derivation.
 
 use crate::bitmatrix::BitMatrix;
 use crate::consts::{
@@ -72,9 +86,10 @@ pub(crate) struct EdgeStat {
     /// `0` when the edge never reached [`REFINE_MIN_EDGE_POINTS`].
     pub points_fit: u32,
     /// Points whose Devernay localization succeeded but were then dropped
-    /// by the outlier-residual refit specifically (not counting points
-    /// that failed localization itself — an off-image profile or a
-    /// gradient peak at the profile's own boundary).
+    /// by the outlier-residual refit specifically (not counting probes
+    /// rejected by localization itself — an off-image profile, no
+    /// correct-sign gradient peak, or a degenerate/out-of-range quadratic;
+    /// see [`localize_edge_point_pass`]'s rejection cases).
     pub dropped_outliers: u32,
     /// `true` iff this edge produced a usable line.
     pub valid: bool,
@@ -124,33 +139,30 @@ const EDGE_TO_CORNERS: [(usize, usize); 4] = [(0, 1), (1, 2), (2, 3), (3, 0)];
 /// Bilinear luma sample at an arbitrary source-pixel position; `None` off
 /// the image (needs a real pixel on both sides of both axes, same bound as
 /// `version.rs`'s `sample_module_gray_bilinear` — no clamped-edge fallback
-/// at the FAR image boundary, since a silently repeated edge pixel would
+/// at the image boundary, since a silently repeated edge pixel would
 /// corrupt the gradient profile rather than just failing loudly).
 ///
-/// # Pixel-center convention (the `- 0.5`)
-/// `x`/`y` are treated as continuous positions where pixel index `i`
-/// represents the value AT `i + 0.5` (its center), matching how
-/// `testpaint::render_module_grid_transformed`'s antialiased renders (and
-/// real camera sensors, which integrate light over each photosite's area)
-/// actually work: pixel `i` is the box-filtered AVERAGE over the continuous
-/// interval `[i, i+1)`, which for a roughly-linear signal over that
-/// interval is best approximated as the point value at the interval's
-/// CENTER, not its left edge. Without this shift, a bilinear read is
-/// systematically off by half a sample toward `-x`/`-y` — small at low
-/// precision requirements, but a dominant error source at the sub-0.1px
-/// scale this module targets (measured: ~1px of corner error on the Task 3
-/// synthetic gate before this fix, since the profile's own sample spacing
-/// is a few px). The `.max(0.0)` after subtracting only matters within the
-/// first half-pixel of the image edge (`x`/`y` `< 0.5`) — there is no
-/// pixel `-1` to reconstruct a center for, so that thin margin clamps to
-/// pixel `0`'s own value instead of extrapolating.
+/// # Pixel-center convention
+/// Pixel index `i` holds the image value AT continuous coordinate `i` —
+/// integer pixel centers. This is the crate-wide (and fixture-generator —
+/// see `tools/fixtures/camera.py`: "pixel centers at integer coordinates")
+/// convention, identical to `version.rs`'s `sample_module_gray_bilinear`.
+/// A convention mismatch here is NOT a subtlety at this module's accuracy
+/// scale: a half-pixel-per-axis disagreement between the sampler and the
+/// caller's corner coordinates shows up as a constant ~0.71 px corner
+/// error (measured on the near_00 end-to-end check while this sampler
+/// briefly used a half-integer-center convention). Note the TEST renderer
+/// (`testpaint::render_module_grid_transformed*`) samples pixel `i`'s
+/// content at transform-space coordinate `i + 0.5`, i.e. its transform
+/// space has HALF-integer pixel centers — the synthetic tests convert
+/// their analytic truth into this integer-center convention by
+/// subtracting 0.5 per axis (see `pose_quad`'s callers) rather than this
+/// function adapting to the test renderer.
 fn bilinear_at(view: &LumaView, x: f64, y: f64) -> Option<f64> {
     let (w, h) = (view.width(), view.height());
     if x < 0.0 || y < 0.0 || x > (w - 1) as f64 || y > (h - 1) as f64 {
         return None;
     }
-    let x = (x - 0.5).max(0.0);
-    let y = (y - 0.5).max(0.0);
     let x0 = x.floor() as usize;
     let y0 = y.floor() as usize;
     let x1 = (x0 + 1).min(w - 1);
@@ -173,44 +185,86 @@ struct EdgePoint {
     weight: f64,
 }
 
-/// Devernay sub-pixel edge localization: [`REFINE_PROFILE_SAMPLES`]
-/// bilinear samples along `normal` (unit vector, `step` px spacing)
-/// centered on `coarse`, central-difference gradient, 3-point quadratic
-/// peak interpolation on the gradient value NEAREST the profile's own
-/// center (not the globally largest magnitude — see below). `None` when
-/// the profile runs off the source image, no gradient value exceeds
-/// [`crate::consts::CONTRAST_FLOOR`] anywhere (no discernible transition
-/// at all), the nearest-to-center candidate sits at the profile's own
-/// boundary (no interior neighbor on one side for the quadratic fit — the
-/// true edge likely lies outside this profile's window entirely), or the
-/// 3 points around it are degenerate (near-zero curvature — no clear
-/// extremum).
+/// One Devernay sub-pixel edge localization pass —
+/// [`localize_edge_point`]'s per-pass body (see that function for the
+/// two-pass re-centering rationale): [`REFINE_PROFILE_SAMPLES`] bilinear
+/// samples along `normal` (unit vector, `step` px spacing) centered on
+/// `center`; central-difference gradient; bar-unfolding correction when
+/// the probed border module's inward neighbor differs in color
+/// (`inward_differs`, from the RS-validated `BitMatrix` — see below);
+/// then 3-point quadratic peak interpolation on the CORRECT-SIGN
+/// gradient peak nearest the profile's center. `None` (probe rejected —
+/// it simply doesn't contribute to the edge fit;
+/// [`REFINE_MIN_EDGE_POINTS`] guards fit quality downstream) when: the
+/// profile runs off the source image; no interior gradient value with the
+/// expected sign clears [`crate::consts::CONTRAST_FLOOR`]; or the
+/// quadratic is degenerate / its vertex lands outside (-1, 1) samples of
+/// the peak. A rejected probe NEVER falls back to any coarse-derived
+/// position — a fallback anchored at `coarse` would make the probe vote
+/// FOR whatever error the coarse corners carry (a "coarse echo"),
+/// silently capping how much refinement can actually correct (review
+/// finding: with such a fallback, the near_00 end-to-end run recovered
+/// only ~27% of the coarse error).
 ///
-/// # Why nearest-to-center, not largest-magnitude
-/// The profile spans +/-1.5 modules (`REFINE_PROFILE_STEP_MODULES *
-/// (REFINE_PROFILE_SAMPLES / 2)`) around the coarse position, but the dark
-/// border module itself is only 1 module wide — so whenever that module's
-/// immediate INWARD neighbor (one module further into the code) has the
-/// OPPOSITE color, the profile also crosses that second, inward
-/// transition, at roughly the same gradient magnitude as the true outward
-/// one (both are the same kind of ink/background edge, just at a different
-/// sub-pixel phase against the sample grid — magnitude alone does not
-/// reliably rank "real" over "real but wrong"). This is not a rare
-/// pathology: an inward neighbor differs in color from the border module
-/// roughly as often as it doesn't. Taking the transition closest to the
-/// coarse prediction resolves the ambiguity correctly, since the coarse
-/// corners this stage refines are already within a fraction of a module of
-/// the truth (that is what makes them a usable starting point at all) —
-/// the true edge is essentially always the NEAREST plausible transition,
-/// never the second-nearest.
-fn localize_edge_point(
+/// # Sign convention (why `inverted` matters here)
+/// The profile is parameterized by an offset that INCREASES along the
+/// OUTWARD normal — from the code's interior toward the quiet zone — and
+/// `grad[i] = samples[i+1] - samples[i-1]` is proportional to the luma
+/// derivative along that direction. The true outer-edge transition always
+/// crosses from INK (the dark border module) to BACKGROUND (quiet zone)
+/// as the offset increases, so its gradient sign is categorically
+/// determined by polarity alone:
+/// - `!inverted`: ink is dark (low luma), background light → luma RISES
+///   outward → **positive** gradient;
+/// - `inverted`: ink is light, background dark (the whole scene's polarity
+///   flips together, quiet zone included) → **negative** gradient.
+///
+/// Filtering candidate peaks by this expected sign rejects any
+/// oppositely-signed transition (e.g. a residue of the inward imposter
+/// below) categorically, not heuristically. Among correct-sign
+/// candidates, the one nearest the profile center (the expected edge
+/// position) wins; a distance tie breaks toward the larger magnitude.
+///
+/// # Bar unfolding (`inward_differs`)
+/// When the probed border module's immediate INWARD neighbor differs in
+/// color (true for roughly half of all border modules — known
+/// categorically from the decoded `BitMatrix`, not inferred from pixels),
+/// the luma profile is not an isolated step but a 1-module-wide BAR: the
+/// true outer transition plus a mirrored, opposite-signed copy exactly
+/// 1 module (= `1 / REFINE_PROFILE_STEP_MODULES` = 2 samples) further
+/// inward. Superposition: the observed gradient is
+/// `g(u) = p(u) - p(u + 2)`, with `p` the isolated transition's gradient
+/// profile (the `+2`: the mirrored copy sits 2 samples INWARD, i.e. at
+/// `u = -2` in outward-increasing profile coordinates). This measurably
+/// corrupts the quadratic's inward neighbor: `gm1`'s two-sample stencil
+/// spans exactly the bar's width, so the two edges' slopes cancel inside
+/// it and `gm1 ≈ 0` regardless of where the true edge actually is —
+/// interpolating through it biased every such probe by a systematic
+/// ~0.17 samples (~0.5 px at 6 px/module) OUTWARD (measured on the Task 3
+/// synthetic gate).
+///
+/// The superposition inverts exactly, by telescoping:
+/// `p(u) = g(u) + p(u + 2) = g(u) + g(u + 2) + g(u + 4) + ...` (the tail
+/// terminates at the profile's outward end, where the quiet zone is
+/// flat). Applying it reconstructs the isolated transition's own gradient
+/// — the imposter peak literally cancels out of the corrected profile —
+/// using only exact QR geometry (a module is 1 module wide; the neighbor
+/// color from RS-validated bits): no tuned constants, no coarse-position
+/// dependence. When the inward neighbor does NOT differ, the nearest
+/// opposite transition is ≥ 2 modules (≥ 4 samples) inward and its
+/// leakage into the 3-sample quadratic stencil is negligible — no
+/// correction applied.
+fn localize_edge_point_pass(
     source: &LumaView,
-    coarse: [f64; 2],
+    center: [f64; 2],
     normal: [f64; 2],
     step: f64,
+    inverted: bool,
+    inward_differs: bool,
 ) -> Option<EdgePoint> {
     let n = REFINE_PROFILE_SAMPLES;
     let half = (n / 2) as f64; // 3 for n = 7
+    let coarse = center;
     let mut samples = Vec::with_capacity(n);
     for k in 0..n {
         let offset = k as f64 - half;
@@ -218,79 +272,139 @@ fn localize_edge_point(
         samples.push(bilinear_at(source, p[0], p[1])?);
     }
     // Central-difference gradient at interior indices 1..=n-2 only (needs
-    // both neighbors); n = 7 -> indices 1..=5.
+    // both neighbors); n = 7 -> indices 1..=5. Index 0 and n-1 stay 0.0 —
+    // consistent with the flat quiet zone the profile's outward tail
+    // reads, which the telescoped correction below relies on.
     let mut grad = vec![0.0f64; n];
     for i in 1..n - 1 {
         grad[i] = samples[i + 1] - samples[i - 1];
     }
-    // Nearest-to-center selection: scan candidate indices in order of
-    // increasing distance from the center (`half`), take the first whose
-    // gradient magnitude clears the noise floor. `CONTRAST_FLOOR` (already
-    // pinned for tile-threshold contrast — see its own doc) is reused here
-    // under the identical rationale: two samples straddling real
-    // ink/background contrast differ by well more than sensor noise.
-    let center = n / 2; // == half as usize, 3 for n = 7
-    let mut order: Vec<usize> = (1..n - 1).collect();
-    order.sort_by(|&a, &b| {
-        let da = (a as isize - center as isize).unsigned_abs();
-        let db = (b as isize - center as isize).unsigned_abs();
-        da.cmp(&db).then(grad[b].abs().total_cmp(&grad[a].abs()))
-    });
-    let best_i = order.into_iter().find(|&i| grad[i].abs() >= CONTRAST_FLOOR as f64)?;
-    let best_mag = grad[best_i].abs();
-    // The 3-point quadratic needs grad[best_i - 1] and grad[best_i + 1] to
+    // Bar unfolding (see the doc section above): `p(u) = Σ_k g(u + 2k)`,
+    // summed while the index stays inside the profile. The 2-sample
+    // stride is `1 module / REFINE_PROFILE_STEP_MODULES` — exact module
+    // geometry, not a tunable.
+    let stride = (1.0 / REFINE_PROFILE_STEP_MODULES).round() as usize;
+    let corrected: Vec<f64> = if inward_differs {
+        (0..n)
+            .map(|i| {
+                let mut sum = 0.0;
+                let mut j = i;
+                while j < n {
+                    sum += grad[j];
+                    j += stride;
+                }
+                sum
+            })
+            .collect()
+    } else {
+        grad
+    };
+    // Candidate peaks: indices whose SIGNED corrected gradient (see the
+    // sign convention above) clears the noise floor. `CONTRAST_FLOOR`
+    // (already pinned for tile-threshold contrast — see its own doc) is
+    // reused here under the identical rationale: two samples straddling
+    // real ink/background contrast differ by well more than sensor noise.
+    // Only indices 2..=n-3 qualify at all — the 3-point quadratic below
+    // needs `corrected[best_i - 1]` and `corrected[best_i + 1]` to
     // themselves be valid (interior) gradient entries.
-    if best_i < 2 || best_i > n - 3 {
+    let expected_sign = if inverted { -1.0 } else { 1.0 };
+    let center = n / 2; // == half as usize, 3 for n = 7
+    let best_i = (2..=n - 3)
+        .filter(|&i| corrected[i] * expected_sign >= CONTRAST_FLOOR as f64)
+        .min_by(|&a, &b| {
+            let da = (a as isize - center as isize).unsigned_abs();
+            let db = (b as isize - center as isize).unsigned_abs();
+            da.cmp(&db).then(corrected[b].abs().total_cmp(&corrected[a].abs()))
+        })?;
+    let (gm1, g0, gp1) = (corrected[best_i - 1], corrected[best_i], corrected[best_i + 1]);
+    let denom = gm1 - 2.0 * g0 + gp1;
+    if denom.abs() < 1e-9 {
         return None;
     }
-    let (gm1, g0, gp1) = (grad[best_i - 1], grad[best_i], grad[best_i + 1]);
-    // Detect INWARD contamination of `gm1` two ways. QR's checkerboard-like
-    // border modules routinely put a second, unrelated transition exactly
-    // 1 module further inward (the border module's own far boundary
-    // against a differently-colored neighbor), whose partial-coverage
-    // value contaminates `gm1`:
-    // (a) **Sign flip** (unambiguous): a genuine isolated transition's
-    //     central-difference gradient is single-humped — same sign
-    //     throughout its local neighborhood, only the magnitude falls off
-    //     away from the peak — so `gm1` disagreeing in sign with `g0` can
-    //     only mean a second, oppositely-directed transition nearby.
-    // (b) **A comparably strong feature one step further inward still**
-    //     (`grad[best_i - 2]`, when in range): evidence that `gm1` itself
-    //     sits on the SHOULDER of that other transition rather than
-    //     reflecting pure local curvature of this one — the subtler case a
-    //     sign check alone misses.
-    // The OUTWARD side (`gp1`) never has either problem: it always looks
-    // into the quiet zone, which has no further structure to contaminate
-    // it. When contamination is detected, the 3-point quadratic's
-    // curvature estimate is unusable — rather than guess at a
-    // substitute (measured to still bias the result by several tenths of
-    // a px) or discard the point outright (measured to leave some edges,
-    // whose payload bits happen to make EVERY border module's inward
-    // neighbor differ, with too few survivors to fit a line at all), fall
-    // back to the un-interpolated sample position: `best_i` itself is
-    // already within +/-0.5 sample (a quarter module) of the truth by
-    // construction (it is the profile's own nearest-to-center, above-floor
-    // candidate), which the weighted TLS fit then blends with every
-    // genuinely clean (fully interpolated, sub-sample-precise) point on
-    // the same edge.
-    let sign_mismatch = gm1.signum() != g0.signum() && gm1 != 0.0;
-    let far_contamination = best_i >= 3 && grad[best_i - 2].abs() >= 0.5 * g0.abs();
-    let delta = if sign_mismatch || far_contamination {
-        0.0
-    } else {
-        let denom = gm1 - 2.0 * g0 + gp1;
-        if denom.abs() < 1e-9 {
-            return None;
-        }
-        let delta = 0.5 * (gm1 - gp1) / denom;
-        if !delta.is_finite() || delta.abs() > 1.0 {
-            return None;
-        }
-        delta
-    };
+    let delta = 0.5 * (gm1 - gp1) / denom;
+    if !delta.is_finite() || delta.abs() > 1.0 {
+        return None;
+    }
     let offset = (best_i as f64 - half) + delta;
     let pos = [coarse[0] + normal[0] * offset * step, coarse[1] + normal[1] * offset * step];
-    Some(EdgePoint { pos, weight: best_mag })
+    Some(EdgePoint { pos, weight: g0.abs() })
+}
+
+/// Three-pass Devernay localization with Aitken Δ² extrapolation: run
+/// [`localize_edge_point_pass`] centered on the coarse prediction, then
+/// twice more, each re-centered on the previous measurement, and
+/// extrapolate the three results' fixed point.
+///
+/// # Why re-center, and why Aitken (evidence-guided iteration)
+/// The 3-point quadratic's vertex estimate has a PHASE-dependent error
+/// that behaves, to first order, like a linear GAIN on the true phase:
+/// `estimated ≈ g · true_phase`, with `g` depending on how well the
+/// profile's 0.5-module sampling resolves the edge-spread width. When the
+/// edge blur is comparable to the sample spacing, `g ≈ 1` (the textbook
+/// Devernay regime — the estimate is essentially exact and re-centering
+/// converges immediately). When the blur is NARROW relative to the
+/// spacing (sharp renders / large source modules — measured `g ≈ 2` on
+/// the Task 3 perturbed synthetic gate's perspective pose, whose local
+/// perpendicular modules reach ~8 px against ~1 px of blur), a single
+/// pass OVERSHOOTS the true edge by roughly the phase itself, and naive
+/// re-centering oscillates around the truth instead of converging
+/// (measured: successive passes landing −0.39 px then +0.41 px from the
+/// true edge). Note the systematic danger: every probe on an edge shares
+/// the same coarse-induced phase, so this error does NOT average out
+/// across the edge fit — it becomes a coherent edge shift proportional to
+/// the coarse error.
+///
+/// A fixed-point iteration `x_{k+1} = f(x_k)` whose error follows a
+/// locally-constant linear factor (`e_{k+1} = (1 − g) e_k`, geometric —
+/// decaying, oscillating, either) is exactly the setting Aitken's Δ²
+/// process accelerates: from three consecutive iterates it recovers the
+/// fixed point of the linearized map in closed form,
+/// `x* = x_2 − (x_2 − x_1)² / (x_2 − 2 x_1 + x_0)` — for the measured
+/// oscillating sequence above it lands within 0.005 px of the true edge.
+/// This is standard numerical acceleration (no tuned constants), each
+/// pass is still the pinned 3-point quadratic on the pinned profile, and
+/// the window-recentering structure mirrors `sample.rs`'s
+/// `probe_edge_line` two-pass precedent (provisional-guided first pass,
+/// evidence-centered re-probing), applied per probe.
+///
+/// Guards: a rejected pass rejects the whole probe (never a partial
+/// fallback — see [`localize_edge_point_pass`]'s no-coarse-echo note); a
+/// near-zero Δ² denominator means the sequence already converged (`g ≈
+/// 1`), so the last iterate is returned as-is; an extrapolation that
+/// moves more than one sample step is a sign the sequence is not
+/// locally linear at all, and the probe is rejected rather than trusted.
+fn localize_edge_point(
+    source: &LumaView,
+    coarse: [f64; 2],
+    normal: [f64; 2],
+    step: f64,
+    inverted: bool,
+    inward_differs: bool,
+) -> Option<EdgePoint> {
+    let p0 = localize_edge_point_pass(source, coarse, normal, step, inverted, inward_differs)?;
+    let p1 = localize_edge_point_pass(source, p0.pos, normal, step, inverted, inward_differs)?;
+    let p2 = localize_edge_point_pass(source, p1.pos, normal, step, inverted, inward_differs)?;
+    // Scalar Aitken along the profile axis: project the three positions
+    // onto `normal` (they differ only along it, up to floating-point
+    // noise, since every pass walks the same axis).
+    let proj = |p: &EdgePoint| p.pos[0] * normal[0] + p.pos[1] * normal[1];
+    let (x0, x1, x2) = (proj(&p0), proj(&p1), proj(&p2));
+    let denom = x2 - 2.0 * x1 + x0;
+    if denom.abs() < 1e-6 {
+        // Sequence converged (or never moved): the last iterate IS the
+        // fixed point to within noise.
+        return Some(p2);
+    }
+    let correction = (x2 - x1) * (x2 - x1) / denom;
+    if !correction.is_finite() || correction.abs() > step {
+        return None;
+    }
+    let x_star = x2 - correction;
+    let along = x_star - x2;
+    Some(EdgePoint {
+        pos: [p2.pos[0] + normal[0] * along, p2.pos[1] + normal[1] * along],
+        weight: p2.weight,
+    })
 }
 
 /// Median of `values` (sorted in place) — used only by the outlier refit,
@@ -360,33 +474,19 @@ fn fit_edge(localized: &[EdgePoint], probed: usize, module_px: f64) -> (Option<E
     )
 }
 
-/// Refine `code_corners_working` (TL, TR, BR, BL, WORKING px) against the
-/// SOURCE image, per the module doc's algorithm. `sx`/`sy` are the
-/// per-axis working/source ratios (`source_px = working_px / s` — see
-/// `sample::SourceView`'s convention); pass `1.0, 1.0` when source ==
-/// working (no downscale happened — refinement still runs in that case,
-/// it just has nothing to lift). `bits` is the RS-validated bit matrix the
-/// decode actually used. Returns `None` when fewer than 2 of the 4 edges
-/// produce a usable line.
-pub(crate) fn refine_corners(
+/// One full refinement round against a given set of anchor corners: probe
+/// all four edges, fit lines, intersect — [`refine_corners`]'s per-round
+/// body (see that function for the two-round rationale).
+fn refine_round(
     source: &LumaView,
-    sx: f64,
-    sy: f64,
-    code_corners_working: &[[f64; 2]; 4],
+    corners_in: &[[f64; 2]; 4],
     bits: &BitMatrix,
-    _inverted: bool,
+    inverted: bool,
 ) -> Option<RefinedCorners> {
     let dim = bits.dim;
-    if dim == 0 {
-        return None;
-    }
     let dimf = dim as f64;
-    let corners_source: [[f64; 2]; 4] = code_corners_working.map(|[x, y]| [x / sx, y / sy]);
+    let corners_source = *corners_in;
     let region = PerspectiveTransform::square_to_quad(corners_source)?;
-    let centroid = [
-        corners_source.iter().map(|p| p[0]).sum::<f64>() / 4.0,
-        corners_source.iter().map(|p| p[1]).sum::<f64>() / 4.0,
-    ];
 
     let mut edge_fits: [Option<EdgeFit>; 4] = [None, None, None, None];
     let mut edge_stats: [EdgeStat; 4] = [EdgeStat::default(); 4];
@@ -397,26 +497,28 @@ pub(crate) fn refine_corners(
         if len < 1e-9 {
             continue; // degenerate (coincident corners) — no line possible
         }
+        // Edge-average module length, used only to scale `fit_edge`'s
+        // outlier-residual threshold. The PROBES do not use it: each probe
+        // derives its own local outward normal and sample step below —
+        // under perspective, the module size ALONG THE NORMAL varies along
+        // the edge and can differ from this edge-direction average by tens
+        // of percent, which would both mis-scale the profile (a "0.5
+        // module" step that isn't) and break the bar-unfolding's exact
+        // 2-sample imposter offset (see `localize_edge_point`'s doc).
         let module_px = len / dimf;
-        let tangent = [d[0] / len, d[1] / len];
-        let mut normal = [-tangent[1], tangent[0]];
-        let mid = [
-            0.5 * (corners_source[a][0] + corners_source[b][0]),
-            0.5 * (corners_source[a][1] + corners_source[b][1]),
-        ];
-        if normal[0] * (mid[0] - centroid[0]) + normal[1] * (mid[1] - centroid[1]) < 0.0 {
-            normal = [-normal[0], -normal[1]];
-        }
 
         // Probe selection: dark border modules, middle ~80% of the edge,
-        // 2 sub-positions each, capped.
-        let mut candidates: Vec<f64> = Vec::new();
+        // 2 sub-positions each, capped. Each candidate carries whether the
+        // border module's immediate INWARD neighbor (one module further
+        // into the grid) differs in color — categorical input to
+        // `localize_edge_point`'s bar-unfolding correction (see its doc).
+        let mut candidates: Vec<(f64, bool)> = Vec::new();
         for m in 0..dim {
-            let dark = match edge_idx {
-                0 => bits.get(m, 0),
-                1 => bits.get(dim - 1, m),
-                2 => bits.get(m, dim - 1),
-                3 => bits.get(0, m),
+            let (dark, inward_dark) = match edge_idx {
+                0 => (bits.get(m, 0), bits.get(m, 1)),
+                1 => (bits.get(dim - 1, m), bits.get(dim - 2, m)),
+                2 => (bits.get(m, dim - 1), bits.get(m, dim - 2)),
+                3 => (bits.get(0, m), bits.get(1, m)),
                 _ => unreachable!("EDGE_TO_CORNERS has exactly 4 entries"),
             };
             if !dark {
@@ -429,7 +531,7 @@ pub(crate) fn refine_corners(
                 {
                     continue;
                 }
-                candidates.push(pos_modules / dimf);
+                candidates.push((pos_modules / dimf, !inward_dark));
             }
         }
         if candidates.len() > REFINE_MAX_POINTS_PER_EDGE {
@@ -438,19 +540,39 @@ pub(crate) fn refine_corners(
         }
         let probed = candidates.len();
 
-        // Devernay profile + localization per candidate.
-        let step = REFINE_PROFILE_STEP_MODULES * module_px;
+        // Devernay profile + localization per candidate. The outward
+        // normal and profile step are LOCAL, per probe: the boundary point
+        // and its one-module-inward counterpart both map through `region`,
+        // and their px difference gives simultaneously the true outward
+        // direction AND the local module length along it — the same
+        // per-probe construction `sample.rs`'s `probe_edge_pass` already
+        // established. Under perspective the two vary along the edge, and
+        // the bar-unfolding correction specifically NEEDS the imposter to
+        // sit at exactly `1 / REFINE_PROFILE_STEP_MODULES` samples inward,
+        // which only the local perpendicular module length guarantees.
+        let inv_dim = 1.0 / dimf;
         let mut points: Vec<EdgePoint> = Vec::with_capacity(candidates.len());
-        for &t in &candidates {
-            let (u, v) = match edge_idx {
-                0 => (t, 0.0),
-                1 => (1.0, t),
-                2 => (t, 1.0),
-                3 => (0.0, t),
+        for &(t, inward_differs) in &candidates {
+            // Boundary point and one-module-inward point, unit coords.
+            let ((bu, bv), (iu, iv)) = match edge_idx {
+                0 => ((t, 0.0), (t, inv_dim)),
+                1 => ((1.0, t), (1.0 - inv_dim, t)),
+                2 => ((t, 1.0), (t, 1.0 - inv_dim)),
+                3 => ((0.0, t), (inv_dim, t)),
                 _ => unreachable!("EDGE_TO_CORNERS has exactly 4 entries"),
             };
-            let coarse = region.map(u, v);
-            if let Some(pt) = localize_edge_point(source, coarse, normal, step) {
+            let coarse = region.map(bu, bv);
+            let inner = region.map(iu, iv);
+            let out = [coarse[0] - inner[0], coarse[1] - inner[1]];
+            let perp_module_px = (out[0] * out[0] + out[1] * out[1]).sqrt();
+            if perp_module_px < 1e-9 {
+                continue; // degenerate local geometry — no direction to walk
+            }
+            let normal = [out[0] / perp_module_px, out[1] / perp_module_px];
+            let step = REFINE_PROFILE_STEP_MODULES * perp_module_px;
+            if let Some(pt) =
+                localize_edge_point(source, coarse, normal, step, inverted, inward_differs)
+            {
                 points.push(pt);
             }
         }
@@ -477,6 +599,60 @@ pub(crate) fn refine_corners(
     }
 
     Some(RefinedCorners { corners, edge_stats, corner_refined })
+}
+
+/// Refine `code_corners_working` (TL, TR, BR, BL, WORKING px) against the
+/// SOURCE image, per the module doc's algorithm. `sx`/`sy` are the
+/// per-axis working/source ratios (`source_px = working_px / s` — see
+/// `sample::SourceView`'s convention); pass `1.0, 1.0` when source ==
+/// working (no downscale happened — refinement still runs in that case,
+/// it just has nothing to lift). `bits` is the RS-validated bit matrix the
+/// decode actually used. Returns `None` when fewer than 2 of the 4 edges
+/// produce a usable line.
+///
+/// # Two rounds (evidence-guided re-anchoring)
+/// [`refine_round`] runs twice: once anchored on the caller's coarse
+/// corners, then once more anchored on the first round's refined corners,
+/// and the second round's result wins. The probe GEOMETRY — each probe's
+/// outward normal, its 0.5-module profile step, and critically the
+/// bar-unfolding correction's exact 1-module imposter offset (see
+/// [`localize_edge_point_pass`]) — all derive from the anchor quad, so an
+/// anchor scale error translates directly into a small systematic
+/// localization bias on every bar-corrected probe (measured on the Task 3
+/// perturbed synthetic gate: ±0.3-module coarse corner displacement ⇒
+/// ~2.6% quad scale error ⇒ ~0.1 px of coherent, non-averaging bias on
+/// roughly half of each edge's probes). Round 1's corners land within a
+/// couple tenths of a px of the truth, making round 2's derived geometry
+/// accurate to ~0.2%, at which point the bias is far below the gate's
+/// budget. This is the same evidence-over-provisional principle
+/// `alignment.rs`'s parallelogram rule and `sample.rs`'s
+/// `probe_edge_line` two-pass already establish, applied at the corner-
+/// geometry level. Exactly 2 rounds, not iterate-to-convergence: the
+/// geometry error is quadratically suppressed after one re-anchoring, and
+/// a fixed count keeps the cost bound trivial. If round 2 fails outright
+/// (it can only see fewer valid edges than round 1 if the tighter anchor
+/// exposes a genuinely marginal edge), round 1's result is returned — a
+/// weaker but still evidence-based refinement, never a coarse echo.
+pub(crate) fn refine_corners(
+    source: &LumaView,
+    sx: f64,
+    sy: f64,
+    code_corners_working: &[[f64; 2]; 4],
+    bits: &BitMatrix,
+    inverted: bool,
+) -> Option<RefinedCorners> {
+    // `< 2` (not just `== 0`): each round's probe-selection loop reads
+    // border modules' inward neighbors at `dim - 2`. Any real decoded QR
+    // has `dim >= 21`; this is purely a defensive bound.
+    if bits.dim < 2 {
+        return None;
+    }
+    let corners_source: [[f64; 2]; 4] = code_corners_working.map(|[x, y]| [x / sx, y / sy]);
+    let first = refine_round(source, &corners_source, bits, inverted)?;
+    match refine_round(source, &first.corners, bits, inverted) {
+        Some(second) => Some(second),
+        None => Some(first),
+    }
 }
 
 #[cfg(test)]
@@ -515,10 +691,11 @@ mod tests {
     /// output a perfectly hard 0/255 step with NO sub-pixel blending at
     /// all (every supersampled pixel on either side of the boundary lands
     /// wholly in one module or the other). A hard step is a stress case
-    /// worth handling (see `localize_edge_point`'s nearest-to-center
-    /// selection), but it defeats the POINT of testing against an
-    /// antialiased render specifically, so the jitter ensures genuine
-    /// partial-coverage antialiasing actually occurs for every pose.
+    /// worth handling (see `localize_edge_point`'s sign-filtered
+    /// nearest-to-center selection), but it defeats the POINT of testing
+    /// against an antialiased render specifically, so the jitter ensures
+    /// genuine partial-coverage antialiasing actually occurs for every
+    /// pose.
     fn pose_quad(pose: Pose, size: f64, canvas: f64) -> [[f64; 2]; 4] {
         let c = canvas / 2.0 + 0.37;
         let half = size / 2.0;
@@ -583,30 +760,32 @@ mod tests {
         out
     }
 
-    /// Task 3's synthetic accuracy gate (Global Constraints gate 1): on
-    /// clean (antialiased, no sensor noise) synthetic renders at 3 poses x
-    /// 2 versions, refined corners must be <= 0.05px mean / <= 0.15px max
-    /// from the analytic ground truth (the exact quad used to render).
-    ///
-    /// The coarse input handed to `refine_corners` here IS the ground
-    /// truth quad (not a perturbed/detected estimate) — this isolates
-    /// refinement's own numerical precision (Devernay localization +
-    /// weighted TLS + intersection) from coarse-detection accuracy, which
-    /// is a separate concern exercised by the real-fixture decode gates
-    /// (and, end-to-end, by whatever coarse corners `scan()`'s own
-    /// detection pipeline hands `refine_corners` in production). Every
-    /// corner is additionally asserted `corner_refined` (not a fallback) —
-    /// a well-conditioned clean synthetic render should always produce 4
-    /// valid edge lines, so a silent fallback would mask a real accuracy
-    /// regression behind a vacuously-zero error.
-    #[test]
-    fn synthetic_accuracy_gate() {
-        const MODULE_PX: f64 = 6.0;
-        const SUPERSAMPLE: usize = 8;
+    const MODULE_PX: f64 = 6.0;
+    const SUPERSAMPLE: usize = 8;
 
-        let mut table: Vec<(i16, &str, f64, f64)> = Vec::new();
+    /// Deterministic per-corner coarse-input jitter for the perturbed gate
+    /// variant, in MODULES (scaled by the render's px/module at use):
+    /// every corner displaced by a different direction/magnitude up to the
+    /// full ±0.3-module budget on at least one axis, fixed (not RNG) so
+    /// the gate is reproducible. ±0.3 module is well beyond the coarse
+    /// error a decode-surviving candidate actually carries (a grid
+    /// misplaced by ~half a module stops RS-decoding), so passing this
+    /// bounds the "coarse echo" failure mode categorically.
+    const PERTURB_MODULES: [[f64; 2]; 4] =
+        [[0.3, -0.2], [-0.25, 0.3], [0.2, 0.25], [-0.3, -0.15]];
+
+    /// Shared body of the two synthetic accuracy gate variants: render 3
+    /// poses x 2 versions (antialiased 8x supersample + box reduce + mild
+    /// blur), refine with the given coarse input (ground truth itself, or
+    /// truth + [`PERTURB_MODULES`]), and return the per-config
+    /// (version, pose, mean px, max px) error table vs analytic truth.
+    /// Asserts every corner actually refined (not a fallback) — a silent
+    /// fallback would mask a real accuracy regression behind whatever
+    /// error the coarse input happens to carry.
+    fn run_accuracy_gate(label: &str, perturb: Option<&[[f64; 2]; 4]>) -> Vec<(i16, &'static str, f64, f64)> {
+        let mut table: Vec<(i16, &'static str, f64, f64)> = Vec::new();
         let cases: [(i16, &[u8]); 2] = [(1, b"REFINE1"), (7, b"REFINEV7TESTPAYLOAD")];
-        let poses: [(&str, Pose); 3] =
+        let poses: [(&'static str, Pose); 3] =
             [("frontal", Pose::Frontal), ("rot30", Pose::Rotated30), ("perspective", Pose::Perspective)];
 
         for (version, payload) in cases {
@@ -619,12 +798,27 @@ mod tests {
             for (pose_name, pose) in poses {
                 let quad = pose_quad(pose, size, canvas);
                 let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
+                // `- 0.5` per axis: convert the render transform's
+                // half-integer-pixel-center coordinates (testpaint samples
+                // pixel `i`'s content at `i + 0.5`) into the crate's
+                // integer-pixel-center convention `refine_corners`
+                // operates in — see `bilinear_at`'s convention doc.
                 let truth: [[f64; 2]; 4] = [
                     transform.map(0.0, 0.0),
                     transform.map(1.0, 0.0),
                     transform.map(1.0, 1.0),
                     transform.map(0.0, 1.0),
-                ];
+                ]
+                .map(|[x, y]| [x - 0.5, y - 0.5]);
+                let coarse: [[f64; 2]; 4] = match perturb {
+                    Some(offsets) => std::array::from_fn(|i| {
+                        [
+                            truth[i][0] + offsets[i][0] * MODULE_PX,
+                            truth[i][1] + offsets[i][1] * MODULE_PX,
+                        ]
+                    }),
+                    None => truth,
+                };
                 let img = render_module_grid_transformed_antialiased(
                     dim,
                     |x, y| bits.get(x, y),
@@ -638,13 +832,13 @@ mod tests {
                 let img = mild_blur(&img, img_side, img_side);
                 let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
 
-                let refined = refine_corners(&view, 1.0, 1.0, &truth, &bits, false).unwrap_or_else(|| {
-                    panic!("v{version} {pose_name}: refine_corners returned None")
+                let refined = refine_corners(&view, 1.0, 1.0, &coarse, &bits, false).unwrap_or_else(|| {
+                    panic!("{label} v{version} {pose_name}: refine_corners returned None")
                 });
                 for i in 0..4 {
                     assert!(
                         refined.corner_refined[i],
-                        "v{version} {pose_name}: corner {i} fell back to unrefined \
+                        "{label} v{version} {pose_name}: corner {i} fell back to unrefined \
                          (edge_stats={:?})",
                         refined.edge_stats
                     );
@@ -657,20 +851,114 @@ mod tests {
             }
         }
 
-        eprintln!("Task 3 synthetic accuracy gate (version, pose, mean px, max px):");
+        eprintln!("Task 3 synthetic accuracy gate [{label}] (version, pose, mean px, max px):");
         for (v, p, mean, max) in &table {
             eprintln!("  v{v:<3} {p:<11} mean={mean:.4}px max={max:.4}px");
         }
-        for (version, pose_name, mean, max) in &table {
+        table
+    }
+
+    fn assert_gate(label: &str, table: &[(i16, &str, f64, f64)]) {
+        for (version, pose_name, mean, max) in table {
             assert!(
                 *mean <= 0.05,
-                "v{version} {pose_name}: mean corner error {mean:.4}px exceeds 0.05px"
+                "{label} v{version} {pose_name}: mean corner error {mean:.4}px exceeds 0.05px"
             );
             assert!(
                 *max <= 0.15,
-                "v{version} {pose_name}: max corner error {max:.4}px exceeds 0.15px"
+                "{label} v{version} {pose_name}: max corner error {max:.4}px exceeds 0.15px"
             );
         }
+    }
+
+    /// Task 3's synthetic accuracy gate (Global Constraints gate 1),
+    /// truth-conditioned variant: the coarse input handed to
+    /// `refine_corners` IS the ground-truth quad — isolates refinement's
+    /// own numerical precision (Devernay localization + weighted TLS +
+    /// intersection) from coarse-detection accuracy.
+    #[test]
+    fn synthetic_accuracy_gate() {
+        let table = run_accuracy_gate("truth-conditioned", None);
+        assert_gate("truth-conditioned", &table);
+    }
+
+    /// Perturbed-coarse variant (review follow-up): same renders and the
+    /// same ≤0.05px-mean / ≤0.15px-max bar, but the coarse input quad is
+    /// displaced by the deterministic [`PERTURB_MODULES`] per-corner
+    /// offsets (up to ±0.3 module) before refinement. This categorically
+    /// catches any "coarse echo" — any code path that lets the coarse
+    /// position leak into a localized point's coordinates (as the
+    /// pre-review `delta = 0` contamination fallback did: anchored at the
+    /// COARSE profile center, it made every fallback probe vote FOR the
+    /// coarse error, which the truth-conditioned variant can never see
+    /// because there coarse == truth). Errors are still measured against
+    /// TRUTH, so passing requires refinement to fully shed the injected
+    /// coarse displacement.
+    #[test]
+    fn synthetic_accuracy_gate_perturbed_coarse() {
+        let table = run_accuracy_gate("perturbed-coarse", Some(&PERTURB_MODULES));
+        assert_gate("perturbed-coarse", &table);
+    }
+
+    /// Inverted-polarity pin for `localize_edge_point`'s sign convention
+    /// (light ink on dark background flips the expected gradient sign —
+    /// see its sign-convention doc): a v1 render with swapped ink/light
+    /// levels and `inverted: true` must clear the exact same accuracy bar,
+    /// under the perturbed coarse input (the stricter variant). If the
+    /// sign convention were derived backwards, the selector would lock
+    /// onto the inward imposter transitions instead and miss this bar by
+    /// whole pixels.
+    #[test]
+    fn synthetic_accuracy_gate_inverted_polarity() {
+        let bits = qr_bitmatrix(b"REFINE1", 1);
+        let dim = bits.dim;
+        let size = dim as f64 * MODULE_PX;
+        let canvas = (size * 1.6 + 40.0).ceil();
+        let img_side = canvas as usize;
+
+        let quad = pose_quad(Pose::Perspective, size, canvas);
+        let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
+        // `- 0.5` per axis: testpaint→crate pixel-center-convention
+        // conversion, same as `run_accuracy_gate`'s (see the note there).
+        let truth: [[f64; 2]; 4] = [
+            transform.map(0.0, 0.0),
+            transform.map(1.0, 0.0),
+            transform.map(1.0, 1.0),
+            transform.map(0.0, 1.0),
+        ]
+        .map(|[x, y]| [x - 0.5, y - 0.5]);
+        let coarse: [[f64; 2]; 4] = std::array::from_fn(|i| {
+            [
+                truth[i][0] + PERTURB_MODULES[i][0] * MODULE_PX,
+                truth[i][1] + PERTURB_MODULES[i][1] * MODULE_PX,
+            ]
+        });
+        // Swapped levels: logically-dark modules render LIGHT (235) on a
+        // DARK (25) background — the inverted-polarity scene.
+        let img = render_module_grid_transformed_antialiased(
+            dim,
+            |x, y| bits.get(x, y),
+            235,
+            25,
+            &transform,
+            img_side,
+            img_side,
+            SUPERSAMPLE,
+        );
+        let img = mild_blur(&img, img_side, img_side);
+        let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
+
+        let refined = refine_corners(&view, 1.0, 1.0, &coarse, &bits, true)
+            .expect("inverted v1 perspective: refine_corners returned None");
+        for i in 0..4 {
+            assert!(refined.corner_refined[i], "inverted: corner {i} fell back to unrefined");
+        }
+        let errors: [f64; 4] = std::array::from_fn(|i| corner_error(refined.corners[i], truth[i]));
+        let mean = errors.iter().sum::<f64>() / 4.0;
+        let max = errors.iter().cloned().fold(0.0, f64::max);
+        eprintln!("inverted v1 perspective: mean={mean:.4}px max={max:.4}px");
+        assert!(mean <= 0.05, "inverted: mean corner error {mean:.4}px exceeds 0.05px");
+        assert!(max <= 0.15, "inverted: max corner error {max:.4}px exceeds 0.15px");
     }
 
     #[test]
