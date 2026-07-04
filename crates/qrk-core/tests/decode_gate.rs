@@ -529,7 +529,7 @@ fn plan5_gate3_img4832_decodes_at_source_resolution() {
 /// working→source per-axis corner lift inside `refine_corners` (`working_px
 /// / s` per axis) was exercised only by unit-level tests until now. This
 /// runs the ONE fixture where a real downscale genuinely happens
-/// (`IMG_4832`, 4032x3024 source -> working max-dim 1280) with `refine:
+/// (`IMG_4832`, 5712x4284 source -> working max-dim 1280) with `refine:
 /// true`, end to end through `scan()`.
 ///
 /// No corner ground truth exists for this photo (a hand-held real capture

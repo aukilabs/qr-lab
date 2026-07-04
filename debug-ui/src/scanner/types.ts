@@ -52,6 +52,15 @@ export interface DecodedCode {
    * `corners` yourself (`working_px / source_scale`, per-axis) if you need
    * to compare the two spaces directly. */
   refined_corners: [[number, number], [number, number], [number, number], [number, number]] | null;
+  /** Per-corner refinement provenance for `refined_corners`, `[TL, TR, BR,
+   * BL]` — mirrors `qrk_core::decode::DecodedCode::corner_refined`. `[false,
+   * false, false, false]` when `refined_corners` is `null`; otherwise
+   * `true` at index `i` iff that corner came from intersecting its two
+   * adjacent fitted edge lines rather than keeping the coarse (source-
+   * scaled) fallback position — same per-corner rule `RefineTrace.
+   * corner_refined` documents, just always available (not gated behind
+   * `withTrace`). */
+  corner_refined: [boolean, boolean, boolean, boolean];
 }
 
 /** One decode attempt's trace (mirrors `qrk_core::decode::DecodeAttemptTrace`).
@@ -431,6 +440,10 @@ function parseDecodedCode(v: unknown, path: string): DecodedCode {
     refined_corners: parseQuadOrNull(
       expectField(obj, "refined_corners", path),
       joinPath(path, "refined_corners"),
+    ),
+    corner_refined: parseBooleanQuad(
+      expectField(obj, "corner_refined", path),
+      joinPath(path, "corner_refined"),
     ),
   };
 }

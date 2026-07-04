@@ -57,6 +57,11 @@ describe("parseScanResult", () => {
     expect(parsed.detections.codes[0]?.refined_corners).not.toBeNull();
     expect(parsed.detections.codes[0]?.refined_corners).toHaveLength(4);
 
+    // Final-review carried item: `corner_refined` promotes the same
+    // per-corner provenance `trace.refine.corner_refined` already carried
+    // to the public (non-trace-gated) `DecodedCode` shape.
+    expect(parsed.detections.codes[0]?.corner_refined).toEqual([true, true, true, true]);
+
     expect(parsed.trace?.refine).not.toBeNull();
     expect(parsed.trace?.refine?.edges).toHaveLength(4);
     expect(parsed.trace?.refine?.corner_refined).toHaveLength(4);
@@ -151,6 +156,18 @@ describe("parseScanResult", () => {
     const raw = loadSnapshot() as any;
     raw.detections.codes[0].corners = raw.detections.codes[0].corners.slice(0, 3);
     expect(() => parseScanResult(raw)).toThrowError(/detections\.codes\[0\]\.corners/);
+  });
+
+  it("throws with a path when a decoded code's corner_refined is missing", () => {
+    const raw = loadSnapshot() as any;
+    delete raw.detections.codes[0].corner_refined;
+    expect(() => parseScanResult(raw)).toThrowError(/detections\.codes\[0\]\.corner_refined/);
+  });
+
+  it("throws with a path when a decoded code's corner_refined has the wrong element type", () => {
+    const raw = loadSnapshot() as any;
+    raw.detections.codes[0].corner_refined = [true, true, "yes", true];
+    expect(() => parseScanResult(raw)).toThrowError(/detections\.codes\[0\]\.corner_refined\[2\]/);
   });
 
   it("throws with a path when a StageTimings field is missing (the 3 new Task 5/6 fields, plus Plan 5 Task 3's refine_ns)", () => {

@@ -43,6 +43,7 @@ function code(overrides: Partial<DecodedCode> = {}): DecodedCode {
     inverted: false,
     finder_indices: [0, 1, 2],
     refined_corners: null,
+    corner_refined: [false, false, false, false],
     ...overrides,
   };
 }

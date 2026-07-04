@@ -2,9 +2,12 @@
 // whose `refined_corners` is populated (`ScanOptions.refine === true` and
 // refinement produced at least 2 valid edge lines — see
 // `qrk_core::refine::refine_corners`'s doc), draws:
-//   - a magenta crosshair at each REFINED corner (SOURCE px, scaled to
+//   - a crosshair at each corner in `refined_corners` (SOURCE px, scaled to
 //     working px via `workingScale` — the same convention `groundtruth.ts`
-//     already establishes for source-px data);
+//     already establishes for source-px data): magenta where
+//     `code.corner_refined[i]` is `true`, gray where it's `false` (that
+//     corner is actually still the coarse fallback position, not a real
+//     refinement — see `DecodedCode.corner_refined`'s doc);
 //   - a hollow square at each COARSE corner (`code.corners`, already
 //     working px — no scaling);
 //   - a whisker line connecting each coarse corner to its refined
@@ -29,6 +32,7 @@ import type { Point2 } from "../homography";
 import type { OverlayLayer } from "../registry";
 
 const REFINED_COLOR = "#ff00ff"; // magenta crosshairs
+const FALLBACK_COLOR = "#9e9e9e"; // gray crosshair: corner_refined[i] === false (coarse fallback)
 const COARSE_COLOR = "#ffd600"; // amber hollow squares
 const WHISKER_COLOR = "#9e9e9e"; // neutral gray connecting line
 const ERROR_LABEL_COLOR = "#ff00ff";
@@ -89,10 +93,13 @@ export const refinedLayer: OverlayLayer = {
         drawHollowSquare(ctx, p);
       }
 
-      ctx.strokeStyle = REFINED_COLOR;
+      // Per-corner color: gray marks a `corner_refined[i] === false` fallback
+      // (this crosshair sits at the coarse position, not a real refinement —
+      // see `DecodedCode.corner_refined`'s doc) instead of the usual magenta.
       ctx.lineWidth = 1.5;
-      for (const p of refinedScreen) {
-        drawCrosshair(ctx, p);
+      for (let i = 0; i < 4; i++) {
+        ctx.strokeStyle = code.corner_refined[i] ? REFINED_COLOR : FALLBACK_COLOR;
+        drawCrosshair(ctx, refinedScreen[i]!);
       }
 
       if (truth) {

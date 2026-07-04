@@ -60,8 +60,10 @@ export interface ScanOptions {
   /** Enables subpixel corner refinement (Plan 5 Task 3 — see
    * `qrk_core::ScanOptions::refine`'s doc): when `true`, each decoded
    * code's `refined_corners` is populated (source px) instead of staying
-   * `null`. Optional, defaulting to `false` in `start()`, so existing
-   * callers (e.g. `App.tsx`, which doesn't pass this) are unaffected. */
+   * `null`. Optional, defaulting to `false` in `start()` — media mode's
+   * `App.tsx` passes `refine: true` explicitly (Plan 5 Task 7 QA fix), and
+   * Scene3D hardcodes it the same way; a caller that omits this field
+   * entirely still gets the `false` default. */
   refine?: boolean;
 }
 

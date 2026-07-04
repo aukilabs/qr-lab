@@ -213,6 +213,15 @@ accuracy meter you can orbit around.
   way to confirm refinement actually ran; see
   `.superpowers/sdd/task-7-report.md` for the full QA record.
 
+## Known limitations
+
+`IMG_4832.png` (and any other EXIF-rotated photo) decodes on the Rust host
+gates but not in this browser UI: Chrome's `createImageBitmap` honors EXIF
+orientation, so the browser scans different pixels than the host does.
+Production mobile receives raw camera Y-planes with no EXIF pathway, so
+this is a dev-tool-only divergence — follow-up recorded in the Plan 5 doc's
+Post-merge follow-ups section.
+
 ## Add an overlay layer (5-step recipe)
 
 Follow this to add a new debug overlay for a future detection stage (Plan 4

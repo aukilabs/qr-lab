@@ -40,12 +40,15 @@ pub struct ScanOptions {
     /// Enables subpixel corner refinement (Plan 5 Task 3): when `true`,
     /// every decoded code's `DecodedCode::refined_corners` is computed
     /// against the SOURCE view (traced edge-line intersections, source
-    /// px) instead of staying `None`. Refinement runs against the SOURCE
-    /// view when a downscale happened, and against `source` itself (`sx =
-    /// sy = 1.0`) when it didn't — enabling this always has an effect
-    /// regardless of `max_working_dim`. `false` (the default most callers
-    /// should use unless they need the refined geometry) costs nothing
-    /// extra: no edge probing, no `StageTimings::refine_ns`.
+    /// px) instead of staying `None` — `DecodedCode::corner_refined`
+    /// records which of the four corners actually came from that
+    /// intersection versus the coarse (source-scaled) fallback. Refinement
+    /// runs against the SOURCE view when a downscale happened, and against
+    /// `source` itself (`sx = sy = 1.0`) when it didn't — enabling this
+    /// always has an effect regardless of `max_working_dim`. `false` (the
+    /// default most callers should use unless they need the refined
+    /// geometry) costs nothing extra: no edge probing, no
+    /// `StageTimings::refine_ns`.
     pub refine: bool,
 }
 

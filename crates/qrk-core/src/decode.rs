@@ -54,7 +54,7 @@ use crate::alignment::{locate_alignment_patterns, AnchorSlot};
 use crate::bitmatrix::{build_reference_threshold_bits, decode_bits, BitMatrix, DecodeFailure};
 use crate::consts::{MAX_DECODE_ROUNDS, MAX_OOB_FRACTION};
 use crate::finder::FinderCandidate;
-use crate::refine::refine_corners;
+use crate::refine::{refine_corners, RefinedCorners};
 use crate::sample::{
     needs_refined_br, provisional_transform, refine_fourth_corner, sample_grid, EdgeFitMode,
     SourceView,
@@ -122,6 +122,18 @@ pub struct DecodedCode {
     /// never a scaled copy of `corners`, it's an independent, more precise
     /// estimate traced directly against the source image.
     pub refined_corners: Option<[[f64; 2]; 4]>,
+    /// Per-corner refinement provenance for `refined_corners`, `[TL, TR,
+    /// BR, BL]` (final-review carried item: this was previously buried
+    /// inside the trace-only `RefineTrace::corner_refined` — `Trace` is
+    /// opt-in per call, so a caller reading `refined_corners` without a
+    /// `Trace` had no way to tell a genuinely-refined corner from one that
+    /// silently fell back to the coarse, source-scaled position — see
+    /// `refined_corners`'s own doc for that fallback rule). `[false; 4]`
+    /// when `refined_corners` is `None` (refinement didn't run, or ran and
+    /// produced fewer than 2 valid edge lines); mirrors
+    /// `crate::refine::RefinedCorners::corner_refined` field-for-field when
+    /// `refined_corners` is `Some`.
+    pub corner_refined: [bool; 4],
 }
 
 /// One decode attempt's trace, whether it succeeded or failed — every
@@ -816,6 +828,7 @@ fn attempt_candidate(
         None
     };
     let refined_corners = refine_result.as_ref().map(|r| r.corners);
+    let corner_refined = corner_refined_flags(refine_result.as_ref());
     let refine_trace = refine_result.as_ref().map(|r| r.to_trace());
 
     AttemptResult {
@@ -843,12 +856,26 @@ fn attempt_candidate(
             inverted: t.inverted,
             finder_indices: t.finder_indices,
             refined_corners,
+            corner_refined,
         }),
         alignment_trace,
         sample_regions_trace,
         bits_trace,
         refine_trace,
     }
+}
+
+/// `DecodedCode::corner_refined`'s plumbing: `[false; 4]` when refinement
+/// didn't run or produced `None` (see `DecodedCode::refined_corners`'s doc
+/// for both cases), else a field-for-field copy of the successful
+/// [`RefinedCorners::corner_refined`] — never re-derived here, so this can
+/// never disagree with the per-corner fallback [`refine_round`] itself
+/// already decided. Pulled out as its own function (rather than inlined at
+/// the `DecodedCode` literal) so it has a unit-testable seam independent of
+/// running the full image pipeline — see the `corner_refined_flags_*` tests
+/// below.
+fn corner_refined_flags(refine_result: Option<&RefinedCorners>) -> [bool; 4] {
+    refine_result.map(|r| r.corner_refined).unwrap_or([false; 4])
 }
 
 /// Decode every plausible QR code in one frame: proximity-dedup `triplets`,
@@ -1761,5 +1788,75 @@ mod tests {
         let want_bits = expected.bits_trace.expect("expected attempt decoded, so it carries bits");
         assert_eq!(bits.dim, want_bits.dim);
         assert_eq!(bits.words, want_bits.words, "bits must be the decoded candidate's matrix");
+    }
+
+    // --- `DecodedCode::corner_refined` plumbing (final-review carried item) ---
+
+    #[test]
+    fn corner_refined_flags_is_all_false_when_refinement_did_not_run() {
+        assert_eq!(corner_refined_flags(None), [false; 4]);
+    }
+
+    #[test]
+    fn corner_refined_flags_plumbs_a_hand_built_partial_array_unchanged() {
+        // Hand-built directly (no image, no real `refine_corners` call) with
+        // a PARTIAL flags array — two corners refined, two fell back to the
+        // coarse position — so this can't pass by accident the way an
+        // always-true or always-`[false; 4]` result would: it specifically
+        // pins that `corner_refined_flags` copies `RefinedCorners`'s array
+        // through verbatim rather than, say, collapsing it to "any true" or
+        // re-deriving it some other way.
+        let partial = [true, false, true, false];
+        let rc = RefinedCorners {
+            corners: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            edge_stats: [crate::refine::EdgeStat::default(); 4],
+            corner_refined: partial,
+        };
+        assert_eq!(corner_refined_flags(Some(&rc)), partial);
+    }
+
+    #[test]
+    fn decode_candidates_populates_corner_refined_all_true_on_a_clean_frontal_render() {
+        // Golden-fixture check (review-flagged gap: `corner_refined` was
+        // otherwise never asserted on ANY decoded code, real or synthetic —
+        // only `refined_corners.is_some()` was, which as `refine_round`'s
+        // per-corner fallback shows is not the same claim). A clean,
+        // antialiased, frontal v1 render is the easy case every edge is
+        // expected to fit in: this pins the happy path all the way through
+        // `attempt_candidate` -> `corner_refined_flags` -> `DecodedCode`,
+        // independent of the hand-built unit test above (which never
+        // exercises real image sampling or `refine_round`'s own is-this-
+        // corner-refined decision, only the copy-through afterward).
+        let version = 1i16;
+        let dim = 17 + 4 * version as usize;
+        let scale = 8.0;
+        let (quad, img_side) = axis_aligned_quad(dim, scale, 4.0);
+        let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
+        let code = qrcode::QrCode::with_version(
+            b"CORNERFLAGS", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+        )
+        .unwrap();
+        assert_eq!(code.width(), dim);
+        let img = crate::testpaint::render_module_grid_transformed_antialiased(
+            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side, 8,
+        );
+        let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
+        let grid = TileGrid::build(&view);
+
+        let t = triplet_from_transform(&transform, dim, dim as u32);
+        let (codes, attempts, _timings, ..) =
+            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, true);
+        assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
+        assert_eq!(codes[0].payload, "CORNERFLAGS");
+        assert!(
+            codes[0].refined_corners.is_some(),
+            "test setup: refinement must succeed on this clean render"
+        );
+        assert_eq!(
+            codes[0].corner_refined,
+            [true, true, true, true],
+            "expected every corner refined on a clean frontal render, got {:?}",
+            codes[0].corner_refined
+        );
     }
 }
