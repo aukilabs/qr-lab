@@ -207,7 +207,13 @@ export function App() {
       // Wrapped into an always-resolving "settled" shape so the promise
       // can sit unawaited through the display work below without an early
       // rejection being flagged as unhandled during that window.
-      const scanSettled = client.scan(rgba, width, height, { maxDim, withTrace: true }).then(
+      // `refine: true` (Plan 5 Task 7 QA fix): media mode never passed this
+      // before, so `refined_corners` stayed `null` on every scan — the
+      // `refinedLayer` overlay and the timings panel's `refine` row were
+      // both permanently dead in this mode (Scene3D already hardcodes
+      // `refine: true` the same way; per Task 6's re-baseline the cost is
+      // ~0.1-0.4ms/frame, negligible for a dev tool with no UI toggle).
+      const scanSettled = client.scan(rgba, width, height, { maxDim, withTrace: true, refine: true }).then(
         (outcome) => ({ ok: true as const, outcome }),
         (err: unknown) => ({ ok: false as const, err }),
       );

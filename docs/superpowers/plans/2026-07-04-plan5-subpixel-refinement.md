@@ -89,3 +89,107 @@ debug-ui/src/
 - **Spec coverage:** stage 8 refinement ✓ (Task 3, spec §3.4 constants honored: 0.35/0.70 sub-positions, dark-border-module selection — now exact via the decoded bits, middle-of-edge sampling, weighted fit + intersection), corner-accuracy harness ✓ (Task 4, spec §6 gate 2 incl. measured-then-locked), debug UI mode 1 with live corner error ✓ (Task 5, the spec's headline debug-UI feature), decimate-detect/full-res-sample ✓ (Tasks 1–2, the recorded IMG_4832 follow-up; also implements the spec §3.8 note "detection may run decimated; refinement never does" — and extends it to sampling).
 - **Deliberately out:** NEON/threading/device budget (next plan with FFI/Expo — needs hardware), curved/damaged codes, ECI transcoding.
 - **Known risks:** worker traffic at source size (24MP photos → 98MB transfers per scan — acceptable dev-tool cost, documented; mobile path unaffected since Rust receives a borrowed Y-plane); refine on real captures has no corner truth (jitter metrics deferred until video captures exist); r3f readback (WebGL canvas → rgba) needs preserveDrawingBuffer or a readPixels-in-frame-loop pattern — implementer investigates, both are standard.
+
+## Post-merge follow-ups (recorded at Task 7 wrap)
+
+Carried items the plan explicitly flagged, plus new findings from Task 7's
+scripted-Chrome QA pass (`.superpowers/sdd/task-7-report.md` has the full
+checklist + evidence):
+
+- **Extreme-blur residual watch:** Task 3's synthetic gate showed a +0.19px
+  regression at `sigma=3.5` blur vs. the gate's nominal cases — the first
+  suspect if `far_`/`tilt45_` prefixes ever start missing the locked
+  0.10px fixture-gate bound after an unrelated change. Not itself a
+  failure today (all prefixes pass at 0.10px), just a documented residual
+  worth checking first.
+- **`corner_refined` flag pessimism untested:** the per-corner
+  `corner_refined: [bool; 4]` flag (true where refinement actually
+  replaced the coarse corner) has no dedicated test asserting it goes
+  `false` in the documented fallback cases (fewer than 2 valid edge
+  lines, etc.) — behavior is believed correct (it's a simple boolean
+  carried alongside the intersection math) but unverified in isolation.
+- **`rqrr`-doubles worst-case round budget:** `MAX_DECODE_ROUNDS = 72`
+  (Task 6) has a documented, deliberate overrun of up to 2 rounds past
+  the cap when the last admitted attempt costs the max 3 rounds/attempt —
+  acceptable per Task 6's "keep it simple and honest" framing, not
+  tightened further.
+- **v40 `sample_decode` is the biggest remaining perf target:** 19.6ms
+  host / release build for `ver_12_v40` (a full 177×177-module grid) —
+  dominates every other stage by 1-2 orders of magnitude (see the root
+  README's Plan 5 perf table). Out of scope for this plan (no
+  NEON/threading/device work here per the plan's own "deliberately out"
+  list); flagged as the device/NEON plan's biggest single target.
+- **Knob-blur is a canvas approximation, not a lens/sensor model:**
+  `scene3d/camSim.ts`'s Gaussian blur (`ctx.filter`) and noise (seeded
+  per-pixel Gaussian) are both explicitly documented as simplified
+  stand-ins, not calibrated to any real camera. Task 7's QA measured this
+  concretely: at the scene's default framing (`physicalSize=0.15m`,
+  render resolution 960, ~26px/module), sweeping blur 0→3px sigma and
+  noise 0→8σ produced a **flat** error curve (blur 0.77-1.05px, noise
+  1.02-1.06px) with decode never dropping anywhere in either range — the
+  px/module density at this framing stays inside the refinement's own
+  outlier-rejection tolerance for the whole knob range. A denser QR
+  (higher version, or a smaller `physicalSize`/greater distance) would be
+  needed to actually demonstrate the "error rises, then decode drops"
+  curve the plan's QA checklist anticipated.
+- **3D-scene default-view accuracy isn't literally sub-pixel:** at the
+  scene's literal default head-on pose, mean corner error is ~1.0-1.1px
+  (TR/BL corners running higher, ~1.6-1.7px, than TL/BR's ~0.4-0.5px) —
+  most likely a texture-discretization/mip-sampling artifact of the
+  camera-sim path (`qrTexture.ts`'s generated-QR canvas texture), not a
+  regression in the refinement algorithm itself (the real accuracy gate —
+  `refine_gate.rs`, rendered fixtures, no live-texture approximation —
+  stays locked at 0.10px). Across a 7-pose orbit sweep spanning ~0-55°
+  combined azimuth/polar the mean stayed in a 0.6-1.05px band (no
+  monotonic growth) before cleanly dropping to no-decode at a grazing
+  angle. Worth a closer look if the 3D scene is ever used to claim
+  literal sub-pixel accuracy rather than "flat, moderate-angle-robust."
+- **Media-mode `refine` gap, found and fixed this task (<20 lines):**
+  before this task, `App.tsx`'s `runScan` never passed `refine: true` to
+  `ScannerClient.scan` — media mode's `refinedLayer` overlay and the
+  `TimingsPanel`'s `refine` row were both permanently dead (Scene3D
+  already hardcoded `refine: true`; media mode had no equivalent, and no
+  UI toggle either). Fixed by hardcoding `refine: true` in `runScan` the
+  same way Scene3D does — see `debug-ui/README.md`'s `scanner/client.ts`
+  bullet. This is what makes Task 7's checklist items 4/5/7/9 (refined
+  overlays on `near_00`/`real_2`/`IMG_4832`/regressions) possible at all
+  in the live browser; without it every one of those would have shown an
+  empty `refinedLayer` regardless of the layer checkbox state.
+- **`TimingsPanel`'s `refine` row reads "n/a" on every fixture tested in
+  the browser:** `refine_ns` is 74-370us on every fixture in Task 6's host
+  re-baseline (including v40, the worst case elsewhere) — comfortably
+  under the browser's ms-resolution `StageClock` (`js_sys::Date::now()`),
+  so `formatNs` renders it as "n/a" the same way `triplets` already does
+  (a pre-existing, documented limitation carried since Plan 2/3). Not a
+  regression, but it means the checklist's literal "shows nonzero values"
+  wording doesn't hold visually for `refine` on any fixture tried; the
+  refined-corner overlay itself (crosshairs + tiny per-corner error
+  labels, e.g. 0.01-0.06px on `near_00`/`multi_07`) is the reliable
+  browser-side confirmation that refinement ran, alongside the host-side
+  `refine_ns` numbers.
+- **`IMG_4832.png` @1280 decodes on the Rust host gate but NOT in the live
+  browser (needs controller attention):** `tests/decode_gate.rs`'s gate 3
+  (`scan()`, `max_working_dim: 1280`) passes on the host, but the exact
+  same fixture at the exact same working resolution in the debug UI
+  produces 2 triplets, both of which fail with an ECC error (no code
+  decodes) — reproduced twice, deterministic, not a race. Likely cause:
+  Chrome's `createImageBitmap` rotates the image per its EXIF
+  `orientation=6` tag (browser scans a 4284×5712 portrait buffer) while
+  the host's `png`-crate read does not (host scans the raw 5712×4284
+  landscape buffer) — a divergence already flagged as a known,
+  previously-benign limitation in Plan 4 Task 7's report ("both
+  orientations happen to detect+decode correctly today"). `IMG_4832` is
+  the single most marginal fixture in the suite (the entire reason
+  source-res sampling exists — ~2px/module pre-fix), so it's plausibly
+  the first case where the 90°-transposed NN-downscale rounding (which
+  samples different source pixels than its non-transposed counterpart)
+  is enough to flip a marginal decode from pass to fail. Confirmed this
+  is downscale-resolution-dependent, not a full-image content issue: at
+  "Full" (no-downscale) working resolution the browser finds 0 triplets
+  at all (expected — full native-res scanning isn't what the detection
+  tile-size heuristics are tuned for). This is a real host/browser
+  behavioral divergence on the exact fixture this plan's Task 2 gate was
+  built for — root-causing and fixing it (EXIF-aware pre-rotation in the
+  browser path, and/or auditing the NN downscale's rounding symmetry
+  under a 90° transpose) is squarely out of this QA task's <20-line
+  budget and is escalated here for the controller's prioritization.
