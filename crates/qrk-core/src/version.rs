@@ -93,6 +93,28 @@ fn reverse_bits(bits: u32, n: u32) -> u32 {
     out
 }
 
+/// Map a module-space coordinate to its rounded destination pixel, `None`
+/// when it falls outside the image — the shared bounds-check/rounding logic
+/// behind both [`sample_module_ink`] (polarity-aware bit) and
+/// [`sample_module_gray`] (raw luma), so the two stay pixel-identical in
+/// which module center they read.
+fn sample_pixel_coords(
+    view: &LumaView,
+    transform: &PerspectiveTransform,
+    dimension: u32,
+    col: f64,
+    row: f64,
+) -> Option<(usize, usize)> {
+    let dim = dimension as f64;
+    let [px, py] = transform.map(col / dim, row / dim);
+    let (w, h) = (view.width() as isize, view.height() as isize);
+    let (xi, yi) = (px.round() as isize, py.round() as isize);
+    if xi < 0 || yi < 0 || xi >= w || yi >= h {
+        return None;
+    }
+    Some((xi as usize, yi as usize))
+}
+
 /// Sample one module center in image space and read its polarity-aware ink
 /// state (`true` = dark). `col`/`row` are fractional module-space
 /// coordinates (e.g. `i + 0.5`); `dimension` normalizes them into
@@ -114,15 +136,26 @@ pub(crate) fn sample_module_ink(
     row: f64,
     inverted: bool,
 ) -> Option<bool> {
-    let dim = dimension as f64;
-    let [px, py] = transform.map(col / dim, row / dim);
-    let (w, h) = (view.width() as isize, view.height() as isize);
-    let (xi, yi) = (px.round() as isize, py.round() as isize);
-    if xi < 0 || yi < 0 || xi >= w || yi >= h {
-        return None;
-    }
-    let (xu, yu) = (xi as usize, yi as usize);
+    let (xu, yu) = sample_pixel_coords(view, transform, dimension, col, row)?;
     Some((view.get(xu, yu) < grid.threshold_at(xu, yu)) != inverted)
+}
+
+/// Sample one module center's RAW gray value (0..255, widened to `f32`),
+/// with no tile-threshold binarization — Plan 4B Fix B's per-module
+/// evidence for the reference-threshold + sharpening decode round
+/// (`sample.rs`'s `SampledGrid::grays`, `bitmatrix.rs`'s
+/// `build_reference_threshold_bits`). Same coordinate convention and OOB
+/// contract as [`sample_module_ink`] (`None` outside the image), just
+/// without the `grid`/`inverted` binarization inputs it doesn't need.
+pub(crate) fn sample_module_gray(
+    view: &LumaView,
+    transform: &PerspectiveTransform,
+    dimension: u32,
+    col: f64,
+    row: f64,
+) -> Option<f32> {
+    let (xu, yu) = sample_pixel_coords(view, transform, dimension, col, row)?;
+    Some(view.get(xu, yu) as f32)
 }
 
 /// Walk one timing axis (row 6 across all columns if `horizontal`, else

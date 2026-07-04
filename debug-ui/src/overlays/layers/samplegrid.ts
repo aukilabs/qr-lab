@@ -1,17 +1,21 @@
 // Sample-region overlay (Plan 4 Task 6): the 4-corner outline of every
 // region `crates/qrk-core/src/sample.rs` tiled the module grid into for the
-// last attempted candidate — region borders only, no per-module lines (per
-// the plan's trace-compactness constraint: `SampleRegionTrace` carries
-// corner quads, not per-module points, and this layer keeps draw counts
-// sane at v40's up-to-36 regions by never expanding that back into a
+// describing candidate (see below) — region borders only, no per-module
+// lines (per the plan's trace-compactness constraint: `SampleRegionTrace`
+// carries corner quads, not per-module points, and this layer keeps draw
+// counts sane at v40's up-to-36 regions by never expanding that back into a
 // per-module grid). Draws from `scan.trace.sample_regions`, working-res
 // image px (same space as `scan.detections`' own geometry — no
 // `workingScale` conversion, unlike `groundtruth`'s SOURCE-px corners).
 //
-// CAVEAT: same "last ATTEMPTED, not last DECODED" contract as the
-// `alignment` layer — this can describe a different, unrelated (possibly
-// failed) candidate than whichever code(s) the `bits`/`decoded` layers are
-// currently showing. See the Rust `trace::Trace::sample_regions` doc.
+// WHICH CANDIDATE (Plan 4B Fix A — trace honesty): same selection rule as
+// the `alignment` layer — when any candidate decoded this frame, this is
+// THAT candidate's sample regions (so it agrees with `bits`/`decoded` and
+// with `scan.detections.codes`' own last entry); otherwise it's the FIRST
+// attempt run this frame (canonical corner roles, never a rotation retry).
+// Pre-Fix-A this tracked the LAST attempted candidate instead, which could
+// be a different, unrelated (possibly failed) candidate — see the Rust
+// `trace::Trace::sample_regions` doc for the full contract.
 import { imageToScreen } from "../../viewport/transform";
 import type { OverlayLayer } from "../registry";
 

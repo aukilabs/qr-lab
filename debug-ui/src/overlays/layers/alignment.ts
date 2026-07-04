@@ -5,18 +5,21 @@
 // the same space `scan.detections`' own geometry lives in, no
 // `workingScale` conversion needed, unlike the `groundtruth` layer's
 // SOURCE-px `corners_px`). Only ever non-empty when a trace was captured
-// (`scan.trace !== null`) AND the last attempted candidate's version has at
+// (`scan.trace !== null`) AND the describing candidate's version has at
 // least one non-finder-corner alignment-pattern slot (v1 always yields an
 // empty array — see the Rust `trace::AlignmentTraceEntry` doc).
 //
-// CAVEAT: "last attempted candidate" is NOT necessarily the same candidate
-// `scan.detections.codes` or the `bits`/`decoded` layers describe — in a
-// multi-triplet frame, the last attempt run can be a different (and
-// possibly failed) triplet from whichever one(s) actually decoded, e.g. a
-// spurious finder-noise triplet attempted after the real code already
-// decoded. Don't assume this layer's markers describe the same physical
-// code as a `decoded` badge visible elsewhere on the canvas — see the Rust
-// `trace::Trace::alignment` doc for the full contract.
+// WHICH CANDIDATE (Plan 4B Fix A — trace honesty): when any candidate
+// decoded this frame, this is THAT candidate's alignment search — it then
+// always agrees with the `bits`/`decoded` layers and with
+// `scan.detections.codes`' own last entry. When NOTHING decoded this frame,
+// it's the FIRST attempt run — canonical (unrotated) corner roles of the
+// first (lowest-`snap_error`) candidate, never a rotation retry and never a
+// later candidate. Pre-Fix-A this field tracked the LAST attempted
+// candidate instead, which — after a failed candidate's corner-role
+// rotation retries — was frequently a wrong-role attempt whose geometry
+// pointed away from the real code, misleading this overlay on every failed
+// frame; see the Rust `trace::Trace::alignment` doc for the full contract.
 import { imageToScreen } from "../../viewport/transform";
 import type { OverlayLayer } from "../registry";
 

@@ -53,7 +53,10 @@ export interface DecodedCode {
  * anything else is a short failure reason. `rounds` is per-round visibility
  * into the sample+decode sub-pipeline (`"parallelogram:failed_rs"`,
  * `"anchor_line:decoded"`, ...) — see the Rust doc for the full tag
- * vocabulary. */
+ * vocabulary. Plan 4B Fix B: a round name may carry a `+refbits` suffix
+ * (e.g. `"outer_hull+refbits:decoded"`) when that round's tile-threshold
+ * bits failed but the reference-threshold + sharpening retry (same sampled
+ * grid, no resampling) then decoded. */
 export interface DecodeAttemptTrace {
   triplet_index: number;
   dimension_est: number;
@@ -116,6 +119,24 @@ export interface TileTrace {
   skip: boolean[];
 }
 
+/** Mirrors `qrk_core::trace::Trace`.
+ *
+ * `alignment`/`sample_regions`/`bits` selection rule (Plan 4B Fix A — trace
+ * honesty; see the Rust `decode::DecodeTraceData` doc for the full
+ * rationale): when any candidate decoded this frame, all three describe
+ * THAT decoded candidate (so they always agree with each other and with
+ * `Detections.codes`' own last entry). When nothing decoded this frame,
+ * `alignment`/`sample_regions` instead describe the FIRST attempt run this
+ * frame — canonical (unrotated) corner roles of the first
+ * (lowest-`snap_error`) candidate, never a corner-role rotation retry and
+ * never a later candidate — and `bits` is `null` (nothing decoded, so there
+ * is no sampled matrix to show). Pre-Fix-A, `alignment`/`sample_regions`
+ * instead tracked the LAST attempted candidate, which — after a failed
+ * candidate's rotation retries — was frequently a wrong-role attempt whose
+ * geometry pointed away from the real code, misleading any overlay drawing
+ * from these fields on every failed frame; see
+ * `debug-ui/src/overlays/layers/{alignment,samplegrid}.ts`'s own doc
+ * comments for the overlay-facing version of this same contract. */
 export interface Trace {
   tiles: TileTrace | null;
   finders: FinderCandidate[];

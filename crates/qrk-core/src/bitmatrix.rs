@@ -221,6 +221,154 @@ fn is_mirrored(m: &BitMatrix, verified: (u16, u16), version: u32) -> bool {
     }
 }
 
+/// The 7x7 finder pattern's spec-fixed polarity at relative in-block module
+/// offset `(r, c)` (0-indexed, ISO 18004 §6.3.3): the outer 1-module dark
+/// border ring, a 1-module light ring inside it, and the 3x3 dark center —
+///
+/// ```text
+/// 1111111
+/// 1000001
+/// 1011101
+/// 1011101
+/// 1011101
+/// 1000001
+/// 1111111
+/// ```
+///
+/// payload-independent by construction, so every one of these cells is
+/// ground truth regardless of what the code encodes — the same structure
+/// `finder.rs`'s detector matches against (its 1:1:3:1:1 cross-section
+/// ratio), transcribed here as a per-cell dark/light mask instead.
+fn finder_module_is_dark(r: usize, c: usize) -> bool {
+    r == 0 || r == 6 || c == 0 || c == 6 || ((2..=4).contains(&r) && (2..=4).contains(&c))
+}
+
+/// Module-space `(x0, y0)` top-left origin of each of the three 7x7 finder
+/// blocks (TL, TR, BL) for a `dim`-sized grid. Valid for every QR dimension
+/// (`dim >= 21`): `dim - 7 >= 14 > 7`, so the TL block (`0..7`) and the
+/// TR/BL blocks (`dim-7..dim`) never overlap.
+fn finder_block_origins(dim: usize) -> [(usize, usize); 3] {
+    [(0, 0), (dim - 7, 0), (0, dim - 7)]
+}
+
+/// Plan 4B Fix B's per-code reference threshold: the midpoint between the
+/// mean RAW gray of the three finder blocks' known-dark modules and the
+/// mean of their known-light modules (provenance: ISO 18004 §6.3.3's
+/// finder pattern is spec-fixed and payload-independent, so these module
+/// positions are ground truth no matter what the code encodes; precedent:
+/// the predecessor GPU scanner's `gray1`/`gray2` referencing). Unlike the
+/// tile-threshold path (a local min/max per `consts::TILE`-px tile), this
+/// is a single scalar for the whole candidate, immune to a tile whose
+/// *local* extrema — bright floor, dark shelving, real-video scene
+/// content dilating into the tile — happen to fall outside the code's own
+/// actual ink/paper gray levels.
+///
+/// `grays` is `dim*dim` row-major (`y*dim+x`), `f32::NAN` marking an
+/// out-of-image sample (excluded from both means). `None` when no dark or
+/// no light sample was available anywhere in any finder block — should not
+/// happen for a candidate that reached sampling at all (a finder pattern is
+/// what got it here), but defensive rather than dividing by zero.
+fn finder_reference_threshold(grays: &[f32], dim: usize) -> Option<f32> {
+    let (mut dark_sum, mut dark_n) = (0.0f64, 0u32);
+    let (mut light_sum, mut light_n) = (0.0f64, 0u32);
+    for (bx, by) in finder_block_origins(dim) {
+        for r in 0..7usize {
+            for c in 0..7usize {
+                let v = grays[(by + r) * dim + (bx + c)];
+                if v.is_nan() {
+                    continue;
+                }
+                if finder_module_is_dark(r, c) {
+                    dark_sum += v as f64;
+                    dark_n += 1;
+                } else {
+                    light_sum += v as f64;
+                    light_n += 1;
+                }
+            }
+        }
+    }
+    if dark_n == 0 || light_n == 0 {
+        return None;
+    }
+    Some(((dark_sum / dark_n as f64 + light_sum / light_n as f64) / 2.0) as f32)
+}
+
+/// AprilTag-style `decode_sharpening` (provenance: AprilTag's
+/// `quad_decode.c` default unsharp-mask pass — see `consts::SHARPEN_K`)
+/// applied to a raw per-module gray grid: for an interior cell (all four
+/// neighbors available), `v' = v + K*(4v - N - S - E - W)/4`; at a grid
+/// edge or where a neighbor's own sample was out-of-image (`NAN`), the
+/// missing neighbor(s) are simply excluded — `v' = v + K*(v - mean(the
+/// neighbors that ARE available))`, which is exactly the interior formula
+/// when all four exist, never a neighbor treated as zero. A `NAN` input
+/// cell (out-of-image itself) stays `NAN` (nothing to sharpen).
+fn decode_sharpen(grays: &[f32], dim: usize, k: f32) -> Vec<f32> {
+    let at = |x: isize, y: isize| -> Option<f32> {
+        if x < 0 || y < 0 || x as usize >= dim || y as usize >= dim {
+            return None;
+        }
+        let v = grays[y as usize * dim + x as usize];
+        (!v.is_nan()).then_some(v)
+    };
+    let mut out = vec![f32::NAN; dim * dim];
+    for y in 0..dim {
+        for x in 0..dim {
+            let v = grays[y * dim + x];
+            if v.is_nan() {
+                continue;
+            }
+            let (xi, yi) = (x as isize, y as isize);
+            let neighbors: Vec<f32> =
+                [at(xi, yi - 1), at(xi, yi + 1), at(xi - 1, yi), at(xi + 1, yi)]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+            out[y * dim + x] = if neighbors.is_empty() {
+                v
+            } else {
+                let mean = neighbors.iter().sum::<f32>() / neighbors.len() as f32;
+                v + k * (v - mean)
+            };
+        }
+    }
+    out
+}
+
+/// Plan 4B Fix B: build an alternative bit matrix from a candidate's raw
+/// per-module gray grid (`sample.rs`'s `SampledGrid::grays`) when the
+/// tile-threshold `bits` failed to decode — real-video-capture robustness
+/// against scattered bit errors from (1) scene-driven tile-threshold drift
+/// and (2) inter-module blur crosstalk (see this fix's investigation
+/// report). Order matters and was the one the controller's probe verified:
+/// [`decode_sharpen`] runs first on the RAW grays (sharpening a boolean
+/// doesn't mean anything, so this is the only sensible order, and it is the
+/// order actually measured), THEN [`finder_reference_threshold`]'s scalar
+/// (itself computed from the RAW, unsharpened grays — the finder pattern's
+/// spec-fixed cells are the reference, not something to sharpen first) is
+/// applied to the sharpened values to binarize.
+///
+/// `None` only when the reference threshold itself is undefined (see
+/// [`finder_reference_threshold`]) — sampling that produced no usable
+/// finder-block evidence at all.
+pub(crate) fn build_reference_threshold_bits(
+    grays: &[f32],
+    dim: usize,
+    inverted: bool,
+) -> Option<BitMatrix> {
+    let threshold = finder_reference_threshold(grays, dim)?;
+    let sharpened = decode_sharpen(grays, dim, crate::consts::SHARPEN_K);
+    let mut bits = BitMatrix::new(dim);
+    for y in 0..dim {
+        for x in 0..dim {
+            let v = sharpened[y * dim + x];
+            let dark = !v.is_nan() && (v < threshold) != inverted;
+            bits.set(x, y, dark);
+        }
+    }
+    Some(bits)
+}
+
 /// Decode a QR payload from a sampled bit matrix.
 ///
 /// Content decoding is a single `rqrr::Grid::decode` call — rqrr itself
@@ -329,5 +477,156 @@ mod tests {
         let mut m = BitMatrix::new(21);
         for y in 0..21 { for x in 0..21 { m.set(x, y, (x * 31 + y * 17) % 3 == 0); } }
         assert!(decode_bits(&m).is_err()); // no panic
+    }
+
+    // --- Plan 4B Fix B: reference-threshold + sharpening decode round ---
+
+    /// `finder_reference_threshold` must average each polarity's samples
+    /// (not just pick one, and not assume an even split between the two
+    /// values used below — a 7x7 finder pattern has 33 dark and 16 light
+    /// cells, an odd/even split that can't alternate two values 50/50), then
+    /// return the exact midpoint of the two TRUE means: every finder-block
+    /// known-dark module alternates {28, 32}, every known-light module
+    /// alternates {195, 205} — this test computes the actual resulting means
+    /// from the same assignment (not a hand-assumed round number), so it
+    /// stays correct regardless of exactly how the alternation falls out.
+    #[test]
+    fn finder_reference_threshold_is_midpoint_of_known_dark_and_light_means() {
+        let dim = 21usize;
+        let mut grays = vec![f32::NAN; dim * dim];
+        let (mut dark_sum, mut dark_n) = (0.0f64, 0u32);
+        let (mut light_sum, mut light_n) = (0.0f64, 0u32);
+        let mut toggle = false;
+        for (bx, by) in finder_block_origins(dim) {
+            for r in 0..7usize {
+                for c in 0..7usize {
+                    let dark = finder_module_is_dark(r, c);
+                    let v: f32 = if dark {
+                        if toggle { 32.0 } else { 28.0 }
+                    } else if toggle {
+                        205.0
+                    } else {
+                        195.0
+                    };
+                    toggle = !toggle;
+                    grays[(by + r) * dim + (bx + c)] = v;
+                    if dark {
+                        dark_sum += v as f64;
+                        dark_n += 1;
+                    } else {
+                        light_sum += v as f64;
+                        light_n += 1;
+                    }
+                }
+            }
+        }
+        let expected = ((dark_sum / dark_n as f64 + light_sum / light_n as f64) / 2.0) as f32;
+        // Sanity-check the fixture itself actually exercises two well-
+        // separated polarities (not a degenerate all-equal grid).
+        assert!(expected > 50.0 && expected < 250.0, "fixture sanity: {expected}");
+
+        let threshold = finder_reference_threshold(&grays, dim)
+            .expect("all three finder blocks fully populated: threshold must be defined");
+        assert!(
+            (threshold - expected).abs() < 1e-4,
+            "expected midpoint of the true dark/light means ({expected}), got {threshold}"
+        );
+    }
+
+    /// `None` when a polarity has no sample at all anywhere (defensive path
+    /// — should not occur for a real candidate that reached sampling, since
+    /// finder patterns are what got it there).
+    #[test]
+    fn finder_reference_threshold_none_when_a_polarity_is_entirely_missing() {
+        let dim = 21usize;
+        let grays = vec![f32::NAN; dim * dim]; // nothing sampled at all
+        assert!(finder_reference_threshold(&grays, dim).is_none());
+    }
+
+    /// Hand-computed 3x3 grid, `K = 0.25`:
+    /// ```text
+    /// 10 20 10
+    /// 20 100 20
+    /// 10 20 10
+    /// ```
+    /// Center (1,1)=100 has all 4 neighbors, each 20: mean=20,
+    /// v' = 100 + 0.25*(100-20) = 120.
+    /// Top-mid edge (1,0)=20 has 3 neighbors (S=100, E=10, W=10, no N):
+    /// mean=(100+10+10)/3=40, v' = 20 + 0.25*(20-40) = 15.
+    /// Corner (0,0)=10 has 2 neighbors (S=20, E=20, no N/W):
+    /// mean=20, v' = 10 + 0.25*(10-20) = 7.5.
+    #[test]
+    fn decode_sharpen_matches_hand_computed_3x3_including_edges() {
+        let dim = 3usize;
+        #[rustfmt::skip]
+        let grays: Vec<f32> = vec![
+            10.0, 20.0, 10.0,
+            20.0, 100.0, 20.0,
+            10.0, 20.0, 10.0,
+        ];
+        let sharpened = decode_sharpen(&grays, dim, 0.25);
+        let at = |x: usize, y: usize| sharpened[y * dim + x];
+        assert!((at(1, 1) - 120.0).abs() < 1e-4, "center: got {}", at(1, 1));
+        assert!((at(1, 0) - 15.0).abs() < 1e-4, "top-mid edge: got {}", at(1, 0));
+        assert!((at(0, 0) - 7.5).abs() < 1e-4, "corner: got {}", at(0, 0));
+    }
+
+    /// A `NAN` (out-of-image) input cell must stay `NAN` — nothing to
+    /// sharpen — and must not be pulled into a neighboring cell's mean as
+    /// if it were a real zero-ish sample.
+    #[test]
+    fn decode_sharpen_leaves_nan_cells_untouched_and_excludes_them_from_neighbors() {
+        let dim = 3usize;
+        #[rustfmt::skip]
+        let grays: Vec<f32> = vec![
+            f32::NAN, 20.0, 10.0,
+            20.0, 100.0, 20.0,
+            10.0, 20.0, 10.0,
+        ];
+        let sharpened = decode_sharpen(&grays, dim, 0.25);
+        let at = |x: usize, y: usize| sharpened[y * dim + x];
+        assert!(at(0, 0).is_nan(), "OOB input cell must stay NAN");
+        // (1,0)'s neighbors are N=NAN(excluded), S=100, E=10, no W(edge):
+        // mean=(100+10)/2=55, v' = 20 + 0.25*(20-55) = 11.25.
+        assert!((at(1, 0) - 11.25).abs() < 1e-4, "got {}", at(1, 0));
+    }
+
+    /// Full round-trip smoke test: a v2 code's own true dark/light module
+    /// grays (30.0 / 220.0, well-separated, no blur) fed through
+    /// `build_reference_threshold_bits` must reproduce the exact same bit
+    /// matrix `qrcode` rendered (sharpening a clean, well-separated grid is
+    /// a no-op at every interior/edge cell — see `decode_sharpen`'s own
+    /// tests for why it never flips a cell's polarity) and decode.
+    #[test]
+    fn build_reference_threshold_bits_recovers_a_clean_grid_from_true_grays() {
+        let code = qrcode::QrCode::with_version(
+            b"REFBITS", qrcode::Version::Normal(2), qrcode::EcLevel::H,
+        )
+        .unwrap();
+        let dim = code.width();
+        // "True" grays: 30.0 for dark modules, 220.0 for light — a clean,
+        // well-separated synthetic grid with no scene-driven threshold
+        // drift and no blur, so the reference-threshold path alone (no
+        // sharpening needed) must recover it exactly.
+        let mut grays = vec![0.0f32; dim * dim];
+        for y in 0..dim {
+            for x in 0..dim {
+                grays[y * dim + x] =
+                    if code[(x, y)] == qrcode::Color::Dark { 30.0 } else { 220.0 };
+            }
+        }
+        let refbits = build_reference_threshold_bits(&grays, dim, false)
+            .expect("finder blocks are well-populated dark/light: threshold must be defined");
+        for y in 0..dim {
+            for x in 0..dim {
+                assert_eq!(
+                    refbits.get(x, y),
+                    code[(x, y)] == qrcode::Color::Dark,
+                    "mismatch at ({x},{y})"
+                );
+            }
+        }
+        let decoded = decode_bits(&refbits).expect("clean re-thresholded grid must decode");
+        assert_eq!(decoded.payload, "REFBITS");
     }
 }
