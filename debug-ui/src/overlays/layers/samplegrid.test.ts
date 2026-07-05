@@ -42,6 +42,7 @@ describe("samplegridLayer", () => {
         finders: [],
         triplets: [],
         attempts: [],
+        codes: [],
         alignment: [],
         sample_regions: [],
         bits: null,
@@ -62,6 +63,7 @@ describe("samplegridLayer", () => {
         finders: [],
         triplets: [],
         attempts: [],
+        codes: [],
         alignment: [],
         sample_regions: [
           {
@@ -107,6 +109,7 @@ describe("samplegridLayer", () => {
         finders: [],
         triplets: [],
         attempts: [],
+        codes: [],
         alignment: [],
         sample_regions: [
           {
@@ -131,5 +134,54 @@ describe("samplegridLayer", () => {
     const lineTos = fake.callsNamed("lineTo");
     // imageToScreen(..., [84,0]) = [178, 5]
     expect(lineTos[0]!.args).toEqual([178, 5]);
+  });
+
+  // Plan 5C: multi-code trace — every DECODED code's own regions must draw,
+  // not just one. `trace.sample_regions` (the legacy singular,
+  // failure-diagnosis-only field) is deliberately left populated here too,
+  // to prove `trace.codes` wins outright rather than being merged/ignored.
+  it("draws every decoded code's own regions from trace.codes, not just one", () => {
+    const fake = createFakeCanvas();
+    const ctx = baseContext(fake);
+    const region = (n: number) => ({
+      module_rect: [0, 0, n, n] as [number, number, number, number],
+      quad: [
+        [0, 0],
+        [n * 4, 0],
+        [n * 4, n * 4],
+        [0, n * 4],
+      ] as [[number, number], [number, number], [number, number], [number, number]],
+    });
+    ctx.scan = {
+      detections: { finders: [], triplets: [], codes: [], timings: EMPTY_TIMINGS, source_scale: 1 },
+      trace: {
+        tiles: null,
+        finders: [],
+        triplets: [],
+        attempts: [],
+        codes: [
+          { code_index: 0, sample_regions: [region(21)], bits: { dim: 21, words: [] }, alignment: [] },
+          {
+            code_index: 1,
+            sample_regions: [region(25), region(10)],
+            bits: { dim: 25, words: [] },
+            alignment: [],
+          },
+        ],
+        // Legacy failure-diagnosis field — must be ignored since `codes`
+        // is non-empty.
+        alignment: [],
+        sample_regions: [region(99)],
+        bits: null,
+        refine: null,
+      },
+    };
+    samplegridLayer.draw(ctx);
+
+    // 1 region (code 0) + 2 regions (code 1) = 3 total, NOT the legacy
+    // field's single (different-sized) region.
+    expect(fake.callsNamed("beginPath")).toHaveLength(3);
+    expect(fake.callsNamed("closePath")).toHaveLength(3);
+    expect(fake.callsNamed("stroke")).toHaveLength(3);
   });
 });

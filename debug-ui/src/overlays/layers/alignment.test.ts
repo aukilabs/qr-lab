@@ -71,6 +71,7 @@ describe("alignmentLayer", () => {
         finders: [],
         triplets: [],
         attempts: [],
+        codes: [],
         alignment: [],
         sample_regions: [],
         bits: null,
@@ -105,6 +106,7 @@ describe("alignmentLayer", () => {
         finders: [],
         triplets: [],
         attempts: [],
+        codes: [],
         alignment: [{ predicted: [10, 20], found: null }],
         sample_regions: [],
         bits: null,
@@ -145,6 +147,7 @@ describe("alignmentLayer", () => {
         finders: [],
         triplets: [],
         attempts: [],
+        codes: [],
         alignment: [
           { predicted: [10, 20], found: [10.5, 20.5] },
           { predicted: [30, 40], found: null },

@@ -18,14 +18,17 @@ describe("parseScanResult", () => {
     expect(parsed.trace?.tiles).not.toBeNull();
   });
 
-  // Plan 4 Task 6: near_00 (a v1 fixture) now carries a populated
-  // `codes`/`attempts`/`sample_regions`/`bits`, but an EMPTY `alignment` —
-  // v1 has no alignment patterns at all (ISO 18004), so this is the
-  // correct shape for this fixture, not a gap. A v7+ fixture (non-empty
-  // `alignment`) is deferred to the Task 7 QA pass (real-browser
-  // screenshot checks against a higher-version fixture) rather than
-  // duplicated here — see the Rust-side `decode_trace_gate.rs` test's own
-  // note.
+  // Plan 4 Task 6 / Plan 5C: near_00 (a v1 fixture) now carries a
+  // populated `codes`/`attempts`/`trace.codes`, but an EMPTY
+  // `trace.codes[0].alignment` — v1 has no alignment patterns at all (ISO
+  // 18004), so this is the correct shape for this fixture, not a gap. A
+  // v7+ fixture (non-empty `alignment`) is deferred to the Task 7 QA pass
+  // (real-browser screenshot checks against a higher-version fixture)
+  // rather than duplicated here — see the Rust-side `decode_trace_gate.rs`
+  // test's own note. Plan 5C narrowed the legacy singular
+  // `trace.alignment`/`trace.sample_regions`/`trace.bits` fields to
+  // failure-diagnosis only, so near_00 (which decodes) has them empty/null
+  // — the per-code data lives on `trace.codes[0]` instead.
   it("accepts the new Task 6 decode-trace fields on near_00", () => {
     const parsed = parseScanResult(loadSnapshot());
 
@@ -38,14 +41,20 @@ describe("parseScanResult", () => {
     expect(parsed.trace?.attempts.some((a) => a.outcome === "decoded")).toBe(true);
     expect(parsed.trace?.attempts.every((a) => a.rounds.length > 0)).toBe(true);
 
+    // Plan 5C: per-code trace data.
+    expect(parsed.trace?.codes).toHaveLength(1);
+    expect(parsed.trace?.codes[0]?.code_index).toBe(0);
+    expect(parsed.trace?.codes[0]?.alignment).toEqual([]);
+    expect(parsed.trace?.codes[0]?.sample_regions.length).toBeGreaterThan(0);
+    expect(parsed.trace?.codes[0]?.sample_regions[0]?.quad).toHaveLength(4);
+    expect(parsed.trace?.codes[0]?.bits.dim).toBe(21);
+    expect(parsed.trace?.codes[0]?.bits.words.length).toBeGreaterThan(0);
+
+    // Plan 5C: the legacy singular fields are failure-diagnosis only — this
+    // fixture decodes, so they're empty/null.
     expect(parsed.trace?.alignment).toEqual([]);
-
-    expect(parsed.trace?.sample_regions.length).toBeGreaterThan(0);
-    expect(parsed.trace?.sample_regions[0]?.quad).toHaveLength(4);
-
-    expect(parsed.trace?.bits).not.toBeNull();
-    expect(parsed.trace?.bits?.dim).toBe(21);
-    expect(parsed.trace?.bits?.words.length).toBeGreaterThan(0);
+    expect(parsed.trace?.sample_regions).toEqual([]);
+    expect(parsed.trace?.bits).toBeNull();
   });
 
   // Plan 5 Task 3: the committed snapshot was regenerated with `refine:
@@ -82,6 +91,7 @@ describe("parseScanResult", () => {
     expect(parsed.trace?.finders).toEqual(raw.trace.finders);
     expect(parsed.trace?.triplets).toEqual(raw.trace.triplets);
     expect(parsed.trace?.attempts).toEqual(raw.trace.attempts);
+    expect(parsed.trace?.codes).toEqual(raw.trace.codes);
     expect(parsed.trace?.alignment).toEqual(raw.trace.alignment);
     expect(parsed.trace?.sample_regions).toEqual(raw.trace.sample_regions);
     expect(parsed.trace?.bits).toEqual(raw.trace.bits);
@@ -225,11 +235,15 @@ describe("parseScanResult", () => {
     expect(() => parseScanResult(raw)).toThrowError(/trace\.sample_regions/);
   });
 
-  it("throws with a path when a sample region's module_rect is short", () => {
+  // Plan 5C: near_00 decodes, so its real `SampleRegionTrace` data now
+  // lives on `trace.codes[0].sample_regions` (the legacy singular
+  // `trace.sample_regions` is empty — failure-diagnosis only). Same
+  // `parseSampleRegionTrace` parsing code path either way.
+  it("throws with a path when a trace.codes sample region's module_rect is short", () => {
     const raw = loadSnapshot() as any;
-    raw.trace.sample_regions[0].module_rect = [0, 0, 21];
+    raw.trace.codes[0].sample_regions[0].module_rect = [0, 0, 21];
     expect(() => parseScanResult(raw)).toThrowError(
-      /trace\.sample_regions\[0\]\.module_rect/,
+      /trace\.codes\[0\]\.sample_regions\[0\]\.module_rect/,
     );
   });
 
@@ -260,24 +274,28 @@ describe("parseScanResult", () => {
     expect(parsed.trace?.refine).toBeNull();
   });
 
-  it("throws with a path when trace.bits.words has the wrong element type", () => {
+  // Plan 5C: near_00's real `BitsTrace` now lives on `trace.codes[0].bits`
+  // (the legacy singular `trace.bits` is `null` — failure-diagnosis only,
+  // and this fixture decodes). Same `parseBitsTrace` parsing code path
+  // either way.
+  it("throws with a path when a trace.codes bits.words has the wrong element type", () => {
     const raw = loadSnapshot() as any;
     // 21 entries so the length invariant (checked after element types)
     // still holds — this case must fail on the ELEMENT type specifically.
-    raw.trace.bits.words = ["not-a-number", ...new Array(20).fill(0)];
-    expect(() => parseScanResult(raw)).toThrowError(/trace\.bits\.words\[0\]/);
+    raw.trace.codes[0].bits.words = ["not-a-number", ...new Array(20).fill(0)];
+    expect(() => parseScanResult(raw)).toThrowError(/trace\.codes\[0\]\.bits\.words\[0\]/);
   });
 
-  it("throws with a path when trace.bits.words violates the dim*ceil(dim/32) packing invariant", () => {
+  it("throws with a path when a trace.codes bits.words violates the dim*ceil(dim/32) packing invariant", () => {
     // Truncated words array (one word short of near_00's 21).
     const raw = loadSnapshot() as any;
-    raw.trace.bits.words = raw.trace.bits.words.slice(0, -1);
-    expect(() => parseScanResult(raw)).toThrowError(/trace\.bits\.words.*21 packed words/);
+    raw.trace.codes[0].bits.words = raw.trace.codes[0].bits.words.slice(0, -1);
+    expect(() => parseScanResult(raw)).toThrowError(/trace\.codes\[0\]\.bits\.words.*21 packed words/);
 
     // Padded words array (one extra word).
     const raw2 = loadSnapshot() as any;
-    raw2.trace.bits.words = [...raw2.trace.bits.words, 0];
-    expect(() => parseScanResult(raw2)).toThrowError(/trace\.bits\.words.*21 packed words/);
+    raw2.trace.codes[0].bits.words = [...raw2.trace.codes[0].bits.words, 0];
+    expect(() => parseScanResult(raw2)).toThrowError(/trace\.codes\[0\]\.bits\.words.*21 packed words/);
 
     // Consistency check: a dim crossing the 32-bit word boundary (v10:
     // dim 57 -> 2 words/row -> 114 words) parses fine — the invariant is
@@ -310,5 +328,76 @@ describe("parseScanResult", () => {
     raw.trace.alignment = [{ predicted: [1.5, 2.5], found: undefined }];
     const parsed = parseScanResult(raw);
     expect(parsed.trace?.alignment).toEqual([{ predicted: [1.5, 2.5], found: null }]);
+  });
+
+  // --- Plan 5C: mutation + multi-code coverage for `trace.codes` ---
+
+  it("throws with a path when trace.codes is missing", () => {
+    const raw = loadSnapshot() as any;
+    delete raw.trace.codes;
+    expect(() => parseScanResult(raw)).toThrowError(/trace\.codes/);
+  });
+
+  it("throws with a path when a trace.codes entry's code_index has the wrong type", () => {
+    const raw = loadSnapshot() as any;
+    raw.trace.codes[0].code_index = "0";
+    expect(() => parseScanResult(raw)).toThrowError(/trace\.codes\[0\]\.code_index/);
+  });
+
+  it("throws with a path when a trace.codes entry's bits is missing", () => {
+    const raw = loadSnapshot() as any;
+    delete raw.trace.codes[0].bits;
+    expect(() => parseScanResult(raw)).toThrowError(/trace\.codes\[0\]\.bits/);
+  });
+
+  it("throws with a path when a trace.codes entry's bits violates the packing invariant", () => {
+    const raw = loadSnapshot() as any;
+    raw.trace.codes[0].bits.words = raw.trace.codes[0].bits.words.slice(0, -1);
+    expect(() => parseScanResult(raw)).toThrowError(/trace\.codes\[0\]\.bits\.words.*packed words/);
+  });
+
+  it("throws with a path when a trace.codes entry's alignment has a malformed entry", () => {
+    const raw = loadSnapshot() as any;
+    raw.trace.codes[0].alignment = [{ predicted: [1, 2], found: "nope" }];
+    expect(() => parseScanResult(raw)).toThrowError(/trace\.codes\[0\]\.alignment\[0\]\.found/);
+  });
+
+  it("throws with a path when a trace.codes entry's sample_regions has a malformed entry", () => {
+    const raw = loadSnapshot() as any;
+    raw.trace.codes[0].sample_regions = [{ module_rect: [0, 0, 21], quad: raw.trace.sample_regions }];
+    expect(() => parseScanResult(raw)).toThrowError(/trace\.codes\[0\]\.sample_regions\[0\]\.module_rect/);
+  });
+
+  // Plan 5C's real motivating scenario: a multi-code frame (like
+  // `multi_07`'s 4 codes) must carry ONE `trace.codes` entry PER decoded
+  // code, each with its own (distinct) `code_index`, `sample_regions`, and
+  // `bits` — not just the near_00 snapshot's single-code case. Built by
+  // hand (not from a second Rust fixture snapshot) since the parser itself
+  // is what's under test here; the Rust-side
+  // `multi_07_trace_has_one_codes_entry_per_decoded_code` gate in
+  // `decode_trace_gate.rs` covers the real multi-code decode contract.
+  it("parses a synthetic 2-code ScanResult with distinct per-code trace entries", () => {
+    const raw = loadSnapshot() as any;
+    const secondCode = {
+      ...raw.detections.codes[0],
+      payload: "Q:second:0",
+    };
+    raw.detections.codes = [raw.detections.codes[0], secondCode];
+    raw.trace.codes = [
+      raw.trace.codes[0],
+      {
+        code_index: 1,
+        sample_regions: raw.trace.codes[0].sample_regions,
+        bits: { dim: 21, words: raw.trace.codes[0].bits.words.slice() },
+        alignment: [],
+      },
+    ];
+
+    const parsed = parseScanResult(raw);
+    expect(parsed.detections.codes).toHaveLength(2);
+    expect(parsed.trace?.codes).toHaveLength(2);
+    expect(parsed.trace?.codes.map((c) => c.code_index)).toEqual([0, 1]);
+    expect(parsed.trace?.codes[1]?.bits.dim).toBe(21);
+    expect(parsed.trace?.codes[0]?.bits).not.toBe(parsed.trace?.codes[1]?.bits);
   });
 });

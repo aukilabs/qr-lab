@@ -10,19 +10,32 @@
 //! debugging/visualization.
 //!
 //! The decode-stage trace *types* below (`AlignmentTraceEntry`,
-//! `SampleRegionTrace`, `BitsTrace`) are, unlike `TileTrace`, always
-//! compiled regardless of the `debug-trace` feature — matching
-//! `decode::DecodeAttemptTrace`'s own precedent (that struct has lived
-//! ungated since Task 5, since `decode_candidates` always builds its
-//! `Vec<DecodeAttemptTrace>` as part of its normal return contract; only
-//! `Trace` itself, the feature-gated *container*, decides whether to keep
-//! a copy). `decode::decode_candidates` builds all four of these
+//! `SampleRegionTrace`, `BitsTrace`, and (Plan 5C) `DecodedCodeTrace`) are,
+//! unlike `TileTrace`, always compiled regardless of the `debug-trace`
+//! feature — matching `decode::DecodeAttemptTrace`'s own precedent (that
+//! struct has lived ungated since Task 5, since `decode_candidates` always
+//! builds its `Vec<DecodeAttemptTrace>` as part of its normal return
+//! contract; only `Trace` itself, the feature-gated *container*, decides
+//! whether to keep a copy). `decode::decode_candidates` builds all of these
 //! unconditionally too (see its own module doc) — the data is small
 //! (bounded by the alignment lattice's `<= 7x7` nodes and `<= 6x6` sample
 //! regions per attempt, and a single packed bit matrix per successful
-//! decode), so there is no separate runtime "want trace" flag to thread;
-//! `detect_with` is simply the one place that decides whether to keep any
-//! of it, via these `record_*` calls.
+//! decode, times however many codes actually decoded — always few), so
+//! there is no separate runtime "want trace" flag to thread; `detect_with`
+//! is simply the one place that decides whether to keep any of it, via
+//! these `record_*` calls.
+//!
+//! Plan 5C (multi-code trace): a multi-code frame decodes more than one
+//! [`crate::decode::DecodedCode`], but the ORIGINAL `alignment`/
+//! `sample_regions`/`bits` fields on [`Trace`] only ever tracked a SINGLE
+//! candidate's data (the last one decoded — see the Plan 4B Fix A history
+//! in each field's own doc). That meant a multi-code scene's samplegrid/
+//! bits debug-UI overlays only ever visualized one of the several decoded
+//! codes. [`Trace::codes`] fixes this: one [`DecodedCodeTrace`] per DECODED
+//! code, so every code's own data is available. The original singular
+//! fields are kept, but their scope narrows to the FAILURE-diagnosis case
+//! only (nothing decoded this frame) — see each field's own doc for the
+//! exact rule.
 
 use crate::decode::DecodeAttemptTrace;
 use crate::finder::FinderCandidate;
@@ -89,6 +102,41 @@ pub struct BitsTrace {
     pub words: Vec<u32>,
 }
 
+/// One DECODED code's own alignment/sample-region/bits trace data (Plan 5C:
+/// multi-code trace), so a frame with N decoded codes carries N of these on
+/// [`Trace::codes`] instead of just the last one. Built at the moment
+/// [`crate::decode::decode_candidates`] records a successful decode — cheap,
+/// since decoded codes are always few (bounded by the finder count / 3) even
+/// when the frame's `attempts`/`triplets` are numerous. See [`Trace::codes`]'s
+/// doc for how this relates to the legacy singular `alignment`/
+/// `sample_regions`/`bits` fields on `Trace` itself.
+#[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct DecodedCodeTrace {
+    /// Index into [`crate::Detections::codes`] (equivalently,
+    /// `WasmResult.detections.codes` on the wire) this entry describes — the
+    /// debug UI resolves a `DecodedCodeTrace` back to its `DecodedCode` (for
+    /// `corners`, `finder_indices`, etc.) through this index rather than the
+    /// two arrays needing to already be the same length by construction
+    /// (they are, in practice — one entry per decode, in decode order — but
+    /// an explicit index is self-describing and survives either side being
+    /// filtered/reordered independently in the future).
+    pub code_index: usize,
+    /// This code's sample regions — same shape/meaning as the legacy
+    /// [`Trace::sample_regions`] field, just scoped to this one code instead
+    /// of "whichever candidate was selected".
+    pub sample_regions: Vec<SampleRegionTrace>,
+    /// This code's sampled bit matrix — same shape/meaning as the legacy
+    /// [`Trace::bits`] field, minus the `Option` wrapper: every entry in
+    /// `Trace::codes` came from an actual decode, so a bit matrix always
+    /// exists (unlike the frame-level singular field, which is `None`
+    /// whenever nothing decoded at all).
+    pub bits: BitsTrace,
+    /// This code's alignment-pattern search results — same shape/meaning as
+    /// the legacy [`Trace::alignment`] field, just scoped to this one code.
+    pub alignment: Vec<AlignmentTraceEntry>,
+}
+
 /// One outer module-region edge's subpixel refinement point counts (Plan 5
 /// Task 3) — mirrors `refine::EdgeStat`. Kept as a separate DTO (not a
 /// direct re-export) so `refine.rs`'s internal representation can evolve
@@ -134,34 +182,44 @@ pub struct Trace {
     /// "attempted" — proximity-deduped-away and already-consumed-finder
     /// triplets produce no entry).
     pub attempts: Vec<DecodeAttemptTrace>,
-    /// This frame's alignment-pattern search results (empty for a v1
-    /// candidate, which has no alignment patterns at all — see
-    /// [`AlignmentTraceEntry`]'s doc) — see
-    /// [`crate::decode::DecodeTraceData`]'s doc for the full selection
-    /// rule (Plan 4B Fix A, trace honesty). Summary: when any candidate
-    /// decoded this frame, this is THAT candidate's alignment search (so it
-    /// always agrees with `bits` and `Detections.codes`' own last entry);
-    /// otherwise it's the FIRST attempt run this frame — canonical
-    /// (unrotated) corner roles, never a rotation retry, never a later
-    /// candidate. Pre-Fix-A this field tracked "last attempted" instead,
-    /// which — after a failed candidate's corner-role rotation retries —
-    /// was frequently a wrong-role attempt whose geometry pointed away from
-    /// the real code, misleading the debug UI on every failed frame; see
+    /// One entry per DECODED code this frame (Plan 5C: multi-code trace) —
+    /// the honest, complete replacement for the legacy singular
+    /// `alignment`/`sample_regions`/`bits` fields below in the (common)
+    /// case where at least one code decoded: a multi-code frame (e.g.
+    /// `multi_07`'s 4 codes) gets 4 entries here, one per
+    /// [`crate::Detections::codes`] entry (see [`DecodedCodeTrace::code_index`]),
+    /// each carrying that SPECIFIC code's own alignment search, sample
+    /// regions, and bit matrix — not just the last one decoded. Empty
+    /// whenever nothing decoded this frame (see the legacy fields' doc for
+    /// that failure-diagnosis case instead).
+    pub codes: Vec<DecodedCodeTrace>,
+    /// FAILURE-DIAGNOSIS ONLY (Plan 5C narrowed this field's scope — see
+    /// `codes` above for the decode-success case): populated ONLY when
+    /// NOTHING decoded this frame, from the FIRST attempt run this frame —
+    /// canonical (unrotated) corner roles of the first (lowest-`snap_error`)
+    /// candidate attempted, never a corner-role rotation retry and never a
+    /// later candidate (same "first attempt" rule Plan 4B Fix A introduced).
+    /// Empty (not just "the first candidate's real alignment search", which
+    /// can itself legitimately be empty for a v1 candidate — see
+    /// [`AlignmentTraceEntry`]'s doc) whenever ANY code decoded this frame:
+    /// that data now lives per-code on `codes` instead, so this field isn't
+    /// duplicated — a debug-UI consumer should always prefer `codes` and
+    /// only fall back to this field when `codes` is empty. See
     /// `debug-ui/src/overlays/layers/{alignment,samplegrid}.ts`'s own doc
     /// comments for the debug-UI-facing version of this same contract.
     pub alignment: Vec<AlignmentTraceEntry>,
-    /// This frame's sample regions — same selection rule as `alignment`
-    /// above (they always describe the SAME candidate as each other, and,
-    /// on a decode, the same one as `bits` too — see
-    /// [`crate::decode::DecodeTraceData`]'s doc).
+    /// FAILURE-DIAGNOSIS ONLY — same rule as `alignment` above (empty
+    /// whenever any code decoded this frame; the per-code data lives on
+    /// `codes` instead). Populated from the first attempt run this frame
+    /// only when nothing decoded.
     pub sample_regions: Vec<SampleRegionTrace>,
-    /// The most recently decoded candidate's sampled bit matrix (`None` if
-    /// nothing decoded this frame) — unchanged by Fix A: this always
-    /// tracked "last DECODED", so it always agrees with `Detections.codes`'
-    /// own last entry (see `debug-ui/src/overlays/layers/bits.ts`'s doc for
-    /// how the debug UI relies on that specific agreement) — Fix A instead
-    /// brought `alignment`/`sample_regions` INTO agreement with this field
-    /// whenever anything decodes.
+    /// FAILURE-DIAGNOSIS ONLY: always `None` now — there is no "last
+    /// decoded candidate's bit matrix" to show at the frame level once any
+    /// number of codes can decode; see `codes` for the per-code bit
+    /// matrices. Kept (rather than removed) so `Trace`'s shape stays a
+    /// simple superset for existing failure-path consumers that only ever
+    /// checked `is_none()`/`is_some()` here to mean "did anything decode" —
+    /// prefer `!codes.is_empty()` for that check going forward.
     pub bits: Option<BitsTrace>,
     /// This frame's subpixel corner refinement diagnostics (Plan 5 Task 3)
     /// — see [`RefineTrace`]'s doc for the selection rule and `None`
@@ -193,6 +251,11 @@ impl Trace {
     #[inline]
     pub fn record_attempts(&mut self, attempts: &[DecodeAttemptTrace]) {
         self.attempts = attempts.to_vec();
+    }
+
+    #[inline]
+    pub fn record_codes(&mut self, codes: Vec<DecodedCodeTrace>) {
+        self.codes = codes;
     }
 
     #[inline]
@@ -242,6 +305,9 @@ impl Trace {
 
     #[inline]
     pub fn record_attempts(&mut self, _attempts: &[DecodeAttemptTrace]) {}
+
+    #[inline]
+    pub fn record_codes(&mut self, _codes: Vec<DecodedCodeTrace>) {}
 
     #[inline]
     pub fn record_alignment(&mut self, _entries: &[AlignmentTraceEntry]) {}
