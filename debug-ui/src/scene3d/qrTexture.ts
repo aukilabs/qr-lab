@@ -19,7 +19,14 @@
 // manual-QA concern (Task 7).
 import { CanvasTexture, LinearMipMapLinearFilter, NearestFilter } from "three";
 import type { GeneratedQr } from "../scanner/qrgen";
-import { DEFAULT_TEXTURE_PX_PER_MODULE, QUIET_MODULES } from "./consts";
+import {
+  DEFAULT_QR_BG_ALPHA,
+  DEFAULT_QR_BG_COLOR,
+  DEFAULT_QR_INK_COLOR,
+  DEFAULT_TEXTURE_PX_PER_MODULE,
+  QUIET_MODULES,
+} from "./consts";
+import { hexToRgb } from "./colorUtils";
 
 function wordsPerRow(dim: number): number {
   return Math.max(1, Math.ceil(dim / 32));
@@ -30,17 +37,39 @@ function bitAt(words: number[], dim: number, x: number, y: number): boolean {
   return ((word >>> (x % 32)) & 1) !== 0;
 }
 
+/** {@link renderQrCanvas}'s color/alpha knobs (Plan 5d) — `bgAlpha` only
+ * affects the "paper" fill (quiet zone + light modules); ink is always
+ * painted fully opaque regardless, matching `tools/fixtures/render.py`'s
+ * `opaque_plate=False` mode ("constant ink color; the alpha mask alone
+ * carries the module edges") — the point of the alpha slider is to let
+ * the SCENE BACKGROUND show through the paper, not to fade the code's own
+ * ink. */
+export interface QrColorOptions {
+  inkColor: string;
+  bgColor: string;
+  bgAlpha: number;
+}
+
+export const DEFAULT_QR_COLOR_OPTIONS: QrColorOptions = {
+  inkColor: DEFAULT_QR_INK_COLOR,
+  bgColor: DEFAULT_QR_BG_COLOR,
+  bgAlpha: DEFAULT_QR_BG_ALPHA,
+};
+
 /**
- * Render `qr` into a fresh `HTMLCanvasElement`: a white background (quiet
- * zone + light modules) with black squares for every dark module, inset
- * by `quiet` modules of margin on every side. `pxPerModule` sets the
- * texture's resolution (texture side = `(qr.dim + 2*quiet) *
- * pxPerModule` px).
+ * Render `qr` into a fresh `HTMLCanvasElement`: a `colors.bgColor` "paper"
+ * fill (quiet zone + light modules, at `colors.bgAlpha` opacity — `<1`
+ * makes it partially/fully transparent, letting the scene background
+ * plane show through) with `colors.inkColor` squares (always fully
+ * opaque) for every dark module, inset by `quiet` modules of margin on
+ * every side. `pxPerModule` sets the texture's resolution (texture side =
+ * `(qr.dim + 2*quiet) * pxPerModule` px).
  */
 export function renderQrCanvas(
   qr: GeneratedQr,
   quiet: number = QUIET_MODULES,
   pxPerModule: number = DEFAULT_TEXTURE_PX_PER_MODULE,
+  colors: QrColorOptions = DEFAULT_QR_COLOR_OPTIONS,
 ): HTMLCanvasElement {
   const total = qr.dim + 2 * quiet;
   const side = total * pxPerModule;
@@ -50,9 +79,11 @@ export function renderQrCanvas(
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("renderQrCanvas: 2d context unavailable");
 
-  ctx.fillStyle = "#ffffff";
+  const [bgR, bgG, bgB] = hexToRgb(colors.bgColor);
+  ctx.clearRect(0, 0, side, side);
+  ctx.fillStyle = `rgba(${bgR}, ${bgG}, ${bgB}, ${colors.bgAlpha})`;
   ctx.fillRect(0, 0, side, side);
-  ctx.fillStyle = "#000000";
+  ctx.fillStyle = colors.inkColor;
   for (let y = 0; y < qr.dim; y++) {
     for (let x = 0; x < qr.dim; x++) {
       if (!bitAt(qr.words, qr.dim, x, y)) continue;
@@ -84,8 +115,9 @@ export function makeQrTexture(
   qr: GeneratedQr,
   quiet: number = QUIET_MODULES,
   pxPerModule: number = DEFAULT_TEXTURE_PX_PER_MODULE,
+  colors: QrColorOptions = DEFAULT_QR_COLOR_OPTIONS,
 ): CanvasTexture {
-  const canvas = renderQrCanvas(qr, quiet, pxPerModule);
+  const canvas = renderQrCanvas(qr, quiet, pxPerModule, colors);
   const texture = new CanvasTexture(canvas);
   texture.magFilter = NearestFilter;
   texture.minFilter = LinearMipMapLinearFilter;

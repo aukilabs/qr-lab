@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lumaAt } from "./luma";
+import { lumaAt, lumaBufferFromRgba } from "./luma";
 
 /** Build a tightly packed 2x2 RGBA buffer, opaque alpha, from 4 pixels
  * given in row-major (TL, TR, BL, BR) order. */
@@ -63,5 +63,38 @@ describe("lumaAt", () => {
 
   it("returns null for any coordinate when width/height are 0 (nothing loaded)", () => {
     expect(lumaAt(new Uint8ClampedArray(0), 0, 0, 0, 0)).toBeNull();
+  });
+});
+
+describe("lumaBufferFromRgba", () => {
+  it("matches lumaAt pixel-by-pixel over a small buffer", () => {
+    const rgba = makeRgba2x2([
+      [200, 100, 50],
+      [255, 255, 255],
+      [0, 0, 0],
+      [10, 20, 30],
+    ]);
+    const luma = lumaBufferFromRgba(rgba, 2, 2);
+    expect(luma).toHaveLength(4);
+    expect(luma[0]).toBe(lumaAt(rgba, 2, 2, 0, 0));
+    expect(luma[1]).toBe(lumaAt(rgba, 2, 2, 1, 0));
+    expect(luma[2]).toBe(lumaAt(rgba, 2, 2, 0, 1));
+    expect(luma[3]).toBe(lumaAt(rgba, 2, 2, 1, 1));
+  });
+
+  it("matches the scanner's exact fixed-point formula (77/150/29 vector)", () => {
+    // Same hand-derived vector as lumaAt's own formula test:
+    // 77*200 + 150*100 + 29*50 + 128 = 31978; 31978 >> 8 = 124.
+    const rgba = makeRgba2x2([
+      [200, 100, 50],
+      [0, 0, 0],
+      [0, 0, 0],
+      [0, 0, 0],
+    ]);
+    expect(lumaBufferFromRgba(rgba, 2, 2)[0]).toBe(124);
+  });
+
+  it("throws on a buffer whose size doesn't match width*height*4", () => {
+    expect(() => lumaBufferFromRgba(new Uint8ClampedArray(3 * 4), 2, 2)).toThrow(RangeError);
   });
 });

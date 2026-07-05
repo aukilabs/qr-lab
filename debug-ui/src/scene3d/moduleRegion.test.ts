@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { moduleRegionLocalCorners, moduleRegionLocalCornersArray } from "./moduleRegion";
+import {
+  moduleRegionLocalCorners,
+  moduleRegionLocalCornersArray,
+  moduleRegionPhysicalSize,
+} from "./moduleRegion";
 
 describe("moduleRegionLocalCorners", () => {
   it("insets each edge by quiet/(dim+2*quiet) of the physical size", () => {
@@ -51,5 +55,40 @@ describe("moduleRegionLocalCorners", () => {
     const obj = moduleRegionLocalCorners(29, 4, 0.15);
     const arr = moduleRegionLocalCornersArray(29, 4, 0.15);
     expect(arr).toEqual([obj.tl, obj.tr, obj.br, obj.bl]);
+  });
+});
+
+describe("moduleRegionPhysicalSize", () => {
+  it("matches 2x the local-corner half-extent derived by moduleRegionLocalCorners", () => {
+    // moduleRegionLocalCorners(21, 4, 1).tr[0] is the module-region's
+    // positive-X half-extent in local units; the full module-region side
+    // length must be exactly double that (a square region centered at 0).
+    const c = moduleRegionLocalCorners(21, 4, 1);
+    expect(moduleRegionPhysicalSize(21, 4, 1)).toBeCloseTo(2 * c.tr[0], 12);
+  });
+
+  it("scales linearly with physicalSize", () => {
+    const a = moduleRegionPhysicalSize(29, 4, 0.15);
+    const b = moduleRegionPhysicalSize(29, 4, 0.3);
+    expect(b).toBeCloseTo(a * 2, 12);
+  });
+
+  it("degenerates to physicalSize itself when quiet=0 (no margin to subtract)", () => {
+    expect(moduleRegionPhysicalSize(21, 0, 0.2)).toBeCloseTo(0.2, 12);
+  });
+
+  it("shrinks as quiet grows relative to dim", () => {
+    const small = moduleRegionPhysicalSize(21, 4, 1);
+    const large = moduleRegionPhysicalSize(21, 20, 1);
+    expect(large).toBeLessThan(small);
+    expect(large).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["dim", () => moduleRegionPhysicalSize(0, 4, 1)],
+    ["quiet", () => moduleRegionPhysicalSize(21, -1, 1)],
+    ["physicalSize", () => moduleRegionPhysicalSize(21, 4, 0)],
+  ])("rejects invalid %s", (_label, fn) => {
+    expect(fn).toThrow(RangeError);
   });
 });

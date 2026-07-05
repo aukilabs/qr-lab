@@ -60,6 +60,22 @@ full design.
   177×177-module grid the clear outlier (19.6ms) — flagged as the
   biggest target for the device/NEON plan, not addressed here.
 
+- **3D-scene controls (Plan 5d): complete, debug-UI only, no Rust
+  changes.** The "3D Scene" mode gained a scene-background image (a real
+  scene plane, visible in the readback — not a CSS background), QR
+  ink/background colors + a background-alpha slider (transparent QR paper
+  showing the scene through it, the `trans_`-fixture look), an
+  emergent "reads as: normal/inverted" + low-contrast indicator, an
+  on-canvas HUD (camSim knobs + live camera distance/incidence/roll,
+  overlay-canvas-only — never touches the scanner's own readback buffer),
+  and a "Save as fixture" button producing a real `.json`/`.png`/`.luma`
+  triple in the `tools/fixtures/generate.py` schema. Verified end-to-end
+  in headless Chrome: a captured scene frame's saved `.png` decodes
+  correctly via `cargo run --example decode_photo` (correct payload/
+  version/ecc, refined corners within ~1px of the exported ground truth),
+  and the `.luma` byte-matches a Python-derived luma plane of the same PNG
+  pixel-for-pixel. See `debug-ui/README.md`'s "Scene controls" section.
+
 ## Layout
 
 - `crates/qrk-core` — the scanner core: tiling/binarization, finder-pattern

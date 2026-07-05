@@ -48,3 +48,37 @@ export const DEFAULT_PAYLOAD = "HTTPS://AUKILABS.COM/CPUSCANNER2/SCENE3D";
 export const DEFAULT_VERSION = 0;
 /** `1` = ECC level M — matches `generate_qr`'s `0..=3` -> L/M/Q/H mapping. */
 export const DEFAULT_ECC = 1;
+
+/** Plan 5d: QR appearance knobs. `inkColor` paints dark modules;
+ * `bgColor`/`bgAlpha` paint the quiet zone + light modules (the "paper").
+ * Defaults reproduce the pre-5d look exactly: opaque black-on-white. */
+export const DEFAULT_QR_INK_COLOR = "#000000";
+export const DEFAULT_QR_BG_COLOR = "#ffffff";
+export const DEFAULT_QR_BG_ALPHA = 1;
+export const QR_BG_ALPHA_RANGE = { min: 0, max: 1, step: 0.05 } as const;
+
+/** `expectedInverted`'s contrast warning fires below this |Δluma| (0-255
+ * scale). Set with headroom above `qrk_core::consts::CONTRAST_FLOOR` (12,
+ * a per-TILE contrast floor the Rust detector actually enforces) — this
+ * warning is a coarse whole-color heads-up for a human picking colors in
+ * the UI, not a re-derivation of the tile-level floor, so it fires well
+ * before real detection risk to leave headroom for blur/noise/exposure to
+ * further erode contrast on top of the base color choice. */
+export const CONTRAST_WARN_THRESHOLD = 30;
+
+/** Plan 5d: scene-background plane. Sized as a multiple of the QR plane's
+ * own `physicalSize` (a "floor" quad behind/coplanar-under the QR) so it
+ * reads as an environment the code floats in front of rather than a tight
+ * frame around it. */
+export const BACKGROUND_PLANE_SCALE = 4;
+/** Slightly behind the QR plane (same local Z axis) to avoid z-fighting
+ * between the two coplanar quads — small relative to every plausible
+ * `physicalSize`/orbit-distance combination. */
+export const BACKGROUND_PLANE_Z_OFFSET = -0.001;
+
+/** Default fixture-export seed — the scene has no camera-sim noise RNG
+ * seed of its own to report (see `camSim.ts`'s per-tick seed advance,
+ * which isn't a single fixed value); `0` matches `tools/fixtures/
+ * generate.py`'s CLI default and is honest about "this wasn't captured
+ * from a specific noise draw" for a manually-triggered save. */
+export const FIXTURE_EXPORT_SEED = 0;
