@@ -9,6 +9,7 @@
 // `useImageSource`, left to manual QA per this vitest config's `node`
 // environment (no jsdom); see Task 6's report for the checklist.
 import { useEffect, useRef, useState } from "react";
+import { clampTime } from "./videoTime";
 
 /** Fallback step size for prev/next-frame seeking when the browser exposes
  * no better estimate of the video's actual frame rate — see the module
@@ -43,6 +44,13 @@ export interface VideoSourceState {
   /** Step one frame forward (`1`) or backward (`-1`) while paused. Pauses
    * playback first if it was running. */
   stepFrame(direction: 1 | -1): void;
+  /** Seek directly to `time` (seconds), clamped to `[0, duration]` — the
+   * scrubber's drag/click/keyboard-release path. Unlike `stepFrame`, does
+   * NOT pause playback itself (the scrubber component pauses explicitly on
+   * drag start, matching the brief's "pause on scrub start, stay paused"
+   * UX) — a caller that wants "seek without touching play state" (e.g. a
+   * click on the bar while paused) gets exactly that. */
+  seek(time: number): void;
 }
 
 export interface VideoFrame {
@@ -240,8 +248,13 @@ export function useVideoSource(
     const video = videoRef.current;
     if (!video || !Number.isFinite(video.duration)) return;
     video.pause();
-    const max = Number.isFinite(video.duration) ? video.duration : Infinity;
-    video.currentTime = Math.min(Math.max(video.currentTime + direction * DEFAULT_FRAME_SECONDS, 0), max);
+    video.currentTime = clampTime(video.currentTime + direction * DEFAULT_FRAME_SECONDS, video.duration);
+  };
+
+  const seek = (time: number) => {
+    const video = videoRef.current;
+    if (!video || !Number.isFinite(video.duration)) return;
+    video.currentTime = clampTime(time, video.duration);
   };
 
   return {
@@ -257,5 +270,6 @@ export function useVideoSource(
     play,
     pause,
     stepFrame,
+    seek,
   };
 }
