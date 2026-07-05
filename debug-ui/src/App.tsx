@@ -35,6 +35,7 @@ import { parseGroundTruth, type GroundTruthCode } from "./overlays/groundtruth-t
 import { createRegistry, type OverlayContext } from "./overlays/registry";
 import { Scene3D } from "./scene3d/Scene3D";
 import { LayerPanel } from "./panels/LayerPanel";
+import { VideoControls } from "./panels/VideoControls";
 import {
   DEFAULT_RESOLUTION,
   maxDimFor,
@@ -506,29 +507,7 @@ export function App() {
             {!scannerReady && !initError && <div className="loading-overlay">Loading scanner…</div>}
           </div>
 
-          {isVideoMode && (
-            <div className="video-controls">
-              <button type="button" onClick={() => videoState.stepFrame(-1)} disabled={videoState.playing}>
-                ◀ frame
-              </button>
-              <button
-                type="button"
-                onClick={() => (videoState.playing ? videoState.pause() : videoState.play())}
-              >
-                {videoState.playing ? "Pause" : "Play"}
-              </button>
-              <button type="button" onClick={() => videoState.stepFrame(1)} disabled={videoState.playing}>
-                frame ▶
-              </button>
-              <span className="video-frame-counter">
-                frame {videoState.frameIndex} · {videoState.currentTime.toFixed(2)}s /{" "}
-                {videoState.duration.toFixed(2)}s
-              </span>
-              {!videoState.supportsFrameCallback && (
-                <span className="video-warn">no requestVideoFrameCallback — degraded capture rate</span>
-              )}
-            </div>
-          )}
+          {isVideoMode && <VideoControls videoState={videoState} />}
 
           <div className="status-bar">
             <span>

@@ -133,8 +133,67 @@ Key modules:
 - `overlays/registry.ts` + `overlays/layers/*.ts` — the overlay framework
   (see "Add an overlay layer" below).
 - `panels/SourcePanel.tsx`, `panels/LayerPanel.tsx`,
-  `panels/TimingsPanel.tsx` — sidebar UI; `App.tsx` is the thin shell wiring
-  all of the above together plus the video/image mode split.
+  `panels/TimingsPanel.tsx`, `panels/VideoControls.tsx` — sidebar/transport
+  UI; `App.tsx` is the thin shell wiring all of the above together plus the
+  video/image mode split.
+
+## Media mode: video scrubber (Task 5e)
+
+`panels/VideoControls.tsx` is the video-mode transport bar (rendered below
+the viewport whenever `source.mediaKind === "video"`): the pre-existing
+frame-step/play-pause buttons, a frame counter + `mm:ss.d` time labels, and
+a timeline scrubber — a plain `<input type="range" class="video-scrub">`
+styled full-width, one row below the buttons.
+
+- **Click anywhere on the bar jumps there; dragging scrubs continuously.**
+  Both go through the same `onChange` handler (a native range input fires
+  `input`/`change` for a click-to-a-position exactly like a drag) — the
+  displayed thumb position updates unthrottled (1:1 with the pointer), but
+  the actual `useVideoSource.seek()` call (and therefore the `currentTime`
+  write that triggers a `seeked`/rVFC capture → scan) is throttled to
+  ~10/s via `media/throttle.ts`'s trailing-edge `throttle()`. On
+  `pointerup` the throttle is cancelled and a final, unthrottled `seek()`
+  fires directly — the last dragged position always lands exactly, never
+  stuck behind the throttle window.
+- **Pauses on grab, stays paused after release** (`onPointerDown` calls
+  `pause()` if playing) — standard scrub UX; resuming is the user's call,
+  same review decision Plan 5 Task 5 made for the mode-switch pause.
+  Between drag steps the latest-wins `ScannerClient` queue plus the
+  seek/rVFC event chain (`useVideoSource`, unchanged by this task) handle
+  one scan per landed scrub position.
+- **Displayed position while playing is also throttled to ~10Hz**
+  (`media/throttle.ts` again, a separate instance) — synced from
+  `currentTime`, which itself updates once per presented frame
+  (`requestVideoFrameCallback`, i.e. up to the video's own frame rate) so
+  the scrubber's own re-renders don't compound that into extra churn on
+  top of what `useVideoSource` already does for the frame counter.
+- **Keyboard**: with the scrubber focused, `ArrowLeft`/`ArrowRight` call
+  the existing `stepFrame(-1|1)` (same ±1/30s step as the dedicated frame
+  buttons) instead of the range input's native (browser-default, coarse)
+  arrow-key step — `onKeyDown` calls `preventDefault()` so the native step
+  never also fires (would otherwise double-move the position).
+- **Disabled until `loadedmetadata`**: `duration` starts at `0` (and stays
+  `NaN`/non-finite is defensively handled too) until the video decodes its
+  first bit of metadata, gating the whole scrub input — no
+  divide-by-zero/`NaN` range, no seeking into an unknown duration.
+- **Pure logic split out for unit testing** (this repo has no jsdom — DOM/
+  hook behavior stays manual-QA'd, see below): `media/videoTime.ts`
+  (`formatTime` mm:ss.d incl. the hours-long-source edge where minutes just
+  grow past 60 rather than wrapping to `h:mm:ss`; `clampTime`, shared with
+  `useVideoSource.stepFrame`/the new `seek()`) and `media/throttle.ts`
+  (trailing-edge throttle with `cancel()`/`flush()`, covered by
+  `throttle.test.ts` with an injectable clock — no real timers needed for
+  the elapsed-time logic, only for the trailing-call scheduling).
+- **Manual QA executed for this task** (scripted headless Chrome via raw
+  CDP, same `cdp.mjs`-over-`WebSocket` pattern as Plans 3-5's QA — see
+  `.superpowers/sdd/p5e-report.md`): dropped a synthesized 3s test video,
+  confirmed the scrub input stays disabled until `loadedmetadata`, dragged
+  the thumb via dispatched `Input.dispatchMouseEvent` sequences (asserting
+  the video's real `currentTime` lands near the drop point and the frame
+  counter increments — proof a scan followed each landed position), a
+  separate click-to-jump, paused-after-release, and a focused-scrubber
+  `ArrowRight` key press landing exactly one `1/30s` step (not a native
+  range step) with no double-fire.
 
 ## Mode 1: 3D orbit scene (Plan 5 Task 5)
 
