@@ -25,6 +25,12 @@ export interface VideoControlsProps {
 }
 
 export function VideoControls({ videoState }: VideoControlsProps) {
+  // Note (review nit, accepted): starts at 0 rather than
+  // `videoState.currentTime`, so a REMOUNT mid-video (e.g. leaving and
+  // re-entering media mode) paints one frame with the thumb/label at
+  // 00:00.0 before the sync effect below snaps it to the real position —
+  // a single-frame cosmetic blip, not worth seeding from props (which
+  // would silently couple initial state to render timing).
   const [scrubTime, setScrubTime] = useState(0);
   const [dragging, setDragging] = useState(false);
 
@@ -59,6 +65,14 @@ export function VideoControls({ videoState }: VideoControlsProps) {
       throttledSeek.cancel();
       throttledSync.cancel();
       setScrubTime(0);
+      // A source swap mid-drag flips `disabled` true, which drops the
+      // input's implicit pointer capture WITHOUT firing `pointerup` — if
+      // `dragging` survived that, the `!dragging` sync branch below would
+      // be gated forever (scrubber frozen until the user completed another
+      // full press/release cycle on the new source). Reset it here;
+      // `onPointerCancel` below covers the same class of capture loss for
+      // paths that DO emit a pointer event.
+      setDragging(false);
       return;
     }
     if (!dragging) throttledSync(videoState.currentTime);
@@ -87,8 +101,28 @@ export function VideoControls({ videoState }: VideoControlsProps) {
     // The final position must land exactly, not whenever the throttle
     // window next opens — cancel any pending throttled seek and issue the
     // authoritative one directly against the latest `seek` closure.
+    //
+    // Note (review nit, accepted): browsers can deliver one final
+    // `input`/`change` for the release position AFTER `pointerup` — that
+    // late `handleChange` re-enters `throttledSeek`, so the very last
+    // position may land via the trailing throttle up to ~THROTTLE_MS
+    // (~100ms) after release instead of through this direct call. Same
+    // final value either way (the trailing call carries the latest args),
+    // just marginally later — not worth suppressing.
     throttledSeek.cancel();
     seekRef.current(scrubTime);
+  };
+
+  const handlePointerCancel = () => {
+    // Pointer capture lost without a `pointerup` (OS-level gesture
+    // interruption, element disablement mid-drag on engines that do emit
+    // `pointercancel` for it, etc.). Same reset as `handlePointerUp` but
+    // WITHOUT the final authoritative seek: a cancelled drag never got a
+    // deliberate release position, so leave the video wherever the last
+    // throttled seek put it rather than treating an interruption as
+    // intent. Any pending trailing seek is dropped for the same reason.
+    setDragging(false);
+    throttledSeek.cancel();
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -150,6 +184,7 @@ export function VideoControls({ videoState }: VideoControlsProps) {
         disabled={disabled}
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
       />
