@@ -21,14 +21,23 @@ export interface HudCamSimValues {
 /**
  * Pure text-formatting half of the HUD — one line per stat, always camSim
  * first (always available) then camera stats (omitted, not blank, when
- * `stats` is `null` — e.g. before the first scan tick has run).
+ * `stats` is `null` — e.g. before the first scan tick has run). When
+ * `sensorView` is true a `[sensor view]` tag line leads the block — the
+ * truthfulness marker telling users the canvas under the HUD is showing
+ * the scanner's own processed input frame, not the live WebGL render
+ * (see `sensorView.ts`).
  */
-export function formatHudLines(camSim: HudCamSimValues, stats: CameraStats | null): string[] {
+export function formatHudLines(
+  camSim: HudCamSimValues,
+  stats: CameraStats | null,
+  sensorView = false,
+): string[] {
   const lines = [
     `blur    sigma=${camSim.blurSigma.toFixed(1)}px`,
     `noise   sigma=${camSim.noiseSigma.toFixed(1)}`,
     `exposure ${camSim.exposureOffset > 0 ? "+" : ""}${camSim.exposureOffset}`,
   ];
+  if (sensorView) lines.unshift("[sensor view]");
   if (stats) {
     lines.push(
       `dist    ${stats.distanceM.toFixed(3)}m`,

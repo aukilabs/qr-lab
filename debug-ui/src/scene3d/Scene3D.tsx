@@ -50,6 +50,7 @@ import { QrAppearanceControls, FixtureSaveControls, type QrAppearanceValues } fr
 import { BackgroundPlane } from "./BackgroundPlane";
 import { computeCameraStats, type CameraStats } from "./cameraStats";
 import { drawHud, formatHudLines } from "./hud";
+import { sensorViewActive, type SensorViewMode } from "./sensorView";
 import { expectedInverted } from "./colorUtils";
 import { intrinsicsFromFov } from "./intrinsics";
 import {
@@ -94,7 +95,7 @@ interface FrameOutcome {
    * so it stays valid after this tick's scratch buffers are mutated
    * again. Captured every tick (not just on decode success) so "Save as
    * fixture" always has the latest frame available. */
-  capturedRgba: Uint8ClampedArray;
+  capturedRgba: Uint8ClampedArray<ArrayBuffer>;
   /** = camSim.resolution at capture time (both the readback's width and
    * height, always square — see this file's module doc). */
   resolution: number;
@@ -460,13 +461,44 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
   const [timingsSample, setTimingsSample] = useState<TimingsSample | null>(null);
   const [sampleId, setSampleId] = useState(0);
   const [errorSample, setErrorSample] = useState<ErrorSample | null>(null);
+  /** Sensor-view display mode (Plan 5d follow-up — see `sensorView.ts`):
+   * default "auto" shows the processed readback frame whenever any camSim
+   * knob is non-default, so the knobs visibly do something on screen.
+   * Updates at scan cadence (~SCAN_THROTTLE_MS), not per animation frame
+   * — a stale-by-up-to-100ms sensor frame while orbiting is the
+   * documented, accepted tradeoff for a debug tool (the scan loop keeps
+   * ticking during OrbitControls interaction, so it never freezes). */
+  const [sensorViewMode, setSensorViewMode] = useState<SensorViewMode>("auto");
 
   const handleResult = useCallback(
     (outcome: FrameOutcome) => {
       const canvas = overlayCanvasRef.current;
       const ctx = canvas?.getContext("2d");
+      const showSensor = sensorViewActive(sensorViewMode, camSim);
       if (ctx && canvas) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Sensor view (Plan 5d follow-up): paint the PROCESSED post-camSim
+        // readback frame — the exact rgba the scanner ingested this tick —
+        // as the base layer, so blur/noise/exposure have a VISIBLE
+        // on-screen effect (the WebGL render underneath never reflects the
+        // knobs — see this file's module doc). Overlays then draw on top
+        // in the SAME coordinate space with zero extra mapping: the
+        // overlay canvas's pixel buffer is exactly `resolution x
+        // resolution` (the readback's own size — see the sizing effect
+        // above) and every overlay already draws at 1:1 readback px
+        // (`view: {scale: 1}`), so `putImageData` at (0,0) is inherently
+        // aligned with them; both are CSS-stretched to the same square
+        // container together. Resolution-change guard: a tick captured
+        // at the OLD resolution can land after the canvas resized —
+        // skip drawing that one frame (next tick matches) rather than
+        // paint a misaligned/mis-scaled frame.
+        if (
+          showSensor &&
+          canvas.width === outcome.resolution &&
+          canvas.height === outcome.resolution
+        ) {
+          ctx.putImageData(new ImageData(outcome.capturedRgba, outcome.resolution, outcome.resolution), 0, 0);
+        }
         overlayRegistry.drawAll({
           ctx,
           view: { scale: 1, tx: 0, ty: 0 },
@@ -481,7 +513,7 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
         // already close over ScanLoop's per-tick values the same way;
         // camSim values themselves come straight from this component's
         // own state below since they don't change mid-tick).
-        drawHud(ctx, formatHudLines(camSim, outcome.cameraStats));
+        drawHud(ctx, formatHudLines(camSim, outcome.cameraStats, showSensor));
       }
       setTimingsSample(outcome.timings);
       setErrorSample(outcome.errorSample);
@@ -495,7 +527,7 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
         fovDeg: outcome.fovDeg,
       };
     },
-    [overlayRegistry, camSim],
+    [overlayRegistry, camSim, sensorViewMode],
   );
 
   // "Save as fixture" (feature 6): build the generator-schema JSON from
@@ -660,7 +692,12 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
 
         <section className="panel-section">
           <h2 className="panel-title">Camera sim</h2>
-          <CameraSimControls values={camSim} onChange={setCamSim} />
+          <CameraSimControls
+            values={camSim}
+            onChange={setCamSim}
+            sensorView={sensorViewMode}
+            onSensorViewChange={setSensorViewMode}
+          />
         </section>
 
         <section className="panel-section">

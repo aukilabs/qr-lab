@@ -39,4 +39,15 @@ describe("formatHudLines", () => {
     const lines = formatHudLines({ blurSigma: 0, noiseSigma: 0, exposureOffset: 0 }, null);
     expect(lines).toHaveLength(3);
   });
+
+  it("prepends a [sensor view] tag line when sensorView is true", () => {
+    const lines = formatHudLines({ blurSigma: 1, noiseSigma: 0, exposureOffset: 0 }, null, true);
+    expect(lines[0]).toBe("[sensor view]");
+    expect(lines).toHaveLength(4);
+  });
+
+  it("has no sensor-view line by default (backward-compatible arity)", () => {
+    const lines = formatHudLines({ blurSigma: 1, noiseSigma: 0, exposureOffset: 0 }, null);
+    expect(lines.some((l) => l.includes("sensor view"))).toBe(false);
+  });
 });

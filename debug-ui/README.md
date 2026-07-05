@@ -256,6 +256,29 @@ of Plan 5 Task 5's original scene.
   from — see `hud.ts`'s module doc for why that separation is load-bearing
   (contaminating the readback would feed the scanner's own HUD pixels
   back into itself).
+- **Sensor view** (`scene3d/sensorView.ts` + `Scene3D.tsx`'s
+  `handleResult`): the on-screen WebGL render never reflects the camSim
+  knobs (they post-process an invisible internal buffer), so without this
+  the sliders appear to do nothing visually. Sensor view paints the
+  PROCESSED post-camSim readback frame — the exact rgba the scanner
+  ingested that tick — onto the overlay canvas as the base layer, so
+  blur/noise/exposure are visibly ON SCREEN. A "sensor view" select in
+  the Camera sim panel: **auto** (default — active whenever any knob is
+  non-default), **on**, **off**. The HUD gains a `[sensor view]` tag line
+  while active, so it's always explicit that you're looking at the
+  scanner's input rather than the live render. Alignment is inherent, not
+  mapped: the overlay canvas's pixel buffer is exactly the readback's own
+  `resolution × resolution` size and every overlay layer already draws at
+  1:1 readback px (`view: {scale: 1}`) on that same canvas, so
+  `putImageData` at the origin shares the overlays' coordinate space by
+  construction (both are CSS-stretched into the same forced-square
+  container together; a resolution change mid-flight skips one frame
+  rather than paint a mis-scaled one — see the guard in `handleResult`).
+  Cadence: the sensor frame updates at SCAN cadence (`SCAN_THROTTLE_MS`,
+  ~10fps), not per animation frame — orbiting under sensor view looks
+  slightly steppy by design (the scan loop keeps ticking during
+  OrbitControls interaction, so it never freezes); an accepted tradeoff
+  for a debug tool.
 - **Save as fixture** (`scene3d/fixtureExport.ts`): a text field (default
   `scene_<payload-slug>`, editable — stops auto-following the payload once
   you touch it) + button producing three downloads named `<name>.json` /
@@ -315,6 +338,20 @@ was fed straight into `cargo run --example decode_photo`, which decoded
 it successfully (correct version/ecc/payload, refined corners within
 ~1px of the exported `corners_px`), closing the full loop from "scene
 knob state" to "a real fixture the Rust pipeline can read back."
+
+Sensor view was verified with pixel-metric assertions computed IN-PAGE on
+the DISPLAY canvas itself (the `.scene3d-overlay` canvas, central region
+— not the internal readback, since the point is the on-screen effect):
+auto+default-knobs leaves the region ~99% transparent; forcing "on"
+paints a fully opaque sensor frame; exposure −40 dropped the displayed
+mean luma by 20; noise σ=8 raised mean|horizontal gradient| ×1.38; blur
+3px cut it ×0.84; forcing "off" restored transparency with knobs still
+active — 7/7 assertions, plus screenshots confirming the `[sensor view]`
+HUD tag and that overlays (finder circles, ground-truth quad, decoded
+label) sit exactly on the displayed sensor frame. One environment gotcha
+for future headless passes: Chrome throttles `requestAnimationFrame` to
+zero for fully occluded windows, which freezes the r3f scene and all scan
+ticks — call `Page.bringToFront` before driving the 3D scene.
 
 ## Known limitations
 
