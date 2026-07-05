@@ -80,3 +80,52 @@ export function expectedInverted(inkColor: string, bgColor: string): ExpectedInv
     lowContrast: deltaLuma < CONTRAST_WARN_THRESHOLD,
   };
 }
+
+/**
+ * Standard source-over alpha compositing of `topColor` at `alpha` over an
+ * OPAQUE `underColor`: `out = alpha*top + (1-alpha)*under`, per channel.
+ * Returns 0-255 channels (not rounded — feed straight into
+ * {@link lumaFromRgb}-style math; round only for display).
+ */
+export function compositeOver(
+  topColor: string,
+  alpha: number,
+  underColor: string,
+): [number, number, number] {
+  const a = Math.min(1, Math.max(0, alpha));
+  const [tr, tg, tb] = hexToRgb(topColor);
+  const [ur, ug, ub] = hexToRgb(underColor);
+  return [a * tr + (1 - a) * ur, a * tg + (1 - a) * ug, a * tb + (1 - a) * ub];
+}
+
+/**
+ * {@link expectedInverted} with alpha compositing (Plan 5d review fix):
+ * when the QR-background alpha is below 1, the paper the scanner actually
+ * sees is `bgColor` COMPOSITED over whatever sits behind the plane —
+ * which can flip the polarity vs. the flat-color prediction (e.g. a
+ * white paper at alpha 0.1 over the near-black scene background reads
+ * dark, so white ink on it is INVERTED even though flat white-on-white
+ * predicts zero contrast). `underColor` is the scene's own background
+ * color — only valid when NO background image is set (an arbitrary
+ * image has no single color to composite against; the UI shows
+ * "depends on background" in that case instead of calling this, and the
+ * EXPORTED flag is always measured from the captured frame regardless —
+ * see `fixtureExport.ts`'s `probeInvertedFromRgba`).
+ */
+export function expectedInvertedComposited(
+  inkColor: string,
+  bgColor: string,
+  bgAlpha: number,
+  underColor: string,
+): ExpectedInverted {
+  const [ir, ig, ib] = hexToRgb(inkColor);
+  const [pr, pg, pb] = compositeOver(bgColor, bgAlpha, underColor);
+  const lumaInk = lumaFromRgb(ir, ig, ib);
+  const lumaPaper = lumaFromRgb(Math.round(pr), Math.round(pg), Math.round(pb));
+  const deltaLuma = Math.abs(lumaInk - lumaPaper);
+  return {
+    inverted: lumaInk > lumaPaper,
+    deltaLuma,
+    lowContrast: deltaLuma < CONTRAST_WARN_THRESHOLD,
+  };
+}

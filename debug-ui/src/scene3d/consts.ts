@@ -66,6 +66,13 @@ export const QR_BG_ALPHA_RANGE = { min: 0, max: 1, step: 0.05 } as const;
  * further erode contrast on top of the base color choice. */
 export const CONTRAST_WARN_THRESHOLD = 30;
 
+/** The scene's own background color (the `<color attach="background">`
+ * value in `Scene3D.tsx`) — single source of truth shared between the
+ * Canvas and the "reads as" indicator's alpha compositing
+ * (`colorUtils.ts`'s `expectedInvertedComposited` needs to know what a
+ * translucent QR paper composites over when no background image is set). */
+export const SCENE_BACKGROUND_COLOR = "#05070d";
+
 /** Plan 5d: scene-background plane. Sized as a multiple of the QR plane's
  * own `physicalSize` (a "floor" quad behind/coplanar-under the QR) so it
  * reads as an environment the code floats in front of rather than a tight

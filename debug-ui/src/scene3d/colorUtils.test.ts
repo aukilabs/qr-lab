@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { expectedInverted, hexToRgb, lumaFromRgb, rgbToHex } from "./colorUtils";
+import {
+  compositeOver,
+  expectedInverted,
+  expectedInvertedComposited,
+  hexToRgb,
+  lumaFromRgb,
+  rgbToHex,
+} from "./colorUtils";
 import { CONTRAST_WARN_THRESHOLD } from "./consts";
 
 describe("hexToRgb", () => {
@@ -81,5 +88,59 @@ describe("expectedInverted", () => {
     expect(r.deltaLuma).toBe(0);
     expect(r.inverted).toBe(false);
     expect(r.lowContrast).toBe(true);
+  });
+});
+
+describe("compositeOver", () => {
+  it("returns the top color unchanged at alpha=1", () => {
+    expect(compositeOver("#ff8800", 1, "#000000")).toEqual([255, 136, 0]);
+  });
+
+  it("returns the under color at alpha=0", () => {
+    expect(compositeOver("#ffffff", 0, "#05070d")).toEqual([5, 7, 13]);
+  });
+
+  it("interpolates linearly per channel at alpha=0.5", () => {
+    const [r, g, b] = compositeOver("#ffffff", 0.5, "#000000");
+    expect(r).toBeCloseTo(127.5, 9);
+    expect(g).toBeCloseTo(127.5, 9);
+    expect(b).toBeCloseTo(127.5, 9);
+  });
+
+  it("clamps out-of-range alpha into [0, 1]", () => {
+    expect(compositeOver("#ffffff", 2, "#000000")).toEqual([255, 255, 255]);
+    expect(compositeOver("#ffffff", -1, "#000000")).toEqual([0, 0, 0]);
+  });
+});
+
+describe("expectedInvertedComposited", () => {
+  it("matches expectedInverted exactly at alpha=1 (no compositing)", () => {
+    const flat = expectedInverted("#000000", "#ffffff");
+    const comp = expectedInvertedComposited("#000000", "#ffffff", 1, "#05070d");
+    expect(comp).toEqual(flat);
+  });
+
+  it("flips polarity vs the flat prediction: white ink on white paper at alpha~0 over a dark scene reads INVERTED", () => {
+    // Flat prediction: white ink on white bg -> delta 0, not inverted,
+    // low contrast. Composited reality: at alpha 0 the "paper" IS the
+    // near-black scene background, so white ink on it is clearly
+    // inverted with high contrast — the exact polarity flip the review
+    // flagged (the pre-fix indicator would have lied here).
+    const flat = expectedInverted("#ffffff", "#ffffff");
+    expect(flat.inverted).toBe(false);
+    expect(flat.lowContrast).toBe(true);
+
+    const comp = expectedInvertedComposited("#ffffff", "#ffffff", 0, "#05070d");
+    expect(comp.inverted).toBe(true);
+    expect(comp.lowContrast).toBe(false);
+    expect(comp.deltaLuma).toBeGreaterThan(200);
+  });
+
+  it("flags low contrast when the composited paper approaches the ink's luma", () => {
+    // Black ink; white paper at alpha 0.1 over a near-black scene ->
+    // effective paper luma ~ 0.1*255 + 0.9*7 ≈ 32 — close to black ink.
+    const comp = expectedInvertedComposited("#000000", "#ffffff", 0.1, "#05070d");
+    expect(comp.deltaLuma).toBeLessThan(40);
+    expect(comp.inverted).toBe(false); // paper still (barely) brighter than ink
   });
 });

@@ -13,8 +13,8 @@
 // same split this codebase already uses throughout `scene3d/` (see
 // `camSim.ts`'s module doc on the same pure/impure canvas split).
 import type { Intrinsics } from "./intrinsics";
-import { FIXTURE_EXPORT_SEED } from "./consts";
-import { lumaBufferFromRgba } from "../media/luma";
+import { CONTRAST_WARN_THRESHOLD, FIXTURE_EXPORT_SEED } from "./consts";
+import { lumaAt, lumaBufferFromRgba } from "../media/luma";
 
 export type Point2 = [number, number];
 export type EccLetter = "l" | "m" | "q" | "h";
@@ -65,6 +65,104 @@ export function defaultFixtureName(payload: string): string {
  * through them (`opaque_plate=False`, the `trans_` fixture scenario). */
 export function opaquePlateFromAlpha(alpha: number): boolean {
   return alpha >= 1;
+}
+
+/**
+ * `module_size_px` from the ACTUAL projected module-region corners —
+ * exactly `tools/fixtures/generate.py`'s derivation
+ * (`norm(corners[1] - corners[0]) / n`): the TL->TR edge length in px
+ * divided by the module count. Pose-dependent by construction (shrinks
+ * with distance, shortens under perspective), unlike the pose-invariant
+ * `resolution / (dim + 2*quiet)` constant the pre-fix export used — that
+ * constant described the TEXTURE's own resolution-relative density, not
+ * the rendered code's, and was ~2.3x too large at the scene's default
+ * pose (Plan 5d review fix, HIGH).
+ */
+export function moduleSizeFromCorners(
+  corners: [Point2, Point2, Point2, Point2],
+  dim: number,
+): number {
+  if (!Number.isFinite(dim) || dim <= 0) {
+    throw new RangeError(`moduleSizeFromCorners: dim must be > 0, got ${dim}`);
+  }
+  const [tl, tr] = corners;
+  return Math.hypot(tr[0] - tl[0], tr[1] - tl[1]) / dim;
+}
+
+export interface InvertedProbe {
+  /** MEASURED polarity: `true` when the ink (probed just inside the TL
+   * module-region corner — always a dark finder module on a normal code)
+   * is BRIGHTER than the paper/scene (probed just outside). */
+  inverted: boolean;
+  lumaInside: number;
+  lumaOutside: number;
+  /** `|lumaInside - lumaOutside|`. */
+  contrast: number;
+  /** `contrast < CONTRAST_WARN_THRESHOLD` (30) — the measured `inverted`
+   * flag is unreliable at this contrast; the export UI surfaces a
+   * warning (gates like `fixtures_smoke`/`triplet_gate` hard-branch on
+   * the flag, so a mispolarized low-contrast fixture would poison them). */
+  lowContrast: boolean;
+}
+
+/**
+ * MEASURE the code's inverted polarity from the captured frame itself
+ * (Plan 5d review fix, MEDIUM): with `bgAlpha < 1` the on-screen paper is
+ * the QR background COMPOSITED over whatever the scene shows behind it
+ * (possibly an arbitrary image), so a flat-color luma prediction can flip
+ * polarity vs. what the scanner actually sees — and the exported
+ * `inverted` flag feeds test gates that hard-branch on it, so it must be
+ * ground truth, not a prediction.
+ *
+ * Probe geometry mirrors `crates/qrk-core/tests/fixtures_smoke.rs`: step
+ * `0.5 * moduleSizePx` along the TL->BR diagonal INTO the module region
+ * from the TL corner (the finder pattern's outer ring — always ink) and
+ * the same distance OUT of it (quiet zone paper, or the scene showing
+ * through when the plate is transparent). `inverted = lumaInside >
+ * lumaOutside`. Luma via the scanner's own `lumaAt` formula. Throws if
+ * either probe lands outside the frame (corner too close to the edge —
+ * re-frame and retry rather than export a fixture with unverifiable
+ * polarity).
+ */
+export function probeInvertedFromRgba(
+  rgba: Uint8ClampedArray,
+  width: number,
+  height: number,
+  corners: [Point2, Point2, Point2, Point2],
+  moduleSizePx: number,
+): InvertedProbe {
+  if (!Number.isFinite(moduleSizePx) || moduleSizePx <= 0) {
+    throw new RangeError(`probeInvertedFromRgba: moduleSizePx must be > 0, got ${moduleSizePx}`);
+  }
+  const [tl, , br] = corners;
+  const dx = br[0] - tl[0];
+  const dy = br[1] - tl[1];
+  const len = Math.hypot(dx, dy);
+  if (len === 0) throw new RangeError("probeInvertedFromRgba: degenerate corners (TL == BR)");
+  const ux = dx / len;
+  const uy = dy / len;
+  const step = 0.5 * moduleSizePx;
+
+  const sample = (x: number, y: number, label: string): number => {
+    const luma = lumaAt(rgba, width, height, Math.round(x), Math.round(y));
+    if (luma === null) {
+      throw new RangeError(
+        `probeInvertedFromRgba: ${label} probe (${x.toFixed(1)}, ${y.toFixed(1)}) is outside the ${width}x${height} frame`,
+      );
+    }
+    return luma;
+  };
+
+  const lumaInside = sample(tl[0] + ux * step, tl[1] + uy * step, "inside");
+  const lumaOutside = sample(tl[0] - ux * step, tl[1] - uy * step, "outside");
+  const contrast = Math.abs(lumaInside - lumaOutside);
+  return {
+    inverted: lumaInside > lumaOutside,
+    lumaInside,
+    lumaOutside,
+    contrast,
+    lowContrast: contrast < CONTRAST_WARN_THRESHOLD,
+  };
 }
 
 export interface FixtureCodeInput {

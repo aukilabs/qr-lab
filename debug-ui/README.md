@@ -176,6 +176,17 @@ accuracy meter you can orbit around.
 
 **QA findings (Plan 5 Task 7), for anyone re-measuring this scene:**
 
+> **Measurement caveat (Plan 5d review fix):** every error number in this
+> section was measured while `projection.ts` still mapped the optical
+> axis to `width/2` instead of the pixel-centers-at-integers `(width-1)/2`
+> the scanner/fixture convention uses — i.e. the analytic ground truth
+> carried a systematic `(+0.5, +0.5)`px bias (~0.71px diagonally) vs. the
+> refined corners being compared against it. The projection has since
+> been corrected, so freshly measured errors run LOWER than the bands
+> below (a correction, not a regression); the qualitative findings
+> (flat-across-poses profile, TR/BL vs TL/BR asymmetry, clean grazing
+> dropout) still hold.
+
 - At the scene's literal default (head-on, `physicalSize=0.15m`,
   `resolution=960`) view, mean corner error sits around **1.0-1.1px**, not
   strictly sub-pixel — TR/BL corners run higher (~1.6-1.7px) than TL/BR
@@ -244,7 +255,17 @@ of Plan 5 Task 5's original scene.
   warning fires when `|Δluma| < CONTRAST_WARN_THRESHOLD` (30, chosen with
   headroom above the Rust detector's actual per-tile `CONTRAST_FLOOR`,
   12) since blur/noise/exposure erode contrast further on top of a user's
-  raw color choice.
+  raw color choice. **Alpha awareness (Plan 5d review fix):** with the
+  background alpha below 1 the paper the scanner sees is `bgColor`
+  composited over whatever sits behind the plane, which can FLIP polarity
+  vs. the flat-color prediction (e.g. white ink on white paper at alpha 0
+  over the dark scene reads inverted, not zero-contrast) — the indicator
+  composites over the scene background COLOR
+  (`expectedInvertedComposited`) when no image is picked, and shows
+  "depends on background image (measured at export)" when one is (an
+  arbitrary image has no single answer). The EXPORTED `inverted` flag
+  never trusts this prediction either way — see the fixture-export item
+  below.
 - **HUD** (`scene3d/hud.ts`, drawn by `Scene3D.tsx`'s `handleResult`): a
   small monospace block, top-left, on the 2D OVERLAY canvas ONLY — blur
   σ / noise σ / exposure offset (the live camSim knobs) plus camera/plane
@@ -303,13 +324,28 @@ of Plan 5 Task 5's original scene.
     `tools/fixtures/render.py`'s `_plane_corners_m`, which treats
     `physical_size_m` as the no-quiet-zone module region); `distance_m`/
     `tilt_deg` come straight from that tick's camera stats;
-    `tilt_azimuth_deg`/`inplane_deg` are recorded as `0` with an inline
-    comment — a single incidence angle + approximate roll can't losslessly
-    recover which in-plane axis a tilt happened about, so these are
-    informational placeholders, not measured values; `exposure_offset` is
-    an EXTRA top-level field (no schema slot for it) — harmless, every
-    consumer (the Python generator, the Rust `Meta` loader) ignores
-    unknown fields.
+    `module_size_px` is POSE-DERIVED from the actual projected corners
+    (`moduleSizeFromCorners` = `|TR−TL|/dim`, exactly `generate.py`'s
+    derivation — Plan 5d review fix: an earlier version exported the
+    pose-invariant `resolution/(dim+2·quiet)` texture-density constant,
+    ~2.3x too large at the default pose); the `inverted` flag is
+    MEASURED from the captured frame, not predicted from the color
+    pickers (`probeInvertedFromRgba`: sample luma 0.5 modules diagonally
+    inside the TL module-region corner [finder ink] vs 0.5 modules
+    outside [paper/scene], the same probe geometry as
+    `crates/qrk-core/tests/fixtures_smoke.rs`; `inverted =
+    lumaInside > lumaOutside`) — necessary because with a translucent
+    paper the effective background is whatever the scene composites
+    behind it, and gates hard-branch on this flag; if the probe's
+    contrast is under 30 the export still completes but a warning is
+    shown (the measured flag is unreliable — don't commit that fixture
+    unchecked); `tilt_azimuth_deg`/`inplane_deg` are recorded as `0` with
+    an inline comment — a single incidence angle + approximate roll can't
+    losslessly recover which in-plane axis a tilt happened about, so
+    these are informational placeholders, not measured values;
+    `exposure_offset` is an EXTRA top-level field (no schema slot for it)
+    — harmless, every consumer (the Python generator, the Rust `Meta`
+    loader) ignores unknown fields.
   - **Caveat for anyone dropping a saved fixture into `fixtures/`:** the
     Rust loader's `common::load_all()` sweeps every fixture file present,
     so a scene-exported fixture WILL be picked up by `decode_gate`/

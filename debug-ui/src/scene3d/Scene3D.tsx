@@ -51,13 +51,14 @@ import { BackgroundPlane } from "./BackgroundPlane";
 import { computeCameraStats, type CameraStats } from "./cameraStats";
 import { drawHud, formatHudLines } from "./hud";
 import { sensorViewActive, type SensorViewMode } from "./sensorView";
-import { expectedInverted } from "./colorUtils";
 import { intrinsicsFromFov } from "./intrinsics";
 import {
   buildFixtureMeta,
   defaultFixtureName,
   eccLetterFromIndex,
+  moduleSizeFromCorners,
   opaquePlateFromAlpha,
+  probeInvertedFromRgba,
   saveSceneFixture,
   versionFromDim,
 } from "./fixtureExport";
@@ -72,6 +73,7 @@ import {
   DEFAULT_VERSION,
   QUIET_MODULES,
   SCAN_THROTTLE_MS,
+  SCENE_BACKGROUND_COLOR,
 } from "./consts";
 
 export interface Scene3DProps {
@@ -271,7 +273,12 @@ function ScanLoop({ qr, physicalSize, client, payload, camSim, meshRef, onResult
       {
         corners_px: truthPx,
         version: qr.dim,
-        module_size_px: resolution / (qr.dim + 2 * QUIET_MODULES),
+        // Pose-DERIVED, from the actual projected corners — exactly
+        // generate.py's |TR-TL|/dim (Plan 5d review fix: the previous
+        // pose-invariant `resolution/(dim+2*quiet)` constant described
+        // the texture's density, not the rendered code's, and was ~2.3x
+        // too large at the default pose).
+        module_size_px: moduleSizeFromCorners(truthPx, qr.dim),
         inverted: false,
         opaque_plate: false,
         payload,
@@ -377,6 +384,7 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
   const [cameraStats, setCameraStats] = useState<CameraStats | null>(null);
   /** Latest tick's captured frame — everything "Save as fixture" needs
    * that isn't already plain component state, kept in a ref (not React
@@ -545,13 +553,30 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
     }
     setSaving(true);
     setSaveError(null);
+    setSaveWarning(null);
     try {
-      const contrast = expectedInverted(qrColors.inkColor, qrColors.bgColor);
       const camera = intrinsicsFromFov(frame.fovDeg, frame.resolution, frame.resolution);
       // physical_size_m is the MODULE-REGION-ONLY size — see
       // `moduleRegion.ts`'s `moduleRegionPhysicalSize` doc for why this
       // differs from the scene's own (full-plane) `physicalSize` state.
       const physicalSizeM = moduleRegionPhysicalSize(qr.dim, QUIET_MODULES, physicalSize);
+      // Pose-derived module size, re-derived from the frame's own corners
+      // (same as `frame.truth.module_size_px` since Plan 5d's review fix,
+      // but computed here from corners so the JSON is self-consistent by
+      // construction even if the truth path evolves).
+      const moduleSizePx = moduleSizeFromCorners(frame.truth.corners_px, qr.dim);
+      // MEASURED inverted flag (Plan 5d review fix): probe the captured
+      // frame itself, not a flat-color prediction — with a translucent
+      // paper the effective background depends on what's actually behind
+      // the plane (scene color or an arbitrary image). See
+      // `probeInvertedFromRgba`'s doc for the probe geometry.
+      const probe = probeInvertedFromRgba(
+        frame.rgba,
+        frame.resolution,
+        frame.resolution,
+        frame.truth.corners_px,
+        moduleSizePx,
+      );
       const meta = buildFixtureMeta({
         name: fixtureName,
         width: frame.resolution,
@@ -567,13 +592,19 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
           physicalSizeM,
           distanceM: frame.cameraStats.distanceM,
           tiltDeg: frame.cameraStats.incidenceDeg,
-          moduleSizePx: frame.truth.module_size_px,
+          moduleSizePx,
           cornersPx: frame.truth.corners_px,
-          inverted: contrast.inverted,
+          inverted: probe.inverted,
           opaquePlate: opaquePlateFromAlpha(qrColors.bgAlpha),
         },
       });
       await saveSceneFixture({ name: fixtureName, rgba: frame.rgba, meta }, frame.resolution, frame.resolution);
+      if (probe.lowContrast) {
+        setSaveWarning(
+          `warning: low probe contrast (ink ${probe.lumaInside} vs paper ${probe.lumaOutside}, Δ=${probe.contrast} < 30) — ` +
+            `the measured "inverted" flag is unreliable; don't commit this fixture to gates without checking it`,
+        );
+      }
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -599,7 +630,7 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
         <div className="scene3d-canvas-wrap" style={{ width: squareSize, height: squareSize }}>
           {qrError && <div className="banner banner-error">QR generation failed: {qrError}</div>}
           <Canvas camera={{ fov: 50, near: 0.01, far: 100, position: [0, 0, physicalSize * 2.5] }}>
-            <color attach="background" args={["#05070d"]} />
+            <color attach="background" args={[SCENE_BACKGROUND_COLOR]} />
             <gridHelper
               args={[physicalSize * 8, 20, "#374151", "#1f2937"]}
               position={[0, -physicalSize * 1.2, 0]}
@@ -719,6 +750,7 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
             saving={saving}
             disabled={!qr || cameraStats === null}
             error={saveError}
+            warning={saveWarning}
           />
         </section>
       </aside>

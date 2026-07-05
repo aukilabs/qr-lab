@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { PerspectiveCamera, Vector3 } from "three";
 import {
   buildFixtureMeta,
   defaultFixtureName,
   eccLetterFromIndex,
+  moduleSizeFromCorners,
   opaquePlateFromAlpha,
+  probeInvertedFromRgba,
   slugifyPayload,
   versionFromDim,
+  type Point2,
 } from "./fixtureExport";
+import { moduleRegionLocalCornersArray } from "./moduleRegion";
+import { projectAllToPixels } from "./projection";
+import { QUIET_MODULES } from "./consts";
 import { parseGroundTruth } from "../overlays/groundtruth-types";
 
 describe("eccLetterFromIndex", () => {
@@ -147,5 +154,160 @@ describe("buildFixtureMeta", () => {
 
   it("always produces exactly one code entry", () => {
     expect(meta.codes).toHaveLength(1);
+  });
+});
+
+describe("moduleSizeFromCorners", () => {
+  /** Replicate Scene3D's exact truth-projection path at a given camera
+   * pose: module-region local corners -> world (identity plane transform)
+   * -> projected readback px. */
+  function projectedCorners(
+    cameraPos: [number, number, number],
+    dim: number,
+    physicalSize: number,
+    resolution: number,
+  ): [Point2, Point2, Point2, Point2] {
+    const cam = new PerspectiveCamera(50, 1, 0.01, 100);
+    cam.position.set(...cameraPos);
+    cam.lookAt(0, 0, 0);
+    cam.updateMatrixWorld(true);
+    const local = moduleRegionLocalCornersArray(dim, QUIET_MODULES, physicalSize);
+    const world = local.map((c) => new Vector3(c[0], c[1], c[2]));
+    const px = projectAllToPixels(world, cam, resolution, resolution);
+    return [px[0]!, px[1]!, px[2]!, px[3]!] as [Point2, Point2, Point2, Point2];
+  }
+
+  it("equals |TR-TL|/dim exactly (generate.py's derivation)", () => {
+    const corners: [Point2, Point2, Point2, Point2] = [
+      [100, 100],
+      [390, 110],
+      [380, 400],
+      [95, 390],
+    ];
+    const expected = Math.hypot(390 - 100, 110 - 100) / 29;
+    expect(moduleSizeFromCorners(corners, 29)).toBeCloseTo(expected, 12);
+  });
+
+  it("tracks the projection at a NON-default pose and differs from the old pose-invariant constant", () => {
+    // Off-axis camera pose (translated in x/y, dollied out) — the review
+    // fix's mandated scenario. dim=29 (v3), physicalSize=0.15m,
+    // resolution=960: the OLD export constant was 960/(29+8) ≈ 25.95
+    // regardless of pose; the actual projected TL->TR edge at this pose
+    // is far shorter per module.
+    const dim = 29;
+    const resolution = 960;
+    const corners = projectedCorners([0.1, 0.08, 0.6], dim, 0.15, resolution);
+    const derived = moduleSizeFromCorners(corners, dim);
+    const [tl, tr] = corners;
+    expect(derived).toBeCloseTo(Math.hypot(tr[0] - tl[0], tr[1] - tl[1]) / dim, 12);
+
+    const oldConstant = resolution / (dim + 2 * QUIET_MODULES);
+    expect(Math.abs(derived - oldConstant)).toBeGreaterThan(1); // clearly different, not rounding noise
+  });
+
+  it("shrinks as the camera moves away (pose-DEPENDENT, unlike the old constant)", () => {
+    const dim = 29;
+    const near = moduleSizeFromCorners(projectedCorners([0, 0, 0.3], dim, 0.15, 960), dim);
+    const far = moduleSizeFromCorners(projectedCorners([0, 0, 0.9], dim, 0.15, 960), dim);
+    expect(far).toBeLessThan(near);
+    expect(near / far).toBeGreaterThan(2); // ~3x distance ratio -> ~3x size ratio
+  });
+
+  it("rejects an invalid dim", () => {
+    const corners: [Point2, Point2, Point2, Point2] = [
+      [0, 0],
+      [29, 0],
+      [29, 29],
+      [0, 29],
+    ];
+    expect(() => moduleSizeFromCorners(corners, 0)).toThrow(RangeError);
+  });
+});
+
+describe("probeInvertedFromRgba", () => {
+  /** 64x64 rgba buffer: `outer` gray everywhere, `inner` gray inside the
+   * square spanned by `corners` (axis-aligned for simplicity — the probe
+   * only samples two points near the TL corner's diagonal). */
+  function makeFrame(
+    corners: [Point2, Point2, Point2, Point2],
+    inner: number,
+    outer: number,
+  ): Uint8ClampedArray {
+    const w = 64;
+    const rgba = new Uint8ClampedArray(w * w * 4);
+    const [tl, , br] = corners;
+    for (let y = 0; y < w; y++) {
+      for (let x = 0; x < w; x++) {
+        const inside = x >= tl[0] && x <= br[0] && y >= tl[1] && y <= br[1];
+        const v = inside ? inner : outer;
+        const i = (y * w + x) * 4;
+        rgba[i] = v;
+        rgba[i + 1] = v;
+        rgba[i + 2] = v;
+        rgba[i + 3] = 255;
+      }
+    }
+    return rgba;
+  }
+
+  const corners: [Point2, Point2, Point2, Point2] = [
+    [20, 20],
+    [44, 20],
+    [44, 44],
+    [20, 44],
+  ];
+
+  it("reads dark-inside/light-outside as NOT inverted (normal polarity)", () => {
+    const rgba = makeFrame(corners, 30, 220);
+    const probe = probeInvertedFromRgba(rgba, 64, 64, corners, 4);
+    expect(probe.inverted).toBe(false);
+    expect(probe.lumaInside).toBe(30);
+    expect(probe.lumaOutside).toBe(220);
+    expect(probe.lowContrast).toBe(false);
+  });
+
+  it("reads light-inside/dark-outside as inverted", () => {
+    const rgba = makeFrame(corners, 220, 30);
+    const probe = probeInvertedFromRgba(rgba, 64, 64, corners, 4);
+    expect(probe.inverted).toBe(true);
+    expect(probe.contrast).toBe(190);
+  });
+
+  it("flags low contrast below the 30-delta threshold", () => {
+    const rgba = makeFrame(corners, 110, 128);
+    const probe = probeInvertedFromRgba(rgba, 64, 64, corners, 4);
+    expect(probe.contrast).toBe(18);
+    expect(probe.lowContrast).toBe(true);
+  });
+
+  it("does not flag contrast at/above the threshold", () => {
+    const rgba = makeFrame(corners, 90, 128);
+    const probe = probeInvertedFromRgba(rgba, 64, 64, corners, 4);
+    expect(probe.contrast).toBe(38);
+    expect(probe.lowContrast).toBe(false);
+  });
+
+  it("throws when a probe would land outside the frame (corner at the image edge)", () => {
+    const edgeCorners: [Point2, Point2, Point2, Point2] = [
+      [0, 0],
+      [44, 0],
+      [44, 44],
+      [0, 44],
+    ];
+    const rgba = makeFrame(edgeCorners, 30, 220);
+    // The OUTSIDE probe from TL=(0,0) steps to negative coordinates.
+    expect(() => probeInvertedFromRgba(rgba, 64, 64, edgeCorners, 4)).toThrow(RangeError);
+  });
+
+  it("rejects a non-positive module size and degenerate corners", () => {
+    const rgba = makeFrame(corners, 30, 220);
+    expect(() => probeInvertedFromRgba(rgba, 64, 64, corners, 0)).toThrow(RangeError);
+    const degenerate: [Point2, Point2, Point2, Point2] = [
+      [20, 20],
+      [20, 20],
+      [20, 20],
+      [20, 20],
+    ];
+    expect(() => probeInvertedFromRgba(rgba, 64, 64, degenerate, 4)).toThrow(RangeError);
   });
 });

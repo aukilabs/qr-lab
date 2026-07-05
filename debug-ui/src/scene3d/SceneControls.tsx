@@ -4,8 +4,8 @@
 // owns the actual values, mirroring `CameraSimControls.tsx`'s own split
 // (see that file's doc).
 import { useRef, type ChangeEvent } from "react";
-import { expectedInverted } from "./colorUtils";
-import { QR_BG_ALPHA_RANGE } from "./consts";
+import { expectedInverted, expectedInvertedComposited } from "./colorUtils";
+import { QR_BG_ALPHA_RANGE, SCENE_BACKGROUND_COLOR } from "./consts";
 
 export interface QrAppearanceValues {
   inkColor: string;
@@ -32,7 +32,19 @@ export function QrAppearanceControls({
   onBgImageChange,
   hasBgImage,
 }: QrAppearanceControlsProps) {
-  const contrast = expectedInverted(values.inkColor, values.bgColor);
+  // "reads as" indicator (Plan 5d review fix): with bgAlpha < 1 the paper
+  // the scanner sees is bgColor COMPOSITED over whatever is behind the
+  // plane — over the scene's flat background color that's computable
+  // (`expectedInvertedComposited`), but over an arbitrary background
+  // IMAGE there is no single answer, so the indicator says so instead of
+  // guessing. The EXPORTED inverted flag never relies on this prediction
+  // either way — it's measured from the captured frame at save time
+  // (`fixtureExport.ts`'s `probeInvertedFromRgba`).
+  const translucent = values.bgAlpha < 1;
+  const indeterminate = translucent && hasBgImage;
+  const contrast = translucent
+    ? expectedInvertedComposited(values.inkColor, values.bgColor, values.bgAlpha, SCENE_BACKGROUND_COLOR)
+    : expectedInverted(values.inkColor, values.bgColor);
   // A native `<input type=file>` keeps showing its last-picked filename
   // even after the CONSUMING state clears (React never re-renders the
   // input's own internal display text just because a prop changed) — the
@@ -81,10 +93,19 @@ export function QrAppearanceControls({
       </label>
       <div
         data-testid="contrast-readout"
-        style={{ fontSize: 11, color: contrast.lowContrast ? "#fbbf24" : "#6b7280" }}
+        style={{
+          fontSize: 11,
+          color: !indeterminate && contrast.lowContrast ? "#fbbf24" : "#6b7280",
+        }}
       >
-        reads as: {contrast.inverted ? "inverted" : "normal"}
-        {contrast.lowContrast ? " · low contrast! (Δluma < 30)" : ""}
+        {indeterminate ? (
+          <>reads as: depends on background image (measured at export)</>
+        ) : (
+          <>
+            reads as: {contrast.inverted ? "inverted" : "normal"}
+            {contrast.lowContrast ? " · low contrast! (Δluma < 30)" : ""}
+          </>
+        )}
       </div>
       <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
         <span style={{ color: "#9ca3af" }}>scene background image</span>
@@ -111,6 +132,10 @@ export interface FixtureSaveControlsProps {
   saving: boolean;
   disabled: boolean;
   error: string | null;
+  /** Non-fatal export caveat (e.g. the inverted-polarity probe measured
+   * low contrast — the files were still produced, but the measured
+   * `inverted` flag is unreliable; see `probeInvertedFromRgba`'s doc). */
+  warning: string | null;
 }
 
 /** Fixture-name text field + "Save as fixture" button (feature 6). */
@@ -121,6 +146,7 @@ export function FixtureSaveControls({
   saving,
   disabled,
   error,
+  warning,
 }: FixtureSaveControlsProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -139,6 +165,14 @@ export function FixtureSaveControls({
       {error && (
         <div className="banner banner-error" style={{ padding: 4, fontSize: 11 }}>
           {error}
+        </div>
+      )}
+      {warning && (
+        <div
+          data-testid="save-warning"
+          style={{ padding: 4, fontSize: 11, color: "#fbbf24" }}
+        >
+          {warning}
         </div>
       )}
     </div>
