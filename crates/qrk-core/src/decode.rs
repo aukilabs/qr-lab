@@ -61,7 +61,9 @@ use crate::sample::{
 };
 use crate::scanner::StageClock;
 use crate::tiles::TileGrid;
-use crate::trace::{AlignmentTraceEntry, BitsTrace, RefineTrace, SampleRegionTrace};
+use crate::trace::{
+    AlignmentTraceEntry, BitsTrace, DecodedCodeTrace, RefineTrace, SampleRegionTrace,
+};
 use crate::triplet::TripletCandidate;
 use crate::version::{count_timing_transitions, read_version_bits};
 use crate::LumaView;
@@ -921,28 +923,35 @@ pub(crate) fn decode_candidates(
     // under way always completes — the worst-case overrun is bounded by
     // the most expensive single attempt (3 rounds), not unbounded.
     let mut rounds_run = 0usize;
-    // Plan 4B Fix A (trace honesty): two independent captures, resolved
-    // into the actual `DecodeTraceData` after the loop (see the doc there
-    // for the full rule). `first_*`: the FIRST attempt run this frame —
-    // rotation 0 of the first (lowest-`snap_error`) candidate actually
-    // attempted, i.e. canonical (unrotated) corner roles — captured once
-    // and never touched again, so a later candidate's or a rotation
-    // retry's geometry can never displace it. `decoded_*`: the most recent
-    // attempt that actually decoded (mirrors the pre-fix `bits` contract,
-    // now extended to `alignment`/`sample_regions` too, so all three always
-    // describe the SAME candidate on success).
+    // Plan 4B Fix A (trace honesty), narrowed by Plan 5C: `first_*` is the
+    // FIRST attempt run this frame — rotation 0 of the first
+    // (lowest-`snap_error`) candidate actually attempted, i.e. canonical
+    // (unrotated) corner roles — captured once and never touched again, so
+    // a later candidate's or a rotation retry's geometry can never displace
+    // it. Only USED when nothing decodes this frame (see `DecodeTraceData`'s
+    // doc) — Plan 5C moved the decode-success case's per-candidate capture
+    // to `codes_trace` below (one entry per actual decode, not "the most
+    // recent decode" resolved after the loop), so there's no more
+    // `decoded_alignment`/`decoded_sample_regions`/`decoded_bits` trio here.
     let mut first_alignment: Vec<AlignmentTraceEntry> = Vec::new();
     let mut first_sample_regions: Vec<SampleRegionTrace> = Vec::new();
     let mut first_attempt_seen = false;
     // Explicit "did anything decode this frame" selector for the branch
-    // after the loop — deliberately NOT inferred from `decoded_bits`'s
-    // `Option` state, which conflates "nothing decoded" with "decoded but
-    // `want_trace` was false so no `BitsTrace` was ever built".
+    // after the loop — deliberately NOT inferred from `codes_trace`'s
+    // emptiness, which conflates "nothing decoded" with "decoded but
+    // `want_trace` was false so `codes_trace` was never populated".
     let mut any_decoded = false;
-    let mut decoded_alignment: Vec<AlignmentTraceEntry> = Vec::new();
-    let mut decoded_sample_regions: Vec<SampleRegionTrace> = Vec::new();
-    let mut decoded_bits: Option<BitsTrace> = None;
     let mut decoded_refine: Option<RefineTrace> = None;
+    // Plan 5C (multi-code trace): one entry per code actually pushed to
+    // `codes` below, built alongside it in the same branch so `code_index`
+    // is always exactly `codes.len()` at push time — see
+    // `DecodedCodeTrace::code_index`'s doc. Only ever pushed to when
+    // `want_trace` is set (mirrors every other per-attempt trace field:
+    // `result.alignment_trace`/`sample_regions_trace` are empty and
+    // `result.bits_trace` is `None` when untraced — see `AttemptResult`'s
+    // doc — so there is nothing meaningful to record on the untraced hot
+    // path).
+    let mut codes_trace: Vec<DecodedCodeTrace> = Vec::new();
 
     'candidates: for idx in dedup_triplet_indices(triplets) {
         let t = &triplets[idx];
@@ -1005,20 +1014,36 @@ pub(crate) fn decode_candidates(
                 first_alignment = result.alignment_trace.clone();
                 first_sample_regions = result.sample_regions_trace.clone();
             }
-            // Fix A: the most recently DECODED attempt — mirrors the
-            // pre-fix `bits` contract, now also driving `alignment`/
-            // `sample_regions` so all three agree on the same candidate
-            // whenever anything decodes this frame (see `DecodeTraceData`).
+            // Plan 5C: `refine` still tracks "the most recently DECODED
+            // attempt" (out of this task's scope — see `Trace::refine`'s
+            // own doc); `alignment`/`sample_regions`/`bits` no longer do —
+            // each decode's own copy of those instead goes straight into
+            // `codes_trace` below, at the `if let Some(code) = result.code`
+            // site, rather than being captured here and resolved after the
+            // loop.
             if decoded {
                 any_decoded = true;
-                decoded_alignment = result.alignment_trace.clone();
-                decoded_sample_regions = result.sample_regions_trace.clone();
-                decoded_bits = result.bits_trace.clone();
                 decoded_refine = result.refine_trace.clone();
             }
             if let Some(code) = result.code {
                 for &i in &rotated.finder_indices {
                     consumed[i] = true;
+                }
+                // Plan 5C: this decode's own trace data, indexed by the
+                // position `code` is about to occupy in `codes` (computed
+                // BEFORE the push below). `result.bits_trace` is `Some`
+                // here whenever `want_trace` was set (see `AttemptResult`'s
+                // doc: "`Some` iff this attempt decoded AND `want_trace`
+                // was set" — both hold at this point), so the `if let`
+                // simply skips this push on the untraced path rather than
+                // ever silently fabricating a `BitsTrace`.
+                if let Some(bits) = result.bits_trace.clone() {
+                    codes_trace.push(DecodedCodeTrace {
+                        code_index: codes.len(),
+                        sample_regions: result.sample_regions_trace.clone(),
+                        bits,
+                        alignment: result.alignment_trace.clone(),
+                    });
                 }
                 codes.push(code);
             }
@@ -1029,21 +1054,26 @@ pub(crate) fn decode_candidates(
         }
     }
 
-    // Fix A's selection rule: a decoded candidate's own geometry wins
-    // outright (all three fields then describe that SAME candidate); with
-    // no decode anywhere this frame, fall back to the first attempt's
-    // canonical geometry rather than whatever the last (possibly a
-    // wrong-role rotation retry pointing away from the code) attempt
-    // happened to leave behind — see `DecodeTraceData`'s doc.
+    // Plan 5C narrowed the singular fields' scope to failure-diagnosis only
+    // (see `DecodeTraceData`'s doc): any decode succeeding this frame now
+    // reports its per-code data through `codes_trace` alone, so the
+    // singular fields go empty/`None` rather than duplicating the last
+    // decoded candidate's data a second way. With nothing decoded anywhere
+    // this frame, fall back to the first attempt's canonical geometry
+    // rather than whatever the last (possibly a wrong-role rotation retry
+    // pointing away from the code) attempt happened to leave behind — the
+    // original Plan 4B Fix A rule, unchanged for the failure case.
     let trace_data = if any_decoded {
         DecodeTraceData {
-            alignment: decoded_alignment,
-            sample_regions: decoded_sample_regions,
-            bits: decoded_bits,
+            codes: codes_trace,
+            alignment: Vec::new(),
+            sample_regions: Vec::new(),
+            bits: None,
             refine: decoded_refine,
         }
     } else {
         DecodeTraceData {
+            codes: Vec::new(),
             alignment: first_alignment,
             sample_regions: first_sample_regions,
             bits: None,
@@ -1059,40 +1089,50 @@ pub(crate) fn decode_candidates(
 /// numeric) so `scanner.rs`'s `detect_with` can feed each field straight
 /// into the matching `Trace::record_*` call.
 ///
-/// # Plan 4B Fix A: selection rule (trace honesty)
-/// Investigation finding: the pre-fix rule recorded `alignment`/
-/// `sample_regions` from the LAST attempted candidate, which — after a
-/// failed candidate's corner-role rotation retries (see
-/// [`decode_candidates`]'s rotation loop) — is frequently a wrong-role
-/// attempt whose sampled parallelogram points AWAY from the real code,
-/// misleading the debug UI on every failed frame. The fix:
+/// # Plan 5C: per-code data lives on `codes`, not the singular fields
+/// A multi-code frame (e.g. `multi_07`'s 4 codes) decodes more than one
+/// candidate, but `alignment`/`sample_regions`/`bits` below are each a
+/// SINGLE value — before this task they held "the most recently decoded
+/// candidate's" data, so a multi-code scene's debug-UI overlays could only
+/// ever visualize one of the several decoded codes. `codes` fixes this:
+/// one [`DecodedCodeTrace`] per decode, so every code's own alignment
+/// search / sample regions / bit matrix survives into `Trace`. The
+/// singular fields are kept, but narrowed to failure-diagnosis only:
 ///
-/// - **Any decode succeeded this frame**: all three fields come from THAT
-///   decoded attempt (the most recent one, if more than one code decoded) —
-///   `alignment`/`sample_regions` now always agree with `bits` and with
-///   `Detections.codes`' own last entry, never an unrelated candidate.
-/// - **Nothing decoded**: `alignment`/`sample_regions` come from the FIRST
-///   attempt run this frame — rotation 0 (canonical, unrotated corner
-///   roles) of the first (lowest-`snap_error`) candidate attempted, NEVER
-///   a rotation retry and NEVER a later candidate — "the geometry a person
-///   debugging wants to see" even when it's sparse (e.g. v1's legitimately
-///   empty `alignment`) rather than whichever later attempt happened to
-///   run last. `bits` stays `None` (nothing decoded, so there is no
-///   sampled matrix to show).
+/// - **Any decode succeeded this frame**: `codes` carries one entry per
+///   decode (see [`DecodedCodeTrace::code_index`] for how each entry maps
+///   back to [`crate::Detections::codes`]); `alignment`/`sample_regions`
+///   are empty and `bits` is `None` — that data isn't duplicated onto the
+///   singular fields too.
+/// - **Nothing decoded**: `codes` is empty; `alignment`/`sample_regions`
+///   instead come from the FIRST attempt run this frame — rotation 0
+///   (canonical, unrotated corner roles) of the first (lowest-
+///   `snap_error`) candidate attempted, NEVER a rotation retry and NEVER a
+///   later candidate (the original Plan 4B Fix A rule, investigated
+///   because the pre-fix version recorded the LAST attempted candidate,
+///   frequently a wrong-role rotation retry whose sampled parallelogram
+///   points away from the real code — misleading on every failed frame).
+///   `bits` stays `None` (nothing decoded, so there is no sampled matrix to
+///   show).
 pub(crate) struct DecodeTraceData {
-    /// See this struct's "Plan 4B Fix A" doc section for the exact
-    /// selection rule.
+    /// One entry per code decoded this frame — see this struct's "Plan 5C"
+    /// doc section. Empty whenever nothing decoded.
+    pub codes: Vec<DecodedCodeTrace>,
+    /// FAILURE-DIAGNOSIS ONLY — see this struct's "Plan 5C" doc section for
+    /// the exact selection rule.
     pub alignment: Vec<AlignmentTraceEntry>,
-    /// Same selection rule as `alignment` (always the same candidate as
-    /// it).
+    /// FAILURE-DIAGNOSIS ONLY — same selection rule as `alignment` (always
+    /// the same candidate as it).
     pub sample_regions: Vec<SampleRegionTrace>,
-    /// The most recently decoded candidate's sampled bit matrix, `None` if
-    /// nothing decoded this frame — unchanged from the pre-Fix-A contract.
+    /// FAILURE-DIAGNOSIS ONLY — same selection rule as `alignment`; always
+    /// `None` (there is no bit matrix to show when nothing decoded).
     pub bits: Option<BitsTrace>,
     /// The most recently decoded candidate's subpixel corner refinement
-    /// diagnostics (Plan 5 Task 3) — same selection rule as `bits`: `None`
-    /// if nothing decoded this frame, refinement was disabled, or
-    /// refinement ran but produced fewer than 2 valid edge lines.
+    /// diagnostics (Plan 5 Task 3) — `None` if nothing decoded this frame,
+    /// refinement was disabled, or refinement ran but produced fewer than 2
+    /// valid edge lines. Out of Plan 5C's scope (the issue this task fixes
+    /// is specific to `alignment`/`sample_regions`/`bits`): still the
+    /// single most-recently-decoded value, not one per code.
     pub refine: Option<RefineTrace>,
 }
 
@@ -1703,12 +1743,28 @@ mod tests {
             attempts.last().unwrap().outcome != "decoded",
             "test setup: the LAST attempt run must be the garbage candidate's failure: {attempts:?}"
         );
+        // Plan 5C: this decode's data lives on `trace_data.codes` now, not
+        // the singular `sample_regions`/`bits` fields (failure-diagnosis
+        // only — empty/`None` here because a decode DID succeed).
+        assert_eq!(trace_data.codes.len(), 1, "one decoded code this frame");
+        assert_eq!(trace_data.codes[0].code_index, 0);
         // v1: no alignment patterns, so an empty vec is the correct
         // "decoded" shape too — the real assertion is `bits`, which can
         // only be populated by the actual decode.
-        assert_eq!(trace_data.sample_regions.len(), 1, "v1 samples through one whole-grid region");
-        let bits = trace_data.bits.expect("the frame's one decode must populate bits");
-        assert_eq!(bits.dim, dim as u32);
+        assert_eq!(
+            trace_data.codes[0].sample_regions.len(),
+            1,
+            "v1 samples through one whole-grid region"
+        );
+        assert_eq!(trace_data.codes[0].bits.dim, dim as u32);
+        assert!(
+            trace_data.sample_regions.is_empty(),
+            "Plan 5C: singular sample_regions is failure-diagnosis only"
+        );
+        assert!(
+            trace_data.bits.is_none(),
+            "Plan 5C: singular bits is failure-diagnosis only"
+        );
     }
 
     #[test]
@@ -1771,9 +1827,23 @@ mod tests {
         );
 
         // The recorded regions must be the DECODED candidate's, not the
-        // garbage first attempt's canonical geometry.
-        assert_eq!(trace_data.sample_regions.len(), expected.sample_regions_trace.len());
-        for (got, want) in trace_data.sample_regions.iter().zip(expected.sample_regions_trace.iter()) {
+        // garbage first attempt's canonical geometry — Plan 5C: this now
+        // lives on `trace_data.codes[0]`, not the singular fields
+        // (failure-diagnosis only — empty/`None` here since a decode DID
+        // succeed).
+        assert_eq!(trace_data.codes.len(), 1, "one decoded code this frame");
+        assert_eq!(trace_data.codes[0].code_index, 0);
+        assert!(
+            trace_data.sample_regions.is_empty(),
+            "Plan 5C: singular sample_regions is failure-diagnosis only"
+        );
+        assert!(
+            trace_data.bits.is_none(),
+            "Plan 5C: singular bits is failure-diagnosis only"
+        );
+        let got_regions = &trace_data.codes[0].sample_regions;
+        assert_eq!(got_regions.len(), expected.sample_regions_trace.len());
+        for (got, want) in got_regions.iter().zip(expected.sample_regions_trace.iter()) {
             assert_eq!(got.module_rect, want.module_rect);
             for k in 0..4 {
                 assert!(
@@ -1784,7 +1854,7 @@ mod tests {
                 );
             }
         }
-        let bits = trace_data.bits.expect("the decode must populate bits");
+        let bits = &trace_data.codes[0].bits;
         let want_bits = expected.bits_trace.expect("expected attempt decoded, so it carries bits");
         assert_eq!(bits.dim, want_bits.dim);
         assert_eq!(bits.words, want_bits.words, "bits must be the decoded candidate's matrix");

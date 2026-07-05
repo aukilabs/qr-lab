@@ -1,7 +1,10 @@
 //! Plan 4 Task 6: asserts `Trace` actually carries populated decode-stage
 //! fields (`attempts`, `sample_regions`, `bits`; `alignment` is documented
 //! as legitimately empty here — see below) after `detect_traced` on a real
-//! fixture, not just that the fields compile.
+//! fixture, not just that the fields compile. Plan 5C narrowed
+//! `alignment`/`sample_regions`/`bits` to failure-diagnosis only, so this
+//! gate now reads the per-code data off `Trace::codes` instead — see
+//! `qrk_core::trace::Trace`'s doc for the full contract.
 //!
 //! Gated behind `#![cfg(feature = "debug-trace")]` so `cargo test -p
 //! qrk-core` (the default, feature-off build) skips this file entirely
@@ -39,6 +42,25 @@ fn near_00_trace_has_populated_decode_fields() {
         trace.attempts
     );
 
+    // Plan 5C: near_00 decodes its one code, so the per-code data lives on
+    // `trace.codes` (one entry, `code_index == 0`) — the legacy singular
+    // `alignment`/`sample_regions`/`bits` fields are failure-diagnosis only
+    // and must be empty/`None` here, since a decode DID succeed.
+    assert_eq!(trace.codes.len(), 1, "near_00 has one ground-truth code");
+    let code_trace = &trace.codes[0];
+    assert_eq!(code_trace.code_index, 0);
+    assert!(
+        trace.alignment.is_empty(),
+        "Plan 5C: singular alignment is failure-diagnosis only, got {:?}",
+        trace.alignment
+    );
+    assert!(
+        trace.sample_regions.is_empty(),
+        "Plan 5C: singular sample_regions is failure-diagnosis only, got {:?}",
+        trace.sample_regions
+    );
+    assert!(trace.bits.is_none(), "Plan 5C: singular bits is failure-diagnosis only");
+
     // alignment: near_00's ground-truth code is v1 (dimension 21), which
     // has NO alignment patterns at all (ISO 18004) — so an empty vec here
     // is the correct, documented shape for this fixture, not a bug. A v7+
@@ -46,22 +68,69 @@ fn near_00_trace_has_populated_decode_fields() {
     // deferred to the Task 7 QA pass (browser screenshot checks against a
     // higher-version fixture) rather than duplicated here.
     assert!(
-        trace.alignment.is_empty(),
+        code_trace.alignment.is_empty(),
         "near_00 is v1 (no alignment patterns) — expected an empty alignment vec, got {:?}",
-        trace.alignment
+        code_trace.alignment
     );
 
     // sample_regions: v1 always samples through a single whole-grid region.
-    assert_eq!(trace.sample_regions.len(), 1, "v1 candidates sample through one region");
-    let region = &trace.sample_regions[0];
+    assert_eq!(code_trace.sample_regions.len(), 1, "v1 candidates sample through one region");
+    let region = &code_trace.sample_regions[0];
     assert_eq!(region.module_rect, [0, 0, 21, 21]);
     assert_eq!(region.quad.len(), 4);
 
-    // bits: the last successfully decoded candidate's packed matrix.
-    let bits = trace.bits.as_ref().expect("a successful decode must record its bit matrix");
+    // bits: this decoded candidate's packed matrix.
+    let bits = &code_trace.bits;
     assert_eq!(bits.dim, 21);
     // words_per_row(21) == ceil(21/32) == 1, so 21 rows -> 21 words.
     assert_eq!(bits.words.len(), 21);
+}
+
+/// Plan 5C: the multi-code trace fix's real-world gate — `multi_07` (4
+/// real codes) must carry 4 [`qrk_core::trace::DecodedCodeTrace`] entries
+/// on `Trace::codes`, one per decoded code, each with its own
+/// `code_index`, non-empty `sample_regions`, and a populated `bits` matrix
+/// — NOT the pre-fix behavior of only the last-decoded code's data.
+#[test]
+fn multi_07_trace_has_one_codes_entry_per_decoded_code() {
+    let fixture = common::load("multi_07");
+    let view = fixture.view();
+    let mut trace = Trace::new();
+    let det = detect_traced(&view, &mut trace);
+
+    assert_eq!(det.codes.len(), 4, "multi_07 has 4 ground-truth codes");
+    assert_eq!(
+        trace.codes.len(),
+        4,
+        "expected one DecodedCodeTrace per decoded code, got {:?}",
+        trace.codes.iter().map(|c| c.code_index).collect::<Vec<_>>()
+    );
+
+    // Every entry's `code_index` must be distinct and resolve back to a
+    // real `Detections.codes` entry (in range, and — since decode order is
+    // append-only — collectively covering every index exactly once).
+    let mut indices: Vec<usize> = trace.codes.iter().map(|c| c.code_index).collect();
+    indices.sort_unstable();
+    assert_eq!(indices, vec![0, 1, 2, 3], "code_index values must be distinct and cover 0..4");
+
+    for code_trace in &trace.codes {
+        assert!(
+            !code_trace.sample_regions.is_empty(),
+            "code_index {}: expected non-empty sample_regions",
+            code_trace.code_index
+        );
+        assert!(
+            code_trace.bits.dim > 0 && !code_trace.bits.words.is_empty(),
+            "code_index {}: expected a populated bit matrix",
+            code_trace.code_index
+        );
+    }
+
+    // Since every code decoded, the legacy singular fields are
+    // failure-diagnosis only — empty/`None` (see `Trace::codes`'s doc).
+    assert!(trace.alignment.is_empty());
+    assert!(trace.sample_regions.is_empty());
+    assert!(trace.bits.is_none());
 }
 
 /// Plan 5 Task 6: `MAX_DECODE_ROUNDS` (72) replaced the old flat

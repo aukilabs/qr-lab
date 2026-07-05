@@ -112,6 +112,23 @@ export interface BitsTrace {
   words: number[];
 }
 
+/** One DECODED code's own alignment/sample-region/bits trace data (Plan 5C:
+ * multi-code trace) — mirrors `qrk_core::trace::DecodedCodeTrace`. A frame
+ * with N decoded codes carries N of these on `Trace.codes`, so a
+ * multi-code scene's overlays can visualize every decoded code, not just
+ * the last one. */
+export interface DecodedCodeTrace {
+  /** Index into `Detections.codes` this entry describes. */
+  code_index: number;
+  /** This code's sample regions — same shape as `SampleRegionTrace[]`. */
+  sample_regions: SampleRegionTrace[];
+  /** This code's sampled bit matrix — always present (every entry here
+   * came from an actual decode). */
+  bits: BitsTrace;
+  /** This code's alignment-pattern search results. */
+  alignment: AlignmentTraceEntry[];
+}
+
 /** One outer module-region edge's subpixel refinement point counts (Plan 5
  * Task 3) — mirrors `qrk_core::trace::EdgeRefineTrace`. */
 export interface EdgeRefineStat {
@@ -169,29 +186,40 @@ export interface TileTrace {
 
 /** Mirrors `qrk_core::trace::Trace`.
  *
- * `alignment`/`sample_regions`/`bits` selection rule (Plan 4B Fix A — trace
- * honesty; see the Rust `decode::DecodeTraceData` doc for the full
- * rationale): when any candidate decoded this frame, all three describe
- * THAT decoded candidate (so they always agree with each other and with
- * `Detections.codes`' own last entry). When nothing decoded this frame,
- * `alignment`/`sample_regions` instead describe the FIRST attempt run this
- * frame — canonical (unrotated) corner roles of the first
- * (lowest-`snap_error`) candidate, never a corner-role rotation retry and
- * never a later candidate — and `bits` is `null` (nothing decoded, so there
- * is no sampled matrix to show). Pre-Fix-A, `alignment`/`sample_regions`
- * instead tracked the LAST attempted candidate, which — after a failed
- * candidate's rotation retries — was frequently a wrong-role attempt whose
- * geometry pointed away from the real code, misleading any overlay drawing
- * from these fields on every failed frame; see
- * `debug-ui/src/overlays/layers/{alignment,samplegrid}.ts`'s own doc
+ * Plan 5C (multi-code trace): `codes` carries one `DecodedCodeTrace` per
+ * DECODED code this frame — a multi-code scene (e.g. `multi_07`'s 4 codes)
+ * gets 4 entries, each with its own alignment search / sample regions / bit
+ * matrix, not just the last one decoded. The legacy singular
+ * `alignment`/`sample_regions`/`bits` fields are now FAILURE-DIAGNOSIS
+ * ONLY: empty/`null` whenever `codes` is non-empty (any code decoded this
+ * frame); populated from the FIRST attempt run this frame — canonical
+ * (unrotated) corner roles of the first (lowest-`snap_error`) candidate,
+ * never a corner-role rotation retry and never a later candidate — only
+ * when NOTHING decoded (the original Plan 4B Fix A rule, investigated
+ * because the pre-fix version tracked the LAST attempted candidate, which —
+ * after a failed candidate's rotation retries — was frequently a
+ * wrong-role attempt whose geometry pointed away from the real code,
+ * misleading any overlay drawing from these fields on every failed frame).
+ * A consumer should prefer `codes` and only fall back to the singular
+ * fields when `codes` is empty; see
+ * `debug-ui/src/overlays/layers/{alignment,samplegrid,bits}.ts`'s own doc
  * comments for the overlay-facing version of this same contract. */
 export interface Trace {
   tiles: TileTrace | null;
   finders: FinderCandidate[];
   triplets: TripletCandidate[];
   attempts: DecodeAttemptTrace[];
+  /** One entry per code decoded this frame (Plan 5C) — see this
+   * interface's doc for the full selection rule. Empty whenever nothing
+   * decoded. */
+  codes: DecodedCodeTrace[];
+  /** FAILURE-DIAGNOSIS ONLY — see this interface's doc for the exact
+   * selection rule. */
   alignment: AlignmentTraceEntry[];
+  /** FAILURE-DIAGNOSIS ONLY — same selection rule as `alignment`. */
   sample_regions: SampleRegionTrace[];
+  /** FAILURE-DIAGNOSIS ONLY — same selection rule as `alignment`; always
+   * `null` (there is no bit matrix to show when nothing decoded). */
   bits: BitsTrace | null;
   /** This frame's subpixel corner refinement diagnostics (Plan 5 Task 3) —
    * see `RefineTrace`'s doc for the selection rule and `null` cases. */
@@ -554,6 +582,30 @@ function parseBitsTraceOrNull(v: unknown, path: string): BitsTrace | null {
   return parseBitsTrace(v, path);
 }
 
+function parseDecodedCodeTrace(v: unknown, path: string): DecodedCodeTrace {
+  const obj = expectObject(v, path);
+  return {
+    code_index: expectNumber(
+      expectField(obj, "code_index", path),
+      joinPath(path, "code_index"),
+    ),
+    sample_regions: parseSampleRegionTraceArray(
+      expectField(obj, "sample_regions", path),
+      joinPath(path, "sample_regions"),
+    ),
+    bits: parseBitsTrace(expectField(obj, "bits", path), joinPath(path, "bits")),
+    alignment: parseAlignmentTraceEntryArray(
+      expectField(obj, "alignment", path),
+      joinPath(path, "alignment"),
+    ),
+  };
+}
+
+function parseDecodedCodeTraceArray(v: unknown, path: string): DecodedCodeTrace[] {
+  const arr = expectArray(v, path);
+  return arr.map((item, i) => parseDecodedCodeTrace(item, indexPath(path, i)));
+}
+
 function parseEdgeRefineStat(v: unknown, path: string): EdgeRefineStat {
   const obj = expectObject(v, path);
   return {
@@ -730,6 +782,10 @@ function parseTrace(v: unknown, path: string): Trace {
     attempts: parseDecodeAttemptTraceArray(
       expectField(obj, "attempts", path),
       joinPath(path, "attempts"),
+    ),
+    codes: parseDecodedCodeTraceArray(
+      expectField(obj, "codes", path),
+      joinPath(path, "codes"),
     ),
     alignment: parseAlignmentTraceEntryArray(
       expectField(obj, "alignment", path),

@@ -221,6 +221,12 @@ pub(crate) fn detect_with_source(
         decode_candidates(view, &grid, &finders, &triplets, trace.is_some(), source, refine);
     if let Some(t) = &mut trace {
         t.record_attempts(&attempts);
+        // Plan 5C: `codes` carries one entry per decoded code this frame
+        // (see `trace::Trace::codes`'s doc); `alignment`/`sample_regions`/
+        // `bits` below are now failure-diagnosis-only and empty/`None`
+        // whenever `codes` is non-empty — see `decode::DecodeTraceData`'s
+        // doc for the exact selection rule.
+        t.record_codes(decode_trace.codes);
         t.record_alignment(&decode_trace.alignment);
         t.record_sample_regions(&decode_trace.sample_regions);
         if let Some(bits) = decode_trace.bits {
