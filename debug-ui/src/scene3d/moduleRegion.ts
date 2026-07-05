@@ -75,3 +75,32 @@ export function moduleRegionLocalCornersArray(
   const c = moduleRegionLocalCorners(dim, quiet, physicalSize);
   return [c.tl, c.tr, c.br, c.bl];
 }
+
+/**
+ * The MODULE-REGION-ONLY physical size (meters, side length) for a plane
+ * whose FULL extent (module region + quiet zone on every side) is
+ * `physicalSize` — Plan 5d's fixture export needs this because the
+ * scene's own `physicalSize` state is the full painted plane (matching
+ * `moduleRegionLocalCorners`'s inset convention above), but the generator
+ * schema's `physical_size_m` field is the MODULE REGION ONLY (verified
+ * against `tools/fixtures/render.py`'s `_plane_corners_m`: `corners_px`
+ * projects `_plane_corners_m(physical_size_m, with_quiet=False, ...)`,
+ * i.e. `physical_size_m` itself, with no quiet-zone margin added).
+ *
+ * Derivation: from {@link moduleRegionLocalCorners}, the module-region
+ * half-extent is `physicalSize/2 * dim/(dim + 2*quiet)` — so the full
+ * module-region side length is `physicalSize * dim/(dim + 2*quiet)`.
+ */
+export function moduleRegionPhysicalSize(dim: number, quiet: number, physicalSize: number): number {
+  if (!Number.isFinite(dim) || dim <= 0) {
+    throw new RangeError(`moduleRegionPhysicalSize: dim must be > 0, got ${dim}`);
+  }
+  if (!Number.isFinite(quiet) || quiet < 0) {
+    throw new RangeError(`moduleRegionPhysicalSize: quiet must be >= 0, got ${quiet}`);
+  }
+  if (!Number.isFinite(physicalSize) || physicalSize <= 0) {
+    throw new RangeError(`moduleRegionPhysicalSize: physicalSize must be > 0, got ${physicalSize}`);
+  }
+  const total = dim + 2 * quiet;
+  return (physicalSize * dim) / total;
+}

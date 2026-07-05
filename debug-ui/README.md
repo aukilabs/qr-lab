@@ -176,6 +176,17 @@ accuracy meter you can orbit around.
 
 **QA findings (Plan 5 Task 7), for anyone re-measuring this scene:**
 
+> **Measurement caveat (Plan 5d review fix):** every error number in this
+> section was measured while `projection.ts` still mapped the optical
+> axis to `width/2` instead of the pixel-centers-at-integers `(width-1)/2`
+> the scanner/fixture convention uses — i.e. the analytic ground truth
+> carried a systematic `(+0.5, +0.5)`px bias (~0.71px diagonally) vs. the
+> refined corners being compared against it. The projection has since
+> been corrected, so freshly measured errors run LOWER than the bands
+> below (a correction, not a regression); the qualitative findings
+> (flat-across-poses profile, TR/BL vs TL/BR asymmetry, clean grazing
+> dropout) still hold.
+
 - At the scene's literal default (head-on, `physicalSize=0.15m`,
   `resolution=960`) view, mean corner error sits around **1.0-1.1px**, not
   strictly sub-pixel — TR/BL corners run higher (~1.6-1.7px) than TL/BR
@@ -212,6 +223,171 @@ accuracy meter you can orbit around.
   overlay itself (crosshairs + per-corner error labels) is the reliable
   way to confirm refinement actually ran; see
   `.superpowers/sdd/task-7-report.md` for the full QA record.
+
+## Scene controls (Plan 5d)
+
+The 3D-scene sidebar's "Appearance" panel and "Save as fixture" panel add
+scene-background/QR-color customization and a fixture-export button on top
+of Plan 5 Task 5's original scene.
+
+- **Scene background image** (`scene3d/BackgroundPlane.tsx`): a file
+  picker under "Appearance" textures a large plane (`BACKGROUND_PLANE_SCALE`
+  = 4x the QR's own `physicalSize`) positioned slightly behind the QR
+  plane (`BACKGROUND_PLANE_Z_OFFSET`, same orientation, avoiding
+  z-fighting) — this is a real scene object, not a CSS background, so it
+  IS visible in the offscreen readback the scan loop scans and (with the
+  QR background alpha slider below 1, see next item) shows through the
+  QR's quiet zone/light modules too. No image picked -> the scene's
+  existing dark background (unchanged from Plan 5). `Scene3D.tsx` owns
+  the picked `File`'s object-URL lifecycle (`URL.createObjectURL`/
+  `revokeObjectURL` on change and unmount); `BackgroundPlane` only
+  consumes the URL string.
+- **QR background/ink colors + background alpha** (`scene3d/qrTexture.ts`'s
+  `QrColorOptions`): ink color paints dark modules (always fully opaque);
+  background color + alpha paint the quiet zone + light modules (the
+  "paper") — alpha `<1` makes the QR's material `transparent` and lets
+  the scene background plane above show through, reproducing the
+  `trans_`-fixture-scenario look (`opaque_plate: false` once exported).
+- **"reads as: normal/inverted" + low-contrast warning**
+  (`scene3d/colorUtils.ts`): the code's inverted-polarity status is
+  EMERGENT from `luma(ink)` vs `luma(bg)` (same BT.601 fixed-point
+  coefficients as `qrk_core::luma_from_rgba`) — no separate flag. A
+  warning fires when `|Δluma| < CONTRAST_WARN_THRESHOLD` (30, chosen with
+  headroom above the Rust detector's actual per-tile `CONTRAST_FLOOR`,
+  12) since blur/noise/exposure erode contrast further on top of a user's
+  raw color choice. **Alpha awareness (Plan 5d review fix):** with the
+  background alpha below 1 the paper the scanner sees is `bgColor`
+  composited over whatever sits behind the plane, which can FLIP polarity
+  vs. the flat-color prediction (e.g. white ink on white paper at alpha 0
+  over the dark scene reads inverted, not zero-contrast) — the indicator
+  composites over the scene background COLOR
+  (`expectedInvertedComposited`) when no image is picked, and shows
+  "depends on background image (measured at export)" when one is (an
+  arbitrary image has no single answer). The EXPORTED `inverted` flag
+  never trusts this prediction either way — see the fixture-export item
+  below.
+- **HUD** (`scene3d/hud.ts`, drawn by `Scene3D.tsx`'s `handleResult`): a
+  small monospace block, top-left, on the 2D OVERLAY canvas ONLY — blur
+  σ / noise σ / exposure offset (the live camSim knobs) plus camera/plane
+  geometry (`scene3d/cameraStats.ts`'s `computeCameraStats`: distance to
+  the plane center in meters, incidence angle in degrees [0 = head-on, 90
+  = grazing], and an approximate in-plane roll), recomputed once per
+  scan tick (throttled to `SCAN_THROTTLE_MS`, not every animation frame).
+  This NEVER touches the offscreen `WebGLRenderTarget` the scanner reads
+  from — see `hud.ts`'s module doc for why that separation is load-bearing
+  (contaminating the readback would feed the scanner's own HUD pixels
+  back into itself).
+- **Sensor view** (`scene3d/sensorView.ts` + `Scene3D.tsx`'s
+  `handleResult`): the on-screen WebGL render never reflects the camSim
+  knobs (they post-process an invisible internal buffer), so without this
+  the sliders appear to do nothing visually. Sensor view paints the
+  PROCESSED post-camSim readback frame — the exact rgba the scanner
+  ingested that tick — onto the overlay canvas as the base layer, so
+  blur/noise/exposure are visibly ON SCREEN. A "sensor view" select in
+  the Camera sim panel: **auto** (default — active whenever any knob is
+  non-default), **on**, **off**. The HUD gains a `[sensor view]` tag line
+  while active, so it's always explicit that you're looking at the
+  scanner's input rather than the live render. Alignment is inherent, not
+  mapped: the overlay canvas's pixel buffer is exactly the readback's own
+  `resolution × resolution` size and every overlay layer already draws at
+  1:1 readback px (`view: {scale: 1}`) on that same canvas, so
+  `putImageData` at the origin shares the overlays' coordinate space by
+  construction (both are CSS-stretched into the same forced-square
+  container together; a resolution change mid-flight skips one frame
+  rather than paint a mis-scaled one — see the guard in `handleResult`).
+  Cadence: the sensor frame updates at SCAN cadence (`SCAN_THROTTLE_MS`,
+  ~10fps), not per animation frame — orbiting under sensor view looks
+  slightly steppy by design (the scan loop keeps ticking during
+  OrbitControls interaction, so it never freezes); an accepted tradeoff
+  for a debug tool.
+- **Save as fixture** (`scene3d/fixtureExport.ts`): a text field (default
+  `scene_<payload-slug>`, editable — stops auto-following the payload once
+  you touch it) + button producing three downloads named `<name>.json` /
+  `.png` / `.luma`:
+  - The captured frame is the CLEAN post-camSim readback rgba (exactly
+    what the scanner last saw that tick — blur/noise/exposure applied,
+    NO HUD/overlays), snapshotted fresh every tick (`ScanLoop`'s
+    `capturedRgba`) so it survives later ticks mutating scratch buffers.
+  - `.png`: that rgba through a temporary canvas's `toBlob('image/png')`.
+  - `.luma`: `media/luma.ts`'s `lumaBufferFromRgba` — the exact
+    `qrk_core::luma_from_rgba` fixed-point formula (77/150/29 over 256),
+    not an approximation; verified byte-identical against a
+    Python/Pillow-derived luma plane of the same PNG in this feature's
+    headless QA pass (see Verification below).
+  - `.json`: the full `tools/fixtures/generate.py` schema — `camera`
+    intrinsics derived via `scene3d/intrinsics.ts`'s `intrinsicsFromFov`
+    (same `fy=(h/2)/tan(fovY/2)`, `fx=fy`, `cx=(w-1)/2`, `cy=(h-1)/2`
+    convention as `tools/fixtures/camera.py`'s `Intrinsics.default()`);
+    `physical_size_m` is the MODULE-REGION-ONLY size (`moduleRegion.ts`'s
+    `moduleRegionPhysicalSize`) — NOT the scene's own `physicalSize` state,
+    which is the full plane including the quiet zone (verified against
+    `tools/fixtures/render.py`'s `_plane_corners_m`, which treats
+    `physical_size_m` as the no-quiet-zone module region); `distance_m`/
+    `tilt_deg` come straight from that tick's camera stats;
+    `module_size_px` is POSE-DERIVED from the actual projected corners
+    (`moduleSizeFromCorners` = `|TR−TL|/dim`, exactly `generate.py`'s
+    derivation — Plan 5d review fix: an earlier version exported the
+    pose-invariant `resolution/(dim+2·quiet)` texture-density constant,
+    ~2.3x too large at the default pose); the `inverted` flag is
+    MEASURED from the captured frame, not predicted from the color
+    pickers (`probeInvertedFromRgba`: sample luma 0.5 modules diagonally
+    inside the TL module-region corner [finder ink] vs 0.5 modules
+    outside [paper/scene], the same probe geometry as
+    `crates/qrk-core/tests/fixtures_smoke.rs`; `inverted =
+    lumaInside > lumaOutside`) — necessary because with a translucent
+    paper the effective background is whatever the scene composites
+    behind it, and gates hard-branch on this flag; if the probe's
+    contrast is under 30 the export still completes but a warning is
+    shown (the measured flag is unreliable — don't commit that fixture
+    unchecked); `tilt_azimuth_deg`/`inplane_deg` are recorded as `0` with
+    an inline comment — a single incidence angle + approximate roll can't
+    losslessly recover which in-plane axis a tilt happened about, so
+    these are informational placeholders, not measured values;
+    `exposure_offset` is an EXTRA top-level field (no schema slot for it)
+    — harmless, every consumer (the Python generator, the Rust `Meta`
+    loader) ignores unknown fields.
+  - **Caveat for anyone dropping a saved fixture into `fixtures/`:** the
+    Rust loader's `common::load_all()` sweeps every fixture file present,
+    so a scene-exported fixture WILL be picked up by `decode_gate`/
+    `refine_gate` if committed — that's the intent (verify a scene
+    capture against the same gates), but its `corners_px` are the
+    scene's own analytic projection, which (per Plan 5 Task 5/7's
+    findings above) carries the SAME ~1px rendering-chain bias as the
+    live error panel, not the ~0.10px precision of a `tools/fixtures/`-
+    generated fixture. Use a `scene_` name prefix (the default) so this
+    provenance is visible at a glance, and don't expect a scene-exported
+    fixture to tighten `refine_gate`'s bound.
+
+**Verification (headless, this feature's own QA pass):** driven via a
+`cdp.mjs`-style raw-CDP Node script (real headless-ish Chrome,
+`--remote-debugging-port` + `--remote-allow-origins=*`, no puppeteer in
+this dependency tree) against a live `vite dev` server — color/alpha
+inputs set via the native-setter + real-event bypass (same pattern as the
+Plan 5 Task 7 harness), HUD confirmed both visually (screenshot) and by
+sampling the overlay canvas's own pixel alpha (a non-transparent block at
+the expected position). "Save as fixture" verified end-to-end: `Page.
+setDownloadBehavior` routed the three downloads to a scratch directory;
+the `.json` parsed and round-tripped every field; the `.luma` file matched
+a Python/Pillow-derived luma plane of the `.png` pixel-for-pixel (dense
+sample, zero mismatches); and — the strongest check — the saved `.png`
+was fed straight into `cargo run --example decode_photo`, which decoded
+it successfully (correct version/ecc/payload, refined corners within
+~1px of the exported `corners_px`), closing the full loop from "scene
+knob state" to "a real fixture the Rust pipeline can read back."
+
+Sensor view was verified with pixel-metric assertions computed IN-PAGE on
+the DISPLAY canvas itself (the `.scene3d-overlay` canvas, central region
+— not the internal readback, since the point is the on-screen effect):
+auto+default-knobs leaves the region ~99% transparent; forcing "on"
+paints a fully opaque sensor frame; exposure −40 dropped the displayed
+mean luma by 20; noise σ=8 raised mean|horizontal gradient| ×1.38; blur
+3px cut it ×0.84; forcing "off" restored transparency with knobs still
+active — 7/7 assertions, plus screenshots confirming the `[sensor view]`
+HUD tag and that overlays (finder circles, ground-truth quad, decoded
+label) sit exactly on the displayed sensor frame. One environment gotcha
+for future headless passes: Chrome throttles `requestAnimationFrame` to
+zero for fully occluded windows, which freezes the r3f scene and all scan
+ticks — call `Page.bringToFront` before driving the 3D scene.
 
 ## Known limitations
 

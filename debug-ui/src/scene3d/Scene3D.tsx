@@ -38,22 +38,42 @@ import type { ScanResult } from "../scanner/types";
 import type { GroundTruthCode } from "../overlays/groundtruth-types";
 import type { OverlayRegistry } from "../overlays/registry";
 import { TimingsPanel, type TimingsSample } from "../panels/TimingsPanel";
-import { makeQrTexture } from "./qrTexture";
-import { moduleRegionLocalCornersArray } from "./moduleRegion";
+import { makeQrTexture, type QrColorOptions } from "./qrTexture";
+import { moduleRegionLocalCornersArray, moduleRegionPhysicalSize } from "./moduleRegion";
 import { projectAllToPixels } from "./projection";
 import { flipRowsRgba } from "./rowFlip";
 import { applyExposureOffset, applyGaussianBlurCanvas, applyGaussianNoise } from "./camSim";
 import { cornerErrors } from "./errorStats";
 import { CameraSimControls, type CameraSimValues } from "./CameraSimControls";
 import { ErrorPanel, type ErrorSample } from "./ErrorPanel";
+import { QrAppearanceControls, FixtureSaveControls, type QrAppearanceValues } from "./SceneControls";
+import { BackgroundPlane } from "./BackgroundPlane";
+import { computeCameraStats, type CameraStats } from "./cameraStats";
+import { drawHud, formatHudLines } from "./hud";
+import { sensorViewActive, type SensorViewMode } from "./sensorView";
+import { intrinsicsFromFov } from "./intrinsics";
+import {
+  buildFixtureMeta,
+  defaultFixtureName,
+  eccLetterFromIndex,
+  moduleSizeFromCorners,
+  opaquePlateFromAlpha,
+  probeInvertedFromRgba,
+  saveSceneFixture,
+  versionFromDim,
+} from "./fixtureExport";
 import {
   DEFAULT_ECC,
   DEFAULT_PAYLOAD,
   DEFAULT_PHYSICAL_SIZE_M,
+  DEFAULT_QR_BG_ALPHA,
+  DEFAULT_QR_BG_COLOR,
+  DEFAULT_QR_INK_COLOR,
   DEFAULT_RENDER_RESOLUTION,
   DEFAULT_VERSION,
   QUIET_MODULES,
   SCAN_THROTTLE_MS,
+  SCENE_BACKGROUND_COLOR,
 } from "./consts";
 
 export interface Scene3DProps {
@@ -67,23 +87,46 @@ interface FrameOutcome {
   truth: GroundTruthCode[];
   errorSample: ErrorSample | null;
   timings: TimingsSample;
+  /** This tick's camera/plane geometry (Plan 5d HUD + fixture export) —
+   * computed once per throttled scan tick (see `cameraStats.ts`'s doc on
+   * why per-frame would be wasteful for a display-only stat). */
+  cameraStats: CameraStats;
+  /** The clean POST-camSim readback rgba this tick scanned — exactly what
+   * the scanner last saw (no HUD/overlays baked in), a fresh snapshot
+   * (not a view over a reused scratch buffer — see `ScanScratch`'s doc)
+   * so it stays valid after this tick's scratch buffers are mutated
+   * again. Captured every tick (not just on decode success) so "Save as
+   * fixture" always has the latest frame available. */
+  capturedRgba: Uint8ClampedArray<ArrayBuffer>;
+  /** = camSim.resolution at capture time (both the readback's width and
+   * height, always square — see this file's module doc). */
+  resolution: number;
+  /** The three.js camera's vertical fov (degrees) at capture time — feeds
+   * `intrinsicsFromFov` for the fixture-export `camera` block. */
+  fovDeg: number;
 }
 
 function QrPlane({
   qr,
   physicalSize,
+  colors,
   meshRef,
 }: {
   qr: GeneratedQr;
   physicalSize: number;
+  colors: QrColorOptions;
   meshRef: RefObject<THREE.Mesh | null>;
 }) {
-  const texture = useMemo(() => makeQrTexture(qr), [qr]);
+  const texture = useMemo(() => makeQrTexture(qr, QUIET_MODULES, undefined, colors), [qr, colors]);
   useEffect(() => () => texture.dispose(), [texture]);
+  // `transparent` only needs to be true when the background alpha is <1
+  // (see `qrTexture.ts`'s doc: ink is always painted fully opaque, only
+  // the "paper" fill carries the alpha slider) — leaving it false at
+  // alpha=1 matches the pre-5d opaque-plate rendering path exactly.
   return (
     <mesh ref={meshRef} name="qr-plane">
       <planeGeometry args={[physicalSize, physicalSize]} />
-      <meshBasicMaterial map={texture} toneMapped={false} />
+      <meshBasicMaterial map={texture} toneMapped={false} transparent={colors.bgAlpha < 1} />
     </mesh>
   );
 }
@@ -214,6 +257,8 @@ function ScanLoop({ qr, physicalSize, client, payload, camSim, meshRef, onResult
     // space — see this file's module doc on why no scale conversion is
     // needed here.
     mesh.updateMatrixWorld(true);
+    camera.updateMatrixWorld(true);
+    const cameraStats = computeCameraStats(camera, mesh.matrixWorld);
     const localCorners = moduleRegionLocalCornersArray(qr.dim, QUIET_MODULES, physicalSize);
     const worldCorners = localCorners.map((c) => new THREE.Vector3(c[0], c[1], c[2]).applyMatrix4(mesh.matrixWorld));
     const truthPxRaw = projectAllToPixels(worldCorners, camera, resolution, resolution);
@@ -228,12 +273,23 @@ function ScanLoop({ qr, physicalSize, client, payload, camSim, meshRef, onResult
       {
         corners_px: truthPx,
         version: qr.dim,
-        module_size_px: resolution / (qr.dim + 2 * QUIET_MODULES),
+        // Pose-DERIVED, from the actual projected corners — exactly
+        // generate.py's |TR-TL|/dim (Plan 5d review fix: the previous
+        // pose-invariant `resolution/(dim+2*quiet)` constant described
+        // the texture's density, not the rendered code's, and was ~2.3x
+        // too large at the default pose).
+        module_size_px: moduleSizeFromCorners(truthPx, qr.dim),
         inverted: false,
         opaque_plate: false,
         payload,
       },
     ];
+
+    // Fresh snapshot (not a view over `scratch`/the blur pass's own
+    // buffer) so it survives later ticks mutating those in place — see
+    // `FrameOutcome.capturedRgba`'s doc.
+    const capturedRgba = rgba.slice();
+    const fovDeg = (camera as THREE.PerspectiveCamera).fov ?? 50;
 
     client
       .scan(rgba, resolution, resolution, { maxDim: 0, withTrace: true, refine: true })
@@ -248,6 +304,10 @@ function ScanLoop({ qr, physicalSize, client, payload, camSim, meshRef, onResult
           truth,
           errorSample,
           timings: { timings: outcome.result.detections.timings, wallMs: outcome.wallMs, roundTripMs },
+          cameraStats,
+          capturedRgba,
+          resolution,
+          fovDeg,
         });
       })
       .catch((err: unknown) => {
@@ -283,6 +343,61 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
 
   const [qr, setQr] = useState<GeneratedQr | null>(null);
   const [qrError, setQrError] = useState<string | null>(null);
+
+  // Plan 5d: QR appearance (ink/background colors + background alpha) +
+  // scene-background image + fixture-export state.
+  const [qrColors, setQrColors] = useState<QrAppearanceValues>({
+    inkColor: DEFAULT_QR_INK_COLOR,
+    bgColor: DEFAULT_QR_BG_COLOR,
+    bgAlpha: DEFAULT_QR_BG_ALPHA,
+  });
+
+  const [bgImageFile, setBgImageFile] = useState<File | null>(null);
+  const [bgImageUrl, setBgImageUrl] = useState<string | null>(null);
+  // Object URL lifecycle: create one per picked file, revoke the PREVIOUS
+  // url whenever the file changes (including to `null`, i.e. "cleared")
+  // and on unmount — the standard `URL.createObjectURL` cleanup pattern
+  // (same shape as every other effect-owned resource in this file, e.g.
+  // `QrPlane`'s texture disposal).
+  useEffect(() => {
+    if (!bgImageFile) {
+      setBgImageUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(bgImageFile);
+    setBgImageUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [bgImageFile]);
+
+  // Fixture-name text field: defaults to `scene_<payload-slug>` and
+  // stays in sync with the payload UNTIL the user manually edits it (then
+  // it's fully theirs — no more auto-following `payload`).
+  const [fixtureName, setFixtureName] = useState(() => defaultFixtureName(DEFAULT_PAYLOAD));
+  const fixtureNameTouchedRef = useRef(false);
+  useEffect(() => {
+    if (!fixtureNameTouchedRef.current) setFixtureName(defaultFixtureName(payload));
+  }, [payload]);
+  const handleFixtureNameChange = useCallback((name: string) => {
+    fixtureNameTouchedRef.current = true;
+    setFixtureName(name);
+  }, []);
+
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
+  const [cameraStats, setCameraStats] = useState<CameraStats | null>(null);
+  /** Latest tick's captured frame — everything "Save as fixture" needs
+   * that isn't already plain component state, kept in a ref (not React
+   * state) since it's write-often/read-rarely (only on the Save button
+   * click) and holds a fairly large typed array we don't want to trigger
+   * re-renders by replacing every ~100ms tick. */
+  const lastFrameRef = useRef<{
+    rgba: Uint8ClampedArray;
+    resolution: number;
+    cameraStats: CameraStats;
+    truth: GroundTruthCode;
+    fovDeg: number;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -354,13 +469,44 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
   const [timingsSample, setTimingsSample] = useState<TimingsSample | null>(null);
   const [sampleId, setSampleId] = useState(0);
   const [errorSample, setErrorSample] = useState<ErrorSample | null>(null);
+  /** Sensor-view display mode (Plan 5d follow-up — see `sensorView.ts`):
+   * default "auto" shows the processed readback frame whenever any camSim
+   * knob is non-default, so the knobs visibly do something on screen.
+   * Updates at scan cadence (~SCAN_THROTTLE_MS), not per animation frame
+   * — a stale-by-up-to-100ms sensor frame while orbiting is the
+   * documented, accepted tradeoff for a debug tool (the scan loop keeps
+   * ticking during OrbitControls interaction, so it never freezes). */
+  const [sensorViewMode, setSensorViewMode] = useState<SensorViewMode>("auto");
 
   const handleResult = useCallback(
     (outcome: FrameOutcome) => {
       const canvas = overlayCanvasRef.current;
       const ctx = canvas?.getContext("2d");
+      const showSensor = sensorViewActive(sensorViewMode, camSim);
       if (ctx && canvas) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Sensor view (Plan 5d follow-up): paint the PROCESSED post-camSim
+        // readback frame — the exact rgba the scanner ingested this tick —
+        // as the base layer, so blur/noise/exposure have a VISIBLE
+        // on-screen effect (the WebGL render underneath never reflects the
+        // knobs — see this file's module doc). Overlays then draw on top
+        // in the SAME coordinate space with zero extra mapping: the
+        // overlay canvas's pixel buffer is exactly `resolution x
+        // resolution` (the readback's own size — see the sizing effect
+        // above) and every overlay already draws at 1:1 readback px
+        // (`view: {scale: 1}`), so `putImageData` at (0,0) is inherently
+        // aligned with them; both are CSS-stretched to the same square
+        // container together. Resolution-change guard: a tick captured
+        // at the OLD resolution can land after the canvas resized —
+        // skip drawing that one frame (next tick matches) rather than
+        // paint a misaligned/mis-scaled frame.
+        if (
+          showSensor &&
+          canvas.width === outcome.resolution &&
+          canvas.height === outcome.resolution
+        ) {
+          ctx.putImageData(new ImageData(outcome.capturedRgba, outcome.resolution, outcome.resolution), 0, 0);
+        }
         overlayRegistry.drawAll({
           ctx,
           view: { scale: 1, tx: 0, ty: 0 },
@@ -369,13 +515,102 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
           imageSize: [canvas.width, canvas.height],
           workingScale: 1,
         });
+        // HUD last, on the SAME overlay canvas — never the offscreen
+        // readback target (see `hud.ts`'s module doc). Uses this tick's
+        // own camSim snapshot (the `FrameOutcome`'s `timings`/`truth`
+        // already close over ScanLoop's per-tick values the same way;
+        // camSim values themselves come straight from this component's
+        // own state below since they don't change mid-tick).
+        drawHud(ctx, formatHudLines(camSim, outcome.cameraStats, showSensor));
       }
       setTimingsSample(outcome.timings);
       setErrorSample(outcome.errorSample);
+      setCameraStats(outcome.cameraStats);
       setSampleId((n) => n + 1);
+      lastFrameRef.current = {
+        rgba: outcome.capturedRgba,
+        resolution: outcome.resolution,
+        cameraStats: outcome.cameraStats,
+        truth: outcome.truth[0]!,
+        fovDeg: outcome.fovDeg,
+      };
     },
-    [overlayRegistry],
+    [overlayRegistry, camSim, sensorViewMode],
   );
+
+  // "Save as fixture" (feature 6): build the generator-schema JSON from
+  // the LATEST captured tick (`lastFrameRef`, not live component state
+  // for anything geometry-derived — the truth/camera-stats must match the
+  // SAME frame as the captured rgba, not whatever the camera has moved to
+  // since) plus this component's own appearance/payload/ecc/physicalSize
+  // state (which don't need per-frame freshness — they're user-set knobs,
+  // not derived-per-tick values), then triggers the three downloads.
+  const handleSaveFixture = useCallback(async () => {
+    const frame = lastFrameRef.current;
+    if (!frame || !qr) {
+      setSaveError("no captured frame yet — let the scene render at least one tick first");
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    setSaveWarning(null);
+    try {
+      const camera = intrinsicsFromFov(frame.fovDeg, frame.resolution, frame.resolution);
+      // physical_size_m is the MODULE-REGION-ONLY size — see
+      // `moduleRegion.ts`'s `moduleRegionPhysicalSize` doc for why this
+      // differs from the scene's own (full-plane) `physicalSize` state.
+      const physicalSizeM = moduleRegionPhysicalSize(qr.dim, QUIET_MODULES, physicalSize);
+      // Pose-derived module size, re-derived from the frame's own corners
+      // (same as `frame.truth.module_size_px` since Plan 5d's review fix,
+      // but computed here from corners so the JSON is self-consistent by
+      // construction even if the truth path evolves).
+      const moduleSizePx = moduleSizeFromCorners(frame.truth.corners_px, qr.dim);
+      // MEASURED inverted flag (Plan 5d review fix): probe the captured
+      // frame itself, not a flat-color prediction — with a translucent
+      // paper the effective background depends on what's actually behind
+      // the plane (scene color or an arbitrary image). See
+      // `probeInvertedFromRgba`'s doc for the probe geometry.
+      const probe = probeInvertedFromRgba(
+        frame.rgba,
+        frame.resolution,
+        frame.resolution,
+        frame.truth.corners_px,
+        moduleSizePx,
+      );
+      const meta = buildFixtureMeta({
+        name: fixtureName,
+        width: frame.resolution,
+        height: frame.resolution,
+        camera,
+        blurSigma: camSim.blurSigma,
+        noiseSigma: camSim.noiseSigma,
+        exposureOffset: camSim.exposureOffset,
+        code: {
+          payload,
+          version: versionFromDim(qr.dim),
+          eccLetter: eccLetterFromIndex(ecc),
+          physicalSizeM,
+          distanceM: frame.cameraStats.distanceM,
+          tiltDeg: frame.cameraStats.incidenceDeg,
+          moduleSizePx,
+          cornersPx: frame.truth.corners_px,
+          inverted: probe.inverted,
+          opaquePlate: opaquePlateFromAlpha(qrColors.bgAlpha),
+        },
+      });
+      await saveSceneFixture({ name: fixtureName, rgba: frame.rgba, meta }, frame.resolution, frame.resolution);
+      if (probe.lowContrast) {
+        setSaveWarning(
+          `warning: low probe contrast (ink ${probe.lumaInside} vs paper ${probe.lumaOutside}, Δ=${probe.contrast} < 30) — ` +
+            `the measured "inverted" flag is unreliable; don't commit this fixture to gates without checking it`,
+        );
+      }
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }, [qr, payload, ecc, physicalSize, camSim, qrColors, fixtureName]);
 
   return (
     <div className="scene3d">
@@ -395,12 +630,13 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
         <div className="scene3d-canvas-wrap" style={{ width: squareSize, height: squareSize }}>
           {qrError && <div className="banner banner-error">QR generation failed: {qrError}</div>}
           <Canvas camera={{ fov: 50, near: 0.01, far: 100, position: [0, 0, physicalSize * 2.5] }}>
-            <color attach="background" args={["#05070d"]} />
+            <color attach="background" args={[SCENE_BACKGROUND_COLOR]} />
             <gridHelper
               args={[physicalSize * 8, 20, "#374151", "#1f2937"]}
               position={[0, -physicalSize * 1.2, 0]}
             />
-            {qr && <QrPlane qr={qr} physicalSize={physicalSize} meshRef={meshRef} />}
+            <BackgroundPlane imageUrl={bgImageUrl} physicalSize={physicalSize} />
+            {qr && <QrPlane qr={qr} physicalSize={physicalSize} colors={qrColors} meshRef={meshRef} />}
             <OrbitControls makeDefault minDistance={physicalSize * 0.3} maxDistance={physicalSize * 20} />
             {qr && client && scannerReady && (
               <ScanLoop
@@ -476,8 +712,23 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
         </section>
 
         <section className="panel-section">
+          <h2 className="panel-title">Appearance</h2>
+          <QrAppearanceControls
+            values={qrColors}
+            onChange={setQrColors}
+            onBgImageChange={setBgImageFile}
+            hasBgImage={bgImageFile !== null}
+          />
+        </section>
+
+        <section className="panel-section">
           <h2 className="panel-title">Camera sim</h2>
-          <CameraSimControls values={camSim} onChange={setCamSim} />
+          <CameraSimControls
+            values={camSim}
+            onChange={setCamSim}
+            sensorView={sensorViewMode}
+            onSensorViewChange={setSensorViewMode}
+          />
         </section>
 
         <section className="panel-section">
@@ -488,6 +739,19 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
         <section className="panel-section">
           <h2 className="panel-title">Timings</h2>
           <TimingsPanel sample={timingsSample} sampleId={sampleId} />
+        </section>
+
+        <section className="panel-section">
+          <h2 className="panel-title">Save as fixture</h2>
+          <FixtureSaveControls
+            name={fixtureName}
+            onNameChange={handleFixtureNameChange}
+            onSave={handleSaveFixture}
+            saving={saving}
+            disabled={!qr || cameraStats === null}
+            error={saveError}
+            warning={saveWarning}
+          />
         </section>
       </aside>
     </div>

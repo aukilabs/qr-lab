@@ -18,13 +18,18 @@ function cameraAt(
 }
 
 describe("projectToPixel", () => {
-  it("maps a point on the optical axis to the image center", () => {
+  it("maps a point on the optical axis to the principal point (w-1)/2 (pixel-centers-at-integers)", () => {
     // Camera at (0,0,5), unrotated -> looks down -Z, so the origin sits
-    // directly on the optical axis at view-space depth 5.
+    // directly on the optical axis at view-space depth 5. Under the
+    // centers-at-integers convention (matching tools/fixtures/camera.py's
+    // cx=(w-1)/2 and intrinsics.ts's intrinsicsFromFov) the optical axis
+    // lands on (200-1)/2 = 99.5 — NOT 100, the corner-based width/2 the
+    // pre-fix version produced (Plan 5d review fix: that mismatch put a
+    // 0.5px principal-point inconsistency inside one exported JSON).
     const cam = cameraAt([0, 0, 5]);
     const [x, y] = projectToPixel(new Vector3(0, 0, 0), cam, 200, 200);
-    expect(x).toBeCloseTo(100, 9);
-    expect(y).toBeCloseTo(100, 9);
+    expect(x).toBeCloseTo(99.5, 9);
+    expect(y).toBeCloseTo(99.5, 9);
   });
 
   it("matches hand-derived pixel coordinates for an off-axis point (90deg vertical fov, square aspect)", () => {
@@ -33,20 +38,22 @@ describe("projectToPixel", () => {
     // Camera at (0,0,5) unrotated: view-space of world point (2.5, 1.25, 0)
     // is (2.5, 1.25, -5) (translate-only, no rotation) -> depth 5, so
     // half-extent there is 5. NDC x = 2.5/5 = 0.5, NDC y = 1.25/5 = 0.25.
-    // pixel x = (0.5+1)/2*200 = 150; pixel y = (1-0.25)/2*200 = 75 (y
-    // flips: NDC +y is "up", pixel +y is "down").
+    // pixel x = (0.5+1)/2*200 - 0.5 = 149.5; pixel y = (1-0.25)/2*200 -
+    // 0.5 = 74.5 (y flips: NDC +y is "up", pixel +y is "down"; the -0.5
+    // is the centers-at-integers conversion).
     const cam = cameraAt([0, 0, 5]);
     const [x, y] = projectToPixel(new Vector3(2.5, 1.25, 0), cam, 200, 200);
-    expect(x).toBeCloseTo(150, 6);
-    expect(y).toBeCloseTo(75, 6);
+    expect(x).toBeCloseTo(149.5, 6);
+    expect(y).toBeCloseTo(74.5, 6);
   });
 
-  it("keeps a point on the optical axis centered regardless of camera position/orientation", () => {
+  it("keeps a point on the optical axis at the principal point regardless of camera position/orientation", () => {
     // A non-axis-aligned camera (arbitrary position, looking along +X via
     // lookAt) exercises the rotation component projectToPixel must handle
     // correctly, not just translation. Any point further along the same
-    // viewing ray must still land exactly at the image center — that
-    // invariant holds independent of fov/aspect/resolution.
+    // viewing ray must still land exactly at the principal point
+    // ((w-1)/2, (h-1)/2) — that invariant holds independent of fov/
+    // aspect/resolution.
     const cam = new PerspectiveCamera(60, 1.5, 0.1, 50);
     cam.position.set(3, 4, 5);
     cam.lookAt(13, 4, 5); // looking along +X
@@ -54,8 +61,8 @@ describe("projectToPixel", () => {
 
     const onAxis = new Vector3(20, 4, 5); // further down the same ray
     const [x, y] = projectToPixel(onAxis, cam, 640, 480);
-    expect(x).toBeCloseTo(320, 6);
-    expect(y).toBeCloseTo(240, 6);
+    expect(x).toBeCloseTo(319.5, 6);
+    expect(y).toBeCloseTo(239.5, 6);
   });
 
   it("maps world 'up' (relative to a right-side-up camera) to a smaller pixel y", () => {

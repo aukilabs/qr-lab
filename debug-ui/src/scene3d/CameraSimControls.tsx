@@ -12,6 +12,7 @@ import {
   RENDER_RESOLUTIONS,
   type RenderResolution,
 } from "./consts";
+import type { SensorViewMode } from "./sensorView";
 
 export interface CameraSimValues {
   resolution: RenderResolution;
@@ -23,6 +24,13 @@ export interface CameraSimValues {
 export interface CameraSimControlsProps {
   values: CameraSimValues;
   onChange: (values: CameraSimValues) => void;
+  /** Sensor-view display mode (Plan 5d follow-up — see `sensorView.ts`):
+   * "auto" shows the processed readback frame over the WebGL render
+   * whenever any knob above is non-default; "on"/"off" force it either
+   * way. Lives in this panel because it's the visualization OF these
+   * knobs' effect. */
+  sensorView: SensorViewMode;
+  onSensorViewChange: (mode: SensorViewMode) => void;
 }
 
 function row(label: string, control: ReactNode, valueLabel: string) {
@@ -37,7 +45,12 @@ function row(label: string, control: ReactNode, valueLabel: string) {
   );
 }
 
-export function CameraSimControls({ values, onChange }: CameraSimControlsProps) {
+export function CameraSimControls({
+  values,
+  onChange,
+  sensorView,
+  onSensorViewChange,
+}: CameraSimControlsProps) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {row(
@@ -91,6 +104,18 @@ export function CameraSimControls({ values, onChange }: CameraSimControlsProps) 
           onChange={(e) => onChange({ ...values, exposureOffset: Number(e.target.value) })}
         />,
         `${values.exposureOffset > 0 ? "+" : ""}${values.exposureOffset}`,
+      )}
+      {row(
+        "sensor view",
+        <select
+          value={sensorView}
+          onChange={(e) => onSensorViewChange(e.target.value as SensorViewMode)}
+        >
+          <option value="auto">auto (when any knob active)</option>
+          <option value="on">on</option>
+          <option value="off">off</option>
+        </select>,
+        sensorView,
       )}
     </div>
   );

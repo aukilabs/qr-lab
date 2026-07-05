@@ -34,3 +34,33 @@ export function lumaAt(
   // meaningful.
   return (77 * r + 150 * g + 29 * b + 128) >> 8;
 }
+
+/**
+ * Whole-buffer sibling of {@link lumaAt}: converts a tightly-packed
+ * `width x height` rgba buffer into a `width * height`-byte luma plane,
+ * pixel-for-pixel, via the exact same fixed-point formula as
+ * `qrk_core::luma_from_rgba` (`crates/qrk-core/src/luma.rs`) — used by the
+ * 3D scene's "save as fixture" `.luma` export (Plan 5d), which must
+ * byte-match what the Rust pipeline would derive from the same rgba frame,
+ * not merely approximate it.
+ */
+export function lumaBufferFromRgba(
+  rgba: Uint8ClampedArray | Uint8Array,
+  width: number,
+  height: number,
+): Uint8Array<ArrayBuffer> {
+  const expected = width * height * 4;
+  if (rgba.length !== expected) {
+    throw new RangeError(
+      `lumaBufferFromRgba: buffer is ${rgba.length} bytes, expected width*height*4 = ${expected} (${width}x${height})`,
+    );
+  }
+  const out = new Uint8Array(width * height);
+  for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+    const r = rgba[i]!;
+    const g = rgba[i + 1]!;
+    const b = rgba[i + 2]!;
+    out[p] = (77 * r + 150 * g + 29 * b + 128) >> 8;
+  }
+  return out;
+}

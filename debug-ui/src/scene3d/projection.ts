@@ -13,12 +13,22 @@ import type { Camera, Vector3 } from "three";
  * Project `point` (world space) through `camera` into pixel coordinates
  * for a `width x height` render target — the SAME convention
  * `qrk_core::scan`'s SOURCE-px geometry (and this debug UI's `refined_
- * corners`) uses: `(0, 0)` at the top-left pixel, x right, y DOWN.
+ * corners`) uses: pixel CENTERS at integer coordinates, `(0, 0)` at the
+ * top-left pixel's center, x right, y DOWN. This matches
+ * `tools/fixtures/camera.py` ("pixel centers at integer coordinates";
+ * `cx = (w-1)/2`) and `intrinsics.ts`'s `intrinsicsFromFov` — the two
+ * ends of the fixture-export contract this projection feeds.
  *
  * NDC -> pixel: three.js's NDC has y UP (`+1` at the top of the view,
  * `-1` at the bottom) and both axes spanning `[-1, 1]`; image-pixel space
- * has y DOWN and spans `[0, width/height]` — hence the `(1 - ndc.y)`
- * flip on the y axis (no flip on x).
+ * has y DOWN — hence the `(1 - ndc.y)` flip on the y axis (no flip on
+ * x). The trailing `- 0.5` converts from the continuous [0, width]
+ * corner-based span to the centers-at-integers convention: NDC 0 (the
+ * optical axis) lands on `(width-1)/2` — exactly `cx` — not `width/2`.
+ * (The pre-fix version omitted the `- 0.5`, leaving a 0.5px principal-
+ * point inconsistency between an exported fixture's `corners_px` and its
+ * own `camera.cx/cy`, and a half-pixel bias in the live error panel's
+ * ground truth — Plan 5d review fix.)
  *
  * Does NOT mutate `point`; `Camera.project` would mutate its receiver, so
  * this clones first.
@@ -30,8 +40,8 @@ export function projectToPixel(
   height: number,
 ): [number, number] {
   const ndc = point.clone().project(camera);
-  const x = ((ndc.x + 1) / 2) * width;
-  const y = ((1 - ndc.y) / 2) * height;
+  const x = ((ndc.x + 1) / 2) * width - 0.5;
+  const y = ((1 - ndc.y) / 2) * height - 0.5;
   return [x, y];
 }
 
