@@ -7,16 +7,17 @@
 // `code_index` into `scan.detections.codes` its homography corners come
 // from (see `qrk_core::trace::Trace::codes`'s doc) — this layer fills EVERY
 // entry's modules, so a multi-code scene (e.g. `multi_07`'s 4 codes) shows
-// all of them, not just one. Only when NOTHING decoded this frame
-// (`trace.codes` empty) does it fall back to the legacy singular
-// `scan.trace.bits` field paired with `scan.detections.codes`' own LAST
-// entry — that pairing is failure-diagnosis-only in practice (`bits` is
-// `null` whenever nothing decoded — see `Trace`'s doc), so this fallback
-// only ever draws in the pre-Plan-5C "there is exactly one decoded code"
-// case, kept for zero behavior change there. Pre-Plan-5C this "last code"
-// pairing was the layer's ONLY option — a multi-code scene's `bits` always
-// corresponded to just `scan.detections.codes`' LAST entry, a known
-// limitation this task's `trace.codes` addition fixes.
+// all of them, not just one. The trailing singular-`trace.bits` fallback
+// below is DEFENSIVE ONLY — unreachable against the current backend:
+// `decode::DecodeTraceData` sets `bits: None` on BOTH of its branches now
+// (a decode success routes everything through `codes`; a decode failure
+// has no matrix to show), so a live scan can never reach it. It's kept
+// (rather than deleted) so a hand-built/synthetic `ScanResult` using the
+// legacy pre-Plan-5C shape still renders, and as a guard should that
+// backend invariant ever regress. Pre-Plan-5C this "singular bits + last
+// code" pairing was the layer's ONLY option — a multi-code scene's `bits`
+// always corresponded to just `scan.detections.codes`' LAST entry, a
+// known limitation this task's `trace.codes` addition fixes.
 //
 // Module fill quads come from mapping each unit-square module cell through
 // the TS homography port (`squareToQuad`) built from the code's own
@@ -109,6 +110,10 @@ export const bitsLayer: OverlayLayer = {
       return;
     }
 
+    // Defensive fallback — unreachable against the current backend, which
+    // sets `trace.bits` to `null` on every path (see the module doc's
+    // "DEFENSIVE ONLY" note). Kept for legacy-shaped synthetic data and as
+    // a guard against a backend-invariant regression.
     const bits = scan?.trace?.bits;
     if (!bits) return;
     drawBits(ctx, view, bits, codes[codes.length - 1]!);
