@@ -166,6 +166,9 @@ export function App() {
   const [robustSession, setRobustSession] = useState(false);
   const [sessionRotationPeriod, setSessionRotationPeriod] = useState(3);
   const [sessionPoolTtl, setSessionPoolTtl] = useState(4);
+  // Video: pause playback as soon as a scan returns ≥1 decoded QR code.
+  // Off by default — user toggles from VideoControls while testing clips.
+  const [pauseOnDetect, setPauseOnDetect] = useState(false);
   // Read by `runScan` at call time (a state dep would rebuild the scan
   // callback mid-playback); assigned from `videoState.playing` below.
   const playingRef = useRef(false);
@@ -518,6 +521,41 @@ export function App() {
   // flag (assignment-during-render, same pattern as the refs above).
   playingRef.current = videoState.playing;
 
+  // Pause-on-detect: stop on the first NEW sample that carries ≥1 decoded
+  // code while playing, so the user can inspect overlays. Resume is
+  // explicit (Play). Arm on each play→transition (and when the toggle is
+  // flipped on mid-playback) and ignore the sample already on screen —
+  // otherwise leftover codes from the pause frame would re-pause on Play.
+  const pauseOnDetectArmedRef = useRef(false);
+  const pauseOnDetectIgnoreSampleRef = useRef(-1);
+  const prevPlayingForDetectRef = useRef(false);
+  const armPauseOnDetect = () => {
+    pauseOnDetectArmedRef.current = true;
+    pauseOnDetectIgnoreSampleRef.current = sampleId;
+  };
+  useEffect(() => {
+    const wasPlaying = prevPlayingForDetectRef.current;
+    prevPlayingForDetectRef.current = videoState.playing;
+    if (!wasPlaying && videoState.playing) armPauseOnDetect();
+    if (!videoState.playing) pauseOnDetectArmedRef.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- arm only on play edges; sampleId is read at arm time
+  }, [videoState.playing]);
+  useEffect(() => {
+    // Toggle flipped on while already playing → arm for the next sample.
+    if (pauseOnDetect && videoState.playing) armPauseOnDetect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pauseOnDetect]);
+  useEffect(() => {
+    if (!pauseOnDetect || !isVideoMode || mode !== "media") return;
+    if (!videoState.playing || !pauseOnDetectArmedRef.current) return;
+    if (sampleId === pauseOnDetectIgnoreSampleRef.current) return;
+    const n = scanState?.result?.detections.codes.length ?? 0;
+    if (n > 0) {
+      pauseOnDetectArmedRef.current = false;
+      videoPauseRef.current();
+    }
+  }, [pauseOnDetect, isVideoMode, mode, videoState.playing, scanState, sampleId]);
+
   // Pause-recapture (Plan 6): under the "paused frames only" capture
   // policy, playing frames scan capture-free — so when playback stops, the
   // frame the user is now looking at has no filmstrip/baseline data.
@@ -837,7 +875,14 @@ export function App() {
             {!scannerReady && !initError && <div className="loading-overlay">Loading scanner…</div>}
           </div>
 
-          {isVideoMode && <VideoControls videoState={videoState} onScrubStart={handleScrubStart} />}
+          {isVideoMode && (
+            <VideoControls
+              videoState={videoState}
+              onScrubStart={handleScrubStart}
+              pauseOnDetect={pauseOnDetect}
+              onPauseOnDetectChange={setPauseOnDetect}
+            />
+          )}
 
           {robustEnabled && (sessionActive || robustCaptureMode !== "off") && (
             <FilmstripPanel

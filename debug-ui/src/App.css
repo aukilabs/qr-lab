@@ -430,6 +430,25 @@ input[type="checkbox"]:disabled {
   padding: 5px 10px;
 }
 
+.video-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  user-select: none;
+  margin-left: 4px;
+}
+
+.video-toggle input {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent, #3dd6c6);
+}
+
 .video-frame-counter {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;

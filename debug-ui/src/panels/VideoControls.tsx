@@ -27,9 +27,19 @@ export interface VideoControlsProps {
    * session's cross-frame pool on a large seek; optional so non-session
    * callers can omit it. */
   onScrubStart?: () => void;
+  /** When true, App pauses the video as soon as a scan returns ≥1 decoded
+   * code. Toggle is owned by the parent so the pause effect can live next
+   * to the scan-result commit path. */
+  pauseOnDetect: boolean;
+  onPauseOnDetectChange: (value: boolean) => void;
 }
 
-export function VideoControls({ videoState, onScrubStart }: VideoControlsProps) {
+export function VideoControls({
+  videoState,
+  onScrubStart,
+  pauseOnDetect,
+  onPauseOnDetectChange,
+}: VideoControlsProps) {
   // Note (review nit, accepted): starts at 0 rather than
   // `videoState.currentTime`, so a REMOUNT mid-video (e.g. leaving and
   // re-entering media mode) paints one frame with the thumb/label at
@@ -174,6 +184,14 @@ export function VideoControls({ videoState, onScrubStart }: VideoControlsProps) 
         <button type="button" onClick={() => videoState.stepFrame(1)} disabled={videoState.playing}>
           frame ▶
         </button>
+        <label className="video-toggle" title="Pause playback when a QR code is decoded">
+          <input
+            type="checkbox"
+            checked={pauseOnDetect}
+            onChange={(e) => onPauseOnDetectChange(e.target.checked)}
+          />
+          pause on detect
+        </label>
         <span className="video-frame-counter">
           frame {videoState.frameIndex} · {formatTime(scrubTime)} / {formatTime(videoState.duration)}
         </span>
