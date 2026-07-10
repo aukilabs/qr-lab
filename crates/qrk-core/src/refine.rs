@@ -269,7 +269,10 @@ fn localize_edge_point_pass(
     let mut samples = Vec::with_capacity(n);
     for k in 0..n {
         let offset = k as f64 - half;
-        let p = [coarse[0] + normal[0] * offset * step, coarse[1] + normal[1] * offset * step];
+        let p = [
+            coarse[0] + normal[0] * offset * step,
+            coarse[1] + normal[1] * offset * step,
+        ];
         samples.push(bilinear_at(source, p[0], p[1])?);
     }
     // Central-difference gradient at interior indices 1..=n-2 only (needs
@@ -315,9 +318,14 @@ fn localize_edge_point_pass(
         .min_by(|&a, &b| {
             let da = (a as isize - center as isize).unsigned_abs();
             let db = (b as isize - center as isize).unsigned_abs();
-            da.cmp(&db).then(corrected[b].abs().total_cmp(&corrected[a].abs()))
+            da.cmp(&db)
+                .then(corrected[b].abs().total_cmp(&corrected[a].abs()))
         })?;
-    let (gm1, g0, gp1) = (corrected[best_i - 1], corrected[best_i], corrected[best_i + 1]);
+    let (gm1, g0, gp1) = (
+        corrected[best_i - 1],
+        corrected[best_i],
+        corrected[best_i + 1],
+    );
     let denom = gm1 - 2.0 * g0 + gp1;
     if denom.abs() < 1e-9 {
         return None;
@@ -327,8 +335,14 @@ fn localize_edge_point_pass(
         return None;
     }
     let offset = (best_i as f64 - half) + delta;
-    let pos = [coarse[0] + normal[0] * offset * step, coarse[1] + normal[1] * offset * step];
-    Some(EdgePoint { pos, weight: g0.abs() })
+    let pos = [
+        coarse[0] + normal[0] * offset * step,
+        coarse[1] + normal[1] * offset * step,
+    ];
+    Some(EdgePoint {
+        pos,
+        weight: g0.abs(),
+    })
 }
 
 /// Three-pass Devernay localization with Aitken Δ² extrapolation: run
@@ -436,7 +450,12 @@ fn fit_edge(localized: &[EdgePoint], probed: usize, module_px: f64) -> (Option<E
     if localized.len() < REFINE_MIN_EDGE_POINTS {
         return (
             None,
-            EdgeStat { points_probed: probed as u32, points_fit: 0, dropped_outliers: 0, valid: false },
+            EdgeStat {
+                points_probed: probed as u32,
+                points_fit: 0,
+                dropped_outliers: 0,
+                valid: false,
+            },
         );
     }
     let pts: Vec<[f64; 2]> = localized.iter().map(|p| p.pos).collect();
@@ -500,7 +519,10 @@ fn refine_round(
     let mut edge_stats: [EdgeStat; 4] = [EdgeStat::default(); 4];
 
     for (edge_idx, &(a, b)) in EDGE_TO_CORNERS.iter().enumerate() {
-        let d = [corners_source[b][0] - corners_source[a][0], corners_source[b][1] - corners_source[a][1]];
+        let d = [
+            corners_source[b][0] - corners_source[a][0],
+            corners_source[b][1] - corners_source[a][1],
+        ];
         let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
         if len < 1e-9 {
             continue; // degenerate (coincident corners) — no line possible
@@ -543,8 +565,13 @@ fn refine_round(
             }
         }
         if candidates.len() > REFINE_MAX_POINTS_PER_EDGE {
-            let stride = (candidates.len() as f64 / REFINE_MAX_POINTS_PER_EDGE as f64).ceil() as usize;
-            candidates = candidates.into_iter().step_by(stride.max(1)).take(REFINE_MAX_POINTS_PER_EDGE).collect();
+            let stride =
+                (candidates.len() as f64 / REFINE_MAX_POINTS_PER_EDGE as f64).ceil() as usize;
+            candidates = candidates
+                .into_iter()
+                .step_by(stride.max(1))
+                .take(REFINE_MAX_POINTS_PER_EDGE)
+                .collect();
         }
         let probed = candidates.len();
 
@@ -606,7 +633,11 @@ fn refine_round(
         }
     }
 
-    Some(RefinedCorners { corners, edge_stats, corner_refined })
+    Some(RefinedCorners {
+        corners,
+        edge_stats,
+        corner_refined,
+    })
 }
 
 /// Refine `code_corners_working` (TL, TR, BR, BL, WORKING px) against the
@@ -679,8 +710,12 @@ mod tests {
     use crate::testpaint::render_module_grid_transformed_antialiased;
 
     fn qr_bitmatrix(payload: &[u8], version: i16) -> BitMatrix {
-        let code = qrcode::QrCode::with_version(payload, qrcode::Version::Normal(version), qrcode::EcLevel::M)
-            .unwrap();
+        let code = qrcode::QrCode::with_version(
+            payload,
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
+        )
+        .unwrap();
         let dim = code.width();
         let mut m = BitMatrix::new(dim);
         for y in 0..dim {
@@ -788,8 +823,7 @@ mod tests {
     /// error a decode-surviving candidate actually carries (a grid
     /// misplaced by ~half a module stops RS-decoding), so passing this
     /// bounds the "coarse echo" failure mode categorically.
-    const PERTURB_MODULES: [[f64; 2]; 4] =
-        [[0.3, -0.2], [-0.25, 0.3], [0.2, 0.25], [-0.3, -0.15]];
+    const PERTURB_MODULES: [[f64; 2]; 4] = [[0.3, -0.2], [-0.25, 0.3], [0.2, 0.25], [-0.3, -0.15]];
 
     /// Shared body of the two synthetic accuracy gate variants: render 3
     /// poses x 2 versions (antialiased 8x supersample + box reduce + mild
@@ -799,11 +833,17 @@ mod tests {
     /// Asserts every corner actually refined (not a fallback) — a silent
     /// fallback would mask a real accuracy regression behind whatever
     /// error the coarse input happens to carry.
-    fn run_accuracy_gate(label: &str, perturb: Option<&[[f64; 2]; 4]>) -> Vec<(i16, &'static str, f64, f64)> {
+    fn run_accuracy_gate(
+        label: &str,
+        perturb: Option<&[[f64; 2]; 4]>,
+    ) -> Vec<(i16, &'static str, f64, f64)> {
         let mut table: Vec<(i16, &'static str, f64, f64)> = Vec::new();
         let cases: [(i16, &[u8]); 2] = [(1, b"REFINE1"), (7, b"REFINEV7TESTPAYLOAD")];
-        let poses: [(&'static str, Pose); 3] =
-            [("frontal", Pose::Frontal), ("rot30", Pose::Rotated30), ("perspective", Pose::Perspective)];
+        let poses: [(&'static str, Pose); 3] = [
+            ("frontal", Pose::Frontal),
+            ("rot30", Pose::Rotated30),
+            ("perspective", Pose::Perspective),
+        ];
 
         for (version, payload) in cases {
             let bits = qr_bitmatrix(payload, version);
@@ -849,9 +889,10 @@ mod tests {
                 let img = mild_blur(&img, img_side, img_side);
                 let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
 
-                let refined = refine_corners(&view, 1.0, 1.0, &coarse, &bits, false).unwrap_or_else(|| {
-                    panic!("{label} v{version} {pose_name}: refine_corners returned None")
-                });
+                let refined = refine_corners(&view, 1.0, 1.0, &coarse, &bits, false)
+                    .unwrap_or_else(|| {
+                        panic!("{label} v{version} {pose_name}: refine_corners returned None")
+                    });
                 for i in 0..4 {
                     assert!(
                         refined.corner_refined[i],
@@ -968,14 +1009,23 @@ mod tests {
         let refined = refine_corners(&view, 1.0, 1.0, &coarse, &bits, true)
             .expect("inverted v1 perspective: refine_corners returned None");
         for i in 0..4 {
-            assert!(refined.corner_refined[i], "inverted: corner {i} fell back to unrefined");
+            assert!(
+                refined.corner_refined[i],
+                "inverted: corner {i} fell back to unrefined"
+            );
         }
         let errors: [f64; 4] = std::array::from_fn(|i| corner_error(refined.corners[i], truth[i]));
         let mean = errors.iter().sum::<f64>() / 4.0;
         let max = errors.iter().cloned().fold(0.0, f64::max);
         eprintln!("inverted v1 perspective: mean={mean:.4}px max={max:.4}px");
-        assert!(mean <= 0.05, "inverted: mean corner error {mean:.4}px exceeds 0.05px");
-        assert!(max <= 0.15, "inverted: max corner error {max:.4}px exceeds 0.15px");
+        assert!(
+            mean <= 0.05,
+            "inverted: mean corner error {mean:.4}px exceeds 0.05px"
+        );
+        assert!(
+            max <= 0.15,
+            "inverted: max corner error {max:.4}px exceeds 0.15px"
+        );
     }
 
     #[test]
@@ -1000,7 +1050,12 @@ mod tests {
         let view = LumaView::new(&data, img_side, img_side, img_side).unwrap();
         let half = size / 2.0;
         let c = img_side as f64 / 2.0;
-        let corners = [[c - half, c - half], [c + half, c - half], [c + half, c + half], [c - half, c + half]];
+        let corners = [
+            [c - half, c - half],
+            [c + half, c - half],
+            [c + half, c + half],
+            [c - half, c + half],
+        ];
         assert!(refine_corners(&view, 1.0, 1.0, &corners, &bits, false).is_none());
     }
 }

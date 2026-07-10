@@ -56,7 +56,10 @@ fn main() {
     // that matters (source-resolution sampling + refinement both need the
     // original pixels, not a pre-downscaled copy).
     let view = qrk_core::LumaView::new(&luma, w, h, w).unwrap();
-    let opts = ScanOptions { max_working_dim: max_dim as u32, refine: true };
+    let opts = ScanOptions {
+        max_working_dim: max_dim as u32,
+        refine: true,
+    };
     let det = scan(&view, &opts);
     println!(
         "{path} @source {w}x{h}, working max_dim={max_dim} (source_scale={:.4}): \

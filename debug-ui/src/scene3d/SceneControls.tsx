@@ -61,7 +61,7 @@ export function QrAppearanceControls({
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", gap: 8 }}>
         <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12, flex: 1 }}>
-          <span style={{ color: "#9ca3af" }}>ink color</span>
+          <span style={{ color: "var(--text-muted)" }}>ink color</span>
           <input
             type="color"
             value={values.inkColor}
@@ -69,7 +69,7 @@ export function QrAppearanceControls({
           />
         </label>
         <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12, flex: 1 }}>
-          <span style={{ color: "#9ca3af" }}>background color</span>
+          <span style={{ color: "var(--text-muted)" }}>background color</span>
           <input
             type="color"
             value={values.bgColor}
@@ -78,7 +78,7 @@ export function QrAppearanceControls({
         </label>
       </div>
       <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
-        <span style={{ display: "flex", justifyContent: "space-between", color: "#9ca3af" }}>
+        <span style={{ display: "flex", justifyContent: "space-between", color: "var(--text-muted)" }}>
           <span>background alpha</span>
           <span style={{ fontVariantNumeric: "tabular-nums" }}>{values.bgAlpha.toFixed(2)}</span>
         </span>
@@ -108,7 +108,7 @@ export function QrAppearanceControls({
         )}
       </div>
       <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
-        <span style={{ color: "#9ca3af" }}>scene background image</span>
+        <span style={{ color: "var(--text-muted)" }}>scene background image</span>
         <input
           ref={fileInputRef}
           type="file"
@@ -151,7 +151,7 @@ export function FixtureSaveControls({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
-        <span style={{ color: "#9ca3af" }}>fixture name</span>
+        <span style={{ color: "var(--text-muted)" }}>fixture name</span>
         <input
           type="text"
           value={name}

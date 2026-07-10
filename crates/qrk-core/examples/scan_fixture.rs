@@ -44,19 +44,26 @@ fn main() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
 
     let json_path = dir.join(format!("{name}.json"));
-    let json_text = fs::read_to_string(&json_path)
-        .unwrap_or_else(|e| panic!("{}: {e}", json_path.display()));
-    let meta: Meta = serde_json::from_str(&json_text)
-        .unwrap_or_else(|e| panic!("{}: {e}", json_path.display()));
+    let json_text =
+        fs::read_to_string(&json_path).unwrap_or_else(|e| panic!("{}: {e}", json_path.display()));
+    let meta: Meta =
+        serde_json::from_str(&json_text).unwrap_or_else(|e| panic!("{}: {e}", json_path.display()));
 
     let luma_path = dir.join(format!("{name}.luma"));
     let luma = fs::read(&luma_path).unwrap_or_else(|e| panic!("{}: {e}", luma_path.display()));
-    assert_eq!(luma.len(), meta.width * meta.height, "{name}: luma buffer size mismatch");
+    assert_eq!(
+        luma.len(),
+        meta.width * meta.height,
+        "{name}: luma buffer size mismatch"
+    );
 
     let view = LumaView::new(&luma, meta.width, meta.height, meta.width)
         .unwrap_or_else(|e| panic!("{name}: invalid LumaView: {e:?}"));
 
-    let opts = ScanOptions { max_working_dim: 0, refine: true };
+    let opts = ScanOptions {
+        max_working_dim: 0,
+        refine: true,
+    };
     let det = scan(&view, &opts);
 
     println!("fixture: {name} ({}x{})", meta.width, meta.height);

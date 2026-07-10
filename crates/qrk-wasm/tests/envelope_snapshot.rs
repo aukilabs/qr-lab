@@ -68,7 +68,10 @@ fn envelope_matches_committed_snapshot() {
     // — near_00 has real detections, so the TS types below get non-empty
     // array/struct shapes to check against, not just nulls.
     let mut trace = Trace::new();
-    let opts = ScanOptions { max_working_dim: MAX_WORKING_DIM, refine: REFINE };
+    let opts = ScanOptions {
+        max_working_dim: MAX_WORKING_DIM,
+        refine: REFINE,
+    };
     let detections = scan_traced(&view, &opts, &mut trace);
     // `StageTimings` is nondeterministic on every target this test could
     // run on: here (host, not wasm32) it's `Instant::now()` deltas, a
@@ -125,6 +128,91 @@ fn envelope_matches_committed_snapshot() {
         "wasm envelope shape drifted from the committed snapshot at {} — if this is an \
          intentional change, regenerate with `UPDATE_SNAPSHOT=1 cargo test -p qrk-wasm \
          --test envelope_snapshot` and update debug-ui/src/scanner/types.ts to match",
+        snapshot_path.display()
+    );
+}
+
+/// Plan 6: the robust envelope's committed snapshot — same drift-gate
+/// discipline as [`envelope_matches_committed_snapshot`], for
+/// `scan_rgba_robust`'s `WasmRobustResult`. Uses `shadow_04` (a measured
+/// baseline failure the ladder recovers through a recovery rung) so the
+/// snapshot carries a POPULATED multi-variant ladder — several
+/// `VariantKind` shapes, a stage>0 provenance on the decoded code, and
+/// non-trivial `triplet_evidence` — rather than a single-baseline shell.
+/// Capture is OFF (`snapshots` = `null`): the filmstrip carries pixel
+/// dumps too large to commit; its field names are pinned by qrk-wasm's
+/// in-crate `robust_envelope_field_names_are_pinned` unit test instead.
+/// The unified `detections` (one-pipeline contract: same shape as the
+/// classic envelope's, assembled from the ladder union) IS committed here
+/// — it is the primary thing the UI consumes.
+#[test]
+fn robust_envelope_matches_committed_snapshot() {
+    let luma_path = workspace_root().join("fixtures/shadow_04.luma");
+    // The generated degraded-fixture pack is optional and intentionally not
+    // stored on main. Its committed JSON snapshot still drives the TypeScript
+    // parser tests; regenerate this Rust-side snapshot from the fixture branch
+    // (or a locally generated pack) when the envelope deliberately changes.
+    if !luma_path.exists() {
+        return;
+    }
+    let luma = std::fs::read(&luma_path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", luma_path.display()));
+    assert_eq!(
+        luma.len(),
+        WIDTH * HEIGHT,
+        "{}: unexpected size",
+        luma_path.display()
+    );
+    let view = LumaView::new(&luma, WIDTH, HEIGHT, WIDTH).unwrap();
+
+    let opts = ScanOptions {
+        max_working_dim: MAX_WORKING_DIM,
+        refine: REFINE,
+    };
+    let mut robust =
+        qrk_core::scan_robust(&view, &opts, &qrk_core::ScanConfig::ROBUST_FULL_BENCHMARK);
+    // Zero every wall-clock field for the same determinism reason the
+    // classic snapshot zeroes StageTimings (see that test's comment).
+    robust.total_ns = 0;
+    for v in &mut robust.variants {
+        v.timings = StageTimings::default();
+        v.total_ns = 0;
+    }
+
+    // Same per-axis working/source ratios scan_rgba_robust computes — this
+    // fixture is exactly MAX_WORKING_DIM wide, so both are 1.0 (the
+    // no-downscale branch) and the unified geometry equals the source-px
+    // union.
+    let detections = qrk_wasm::unified_detections(&robust, 1.0, 1.0);
+    let result = qrk_wasm::WasmRobustResult {
+        detections,
+        robust,
+        snapshots: None,
+        scan_width: WIDTH as u32,
+        scan_height: HEIGHT as u32,
+    };
+    let generated = serde_json::to_string_pretty(&result).expect("serialize WasmRobustResult");
+
+    let snapshot_path =
+        workspace_root().join("debug-ui/src/scanner/__snapshots__/envelope.robust.shadow_04.json");
+    if std::env::var("UPDATE_SNAPSHOT").as_deref() == Ok("1") {
+        std::fs::write(&snapshot_path, format!("{generated}\n"))
+            .unwrap_or_else(|e| panic!("writing {}: {e}", snapshot_path.display()));
+        eprintln!("wrote {}", snapshot_path.display());
+        return;
+    }
+    let committed = std::fs::read_to_string(&snapshot_path).unwrap_or_else(|e| {
+        panic!(
+            "reading committed snapshot {}: {e}\n\
+             (run `UPDATE_SNAPSHOT=1 cargo test -p qrk-wasm --test envelope_snapshot` to generate it)",
+            snapshot_path.display()
+        )
+    });
+    assert_eq!(
+        generated.trim_end(),
+        committed.trim_end(),
+        "robust wasm envelope shape drifted from {} — if intentional, regenerate with \
+         UPDATE_SNAPSHOT=1 and update debug-ui/src/scanner/types.ts to match",
         snapshot_path.display()
     );
 }

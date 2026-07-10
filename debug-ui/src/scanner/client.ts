@@ -4,6 +4,13 @@
 // building an unbounded backlog when frames arrive faster than scan_rgba
 // can process them.
 
+import {
+  parseRobustPresets,
+  parseRobustScanResult,
+  type RobustConfig,
+  type RobustPresets,
+  type RobustScanResult,
+} from "./robust-types";
 import { parseScanResult, type ScanResult } from "./types";
 
 /**
@@ -74,6 +81,41 @@ export interface ScanOutcome {
   scanHeight: number;
 }
 
+/** Options for {@link ScannerClient.scanRobust} (Plan 6). No `withTrace` —
+ * the robust envelope has no trace; the unified `detections` (finders/
+ * triplets/codes across all rungs) always rides it, and the only extra
+ * debug payload is the capture-gated filmstrip. */
+export interface RobustScanOptions {
+  maxDim: number;
+  /** Same semantics as {@link ScanOptions.refine}; defaults to `false`. */
+  refine?: boolean;
+  /** camelCase flag object forwarded to `scan_rgba_robust` — see
+   * `robust-types.ts`'s `RobustConfig` (source presets via
+   * {@link ScannerClient.robustPresets}). */
+  config: RobustConfig;
+  /** `true` populates `snapshots` (the per-variant thumbnail filmstrip,
+   * ~58 KB of pixels per rung) — the ONLY capture-gated payload; detection
+   * results are identical either way. */
+  capture: boolean;
+}
+
+export interface RobustScanOutcome {
+  result: RobustScanResult;
+  wallMs: number;
+  scanWidth: number;
+  scanHeight: number;
+}
+
+/** Options for {@link ScannerClient.scanSessionFrame} (Plan 6 session
+ * mode). No `config`/`capture` here — the ladder config is baked into the
+ * persistent session via {@link ScannerClient.configureSession}, and
+ * capture (the filmstrip) is inherently OFF on the session video path. */
+export interface SessionScanOptions {
+  maxDim: number;
+  /** Same semantics as {@link ScanOptions.refine}; defaults to `false`. */
+  refine?: boolean;
+}
+
 interface ScanRequestMessage {
   type: "scan";
   id: number;
@@ -85,13 +127,64 @@ interface ScanRequestMessage {
   refine: boolean;
 }
 
-interface PendingScan {
+interface RobustScanRequestMessage {
+  type: "scan-robust";
+  id: number;
+  rgba: ArrayBuffer;
+  width: number;
+  height: number;
+  maxDim: number;
+  refine: boolean;
+  config: RobustConfig;
+  capture: boolean;
+}
+
+interface ScanSessionFrameRequestMessage {
+  type: "scan-session-frame";
+  id: number;
+  rgba: ArrayBuffer;
+  width: number;
+  height: number;
+  maxDim: number;
+  refine: boolean;
+}
+
+interface PendingBase {
   id: number;
   rgba: Uint8ClampedArray;
   width: number;
   height: number;
-  opts: ScanOptions;
-  resolve: (outcome: ScanOutcome) => void;
+  reject: (err: unknown) => void;
+}
+
+/** Discriminated on `kind` so `handleMessage` knows which envelope parser
+ * (and which resolve signature) a "scan-result" answer belongs to — plain
+ * and robust requests share the SAME wire response type and the SAME
+ * latest-wins slot (a newer request of EITHER kind supersedes a queued
+ * one of either kind). */
+type PendingScan =
+  | (PendingBase & {
+      kind: "scan";
+      opts: ScanOptions;
+      resolve: (outcome: ScanOutcome) => void;
+    })
+  | (PendingBase & {
+      kind: "scan-robust";
+      opts: RobustScanOptions;
+      resolve: (outcome: RobustScanOutcome) => void;
+    })
+  | (PendingBase & {
+      // Plan 6 session mode — shares the SAME latest-wins slot and the SAME
+      // "scan-result" wire envelope (parsed by `parseRobustScanResult`, like
+      // scan-robust); the persistent worker session is what makes it
+      // stateful, not anything on this pending entry.
+      kind: "session";
+      opts: SessionScanOptions;
+      resolve: (outcome: RobustScanOutcome) => void;
+    });
+
+interface PendingPresets {
+  resolve: (presets: RobustPresets) => void;
   reject: (err: unknown) => void;
 }
 
@@ -111,6 +204,11 @@ export class ScannerClient {
   private initTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private inFlight: PendingScan | null = null;
   private queued: PendingScan | null = null;
+  private pendingPresets = new Map<number, PendingPresets>();
+  /** Cached `robustPresets()` result — the presets are compile-time Rust
+   * constants, so one fetch per client is enough. Cleared on rejection so
+   * a transient failure doesn't poison every later call. */
+  private presetsPromise: Promise<RobustPresets> | null = null;
 
   constructor(worker: ScannerWorkerLike) {
     this.worker = worker;
@@ -170,7 +268,8 @@ export class ScannerClient {
     opts: ScanOptions,
   ): Promise<ScanOutcome> {
     return new Promise<ScanOutcome>((resolve, reject) => {
-      const pending: PendingScan = {
+      this.enqueue({
+        kind: "scan",
         id: this.nextId++,
         // The one copy per scan (see the ownership doc comment above).
         // Made here — not in start() — so a queued request holds its own
@@ -182,16 +281,118 @@ export class ScannerClient {
         opts,
         resolve,
         reject,
-      };
-
-      if (!this.inFlight) {
-        this.start(pending);
-        return;
-      }
-
-      this.queued?.reject(new StaleScanError());
-      this.queued = pending;
+      });
     });
+  }
+
+  /**
+   * Scan one RGBA frame through the Plan 6 robust escalation ladder
+   * (`scan_rgba_robust`). Same ownership contract as {@link scan} (the
+   * frame is copied once up front), and the same latest-wins slot: a
+   * robust request and a plain request supersede each other — a newer
+   * request of either kind replaces whichever kind is queued.
+   */
+  scanRobust(
+    rgba: Uint8ClampedArray,
+    width: number,
+    height: number,
+    opts: RobustScanOptions,
+  ): Promise<RobustScanOutcome> {
+    return new Promise<RobustScanOutcome>((resolve, reject) => {
+      this.enqueue({
+        kind: "scan-robust",
+        id: this.nextId++,
+        rgba: rgba.slice(), // same copy-once contract as scan() — see above
+        width,
+        height,
+        opts,
+        resolve,
+        reject,
+      });
+    });
+  }
+
+  /**
+   * (Re)build the worker's persistent {@link WasmScanSession} (Plan 6
+   * session mode) with `config` and the two temporal knobs. Fire-and-forget
+   * (no response): the next {@link scanSessionFrame} observes the new
+   * session. Rebuilding drops the previous session's cross-frame state, so
+   * calling this on a config/param change doubles as a reset.
+   */
+  configureSession(config: RobustConfig, rotationPeriod: number, poolTtlFrames: number): void {
+    this.worker.postMessage({ type: "session-config", config, rotationPeriod, poolTtlFrames });
+  }
+
+  /**
+   * Clear the worker session's cross-frame candidate pool without rebuilding
+   * it (Plan 6) — call on a source change or a video seek, where a large
+   * temporal jump invalidates candidates pooled from the previous scene.
+   * Fire-and-forget; a no-op in the worker if no session exists yet.
+   */
+  resetSession(): void {
+    this.worker.postMessage({ type: "session-reset" });
+  }
+
+  /**
+   * Scan one video frame through the persistent session
+   * (`WasmScanSession.scan_frame_rgba`, Plan 6). Same ownership contract as
+   * {@link scan} (copied once up front) and the same latest-wins slot as
+   * {@link scan}/{@link scanRobust} — a newer request of ANY kind supersedes
+   * a queued one. The reply parses with `parseRobustScanResult` (identical
+   * envelope to scan-robust; `snapshots` is always `null` — capture is off
+   * on the session path). Requires {@link configureSession} to have been
+   * called first, else the worker answers with an error.
+   */
+  scanSessionFrame(
+    rgba: Uint8ClampedArray,
+    width: number,
+    height: number,
+    opts: SessionScanOptions,
+  ): Promise<RobustScanOutcome> {
+    return new Promise<RobustScanOutcome>((resolve, reject) => {
+      this.enqueue({
+        kind: "session",
+        id: this.nextId++,
+        rgba: rgba.slice(), // same copy-once contract as scan() — see above
+        width,
+        height,
+        opts,
+        resolve,
+        reject,
+      });
+    });
+  }
+
+  /**
+   * Fetch the authoritative Rust `ScanConfig` presets
+   * (`robust_presets()`), cached after the first successful call — the
+   * values are compile-time constants, so every later call resolves from
+   * the cache without touching the worker.
+   */
+  robustPresets(): Promise<RobustPresets> {
+    if (!this.presetsPromise) {
+      const promise = new Promise<RobustPresets>((resolve, reject) => {
+        const id = this.nextId++;
+        this.pendingPresets.set(id, { resolve, reject });
+        this.worker.postMessage({ type: "robust-presets", id });
+      });
+      this.presetsPromise = promise;
+      promise.catch(() => {
+        // Allow a retry after a failure (see `presetsPromise`'s doc) —
+        // but only if a newer fetch hasn't already replaced this one.
+        if (this.presetsPromise === promise) this.presetsPromise = null;
+      });
+    }
+    return this.presetsPromise;
+  }
+
+  private enqueue(pending: PendingScan): void {
+    if (!this.inFlight) {
+      this.start(pending);
+      return;
+    }
+    this.queued?.reject(new StaleScanError());
+    this.queued = pending;
   }
 
   /** Releases the underlying worker. The client is unusable afterward. */
@@ -200,6 +401,10 @@ export class ScannerClient {
       clearTimeout(this.initTimeoutId);
       this.initTimeoutId = null;
     }
+    for (const pending of this.pendingPresets.values()) {
+      pending.reject(new Error("ScannerClient disposed"));
+    }
+    this.pendingPresets.clear();
     this.worker.removeEventListener("message", this.handleMessage);
     this.worker.terminate();
   }
@@ -212,16 +417,41 @@ export class ScannerClient {
     // its buffer is therefore exact (just this frame's bytes) and detaches
     // only the copy, never anything the caller holds.
     const buffer = pending.rgba.buffer as ArrayBuffer;
-    const message: ScanRequestMessage = {
-      type: "scan",
-      id: pending.id,
-      rgba: buffer,
-      width: pending.width,
-      height: pending.height,
-      maxDim: pending.opts.maxDim,
-      withTrace: pending.opts.withTrace,
-      refine: pending.opts.refine ?? false,
-    };
+    let message: ScanRequestMessage | RobustScanRequestMessage | ScanSessionFrameRequestMessage;
+    if (pending.kind === "scan") {
+      message = {
+        type: "scan",
+        id: pending.id,
+        rgba: buffer,
+        width: pending.width,
+        height: pending.height,
+        maxDim: pending.opts.maxDim,
+        withTrace: pending.opts.withTrace,
+        refine: pending.opts.refine ?? false,
+      };
+    } else if (pending.kind === "scan-robust") {
+      message = {
+        type: "scan-robust",
+        id: pending.id,
+        rgba: buffer,
+        width: pending.width,
+        height: pending.height,
+        maxDim: pending.opts.maxDim,
+        refine: pending.opts.refine ?? false,
+        config: pending.opts.config,
+        capture: pending.opts.capture,
+      };
+    } else {
+      message = {
+        type: "scan-session-frame",
+        id: pending.id,
+        rgba: buffer,
+        width: pending.width,
+        height: pending.height,
+        maxDim: pending.opts.maxDim,
+        refine: pending.opts.refine ?? false,
+      };
+    }
     this.worker.postMessage(message, [buffer]);
   }
 
@@ -235,6 +465,22 @@ export class ScannerClient {
         this.initTimeoutId = null;
       }
       this.readyResolve?.();
+      return;
+    }
+    if (msg?.type === "robust-presets-result") {
+      const data = msg as { id: number; ok: boolean; presets?: unknown; error?: string };
+      const pending = this.pendingPresets.get(data.id);
+      if (!pending) return;
+      this.pendingPresets.delete(data.id);
+      if (data.ok) {
+        try {
+          pending.resolve(parseRobustPresets(data.presets));
+        } catch (err) {
+          pending.reject(err);
+        }
+      } else {
+        pending.reject(new Error(data.error ?? "robust_presets failed"));
+      }
       return;
     }
     if (msg?.type !== "scan-result") return;
@@ -255,13 +501,25 @@ export class ScannerClient {
     this.inFlight = null;
     if (data.ok) {
       try {
-        const result = parseScanResult(data.result);
-        pending.resolve({
-          result,
-          wallMs: data.wallMs,
-          scanWidth: data.scanWidth,
-          scanHeight: data.scanHeight,
-        });
+        // The wire response is shared across all scan kinds; the pending
+        // entry's own `kind` picks the right envelope parser. `scan-robust`
+        // and `session` both carry a `WasmRobustResult` and resolve a
+        // `RobustScanOutcome`, so they share the else branch.
+        if (pending.kind === "scan") {
+          pending.resolve({
+            result: parseScanResult(data.result),
+            wallMs: data.wallMs,
+            scanWidth: data.scanWidth,
+            scanHeight: data.scanHeight,
+          });
+        } else {
+          pending.resolve({
+            result: parseRobustScanResult(data.result),
+            wallMs: data.wallMs,
+            scanWidth: data.scanWidth,
+            scanHeight: data.scanHeight,
+          });
+        }
       } catch (err) {
         pending.reject(err);
       }

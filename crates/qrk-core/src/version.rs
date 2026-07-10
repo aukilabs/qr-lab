@@ -49,11 +49,10 @@ use crate::LumaView;
 /// which independently confirms a correct transcription (a single mistyped
 /// hex digit almost always collapses some pairwise distance below 8).
 const VERSION_DECODE_INFO: [u32; 34] = [
-    0x07C94, 0x085BC, 0x09A99, 0x0A4D3, 0x0BBF6, 0x0C762, 0x0D847, 0x0E60D,
-    0x0F928, 0x10B78, 0x1145D, 0x12A17, 0x13532, 0x149A6, 0x15683, 0x168C9,
-    0x177EC, 0x18EC4, 0x191E1, 0x1AFAB, 0x1B08E, 0x1CC1A, 0x1D33F, 0x1ED75,
-    0x1F250, 0x209D5, 0x216F0, 0x228BA, 0x2379F, 0x24B0B, 0x2542E, 0x26A64,
-    0x27541, 0x28C69,
+    0x07C94, 0x085BC, 0x09A99, 0x0A4D3, 0x0BBF6, 0x0C762, 0x0D847, 0x0E60D, 0x0F928, 0x10B78,
+    0x1145D, 0x12A17, 0x13532, 0x149A6, 0x15683, 0x168C9, 0x177EC, 0x18EC4, 0x191E1, 0x1AFAB,
+    0x1B08E, 0x1CC1A, 0x1D33F, 0x1ED75, 0x1F250, 0x209D5, 0x216F0, 0x228BA, 0x2379F, 0x24B0B,
+    0x2542E, 0x26A64, 0x27541, 0x28C69,
 ];
 
 /// Decode an 18-bit version-info reading against [`VERSION_DECODE_INFO`],
@@ -316,8 +315,13 @@ fn read_version_block(
             for k in 0..3u32 {
                 let col = col_lo + 2 - k; // dim-9, dim-10, dim-11 in that order
                 let ink = sample_module_ink(
-                    view, grid, transform, dimension,
-                    col as f64 + 0.5, row as f64 + 0.5, inverted,
+                    view,
+                    grid,
+                    transform,
+                    dimension,
+                    col as f64 + 0.5,
+                    row as f64 + 0.5,
+                    inverted,
                 )?;
                 bits = (bits << 1) | ink as u32;
             }
@@ -328,8 +332,13 @@ fn read_version_block(
             for k in 0..3u32 {
                 let row = row_lo + 2 - k; // dim-9, dim-10, dim-11 in that order
                 let ink = sample_module_ink(
-                    view, grid, transform, dimension,
-                    col as f64 + 0.5, row as f64 + 0.5, inverted,
+                    view,
+                    grid,
+                    transform,
+                    dimension,
+                    col as f64 + 0.5,
+                    row as f64 + 0.5,
+                    inverted,
                 )?;
                 bits = (bits << 1) | ink as u32;
             }
@@ -399,10 +408,15 @@ pub(crate) fn read_version_bits(
 ) -> Option<u32> {
     let tr = read_version_block(view, grid, transform, dimension_est, inverted, true);
     let bl = read_version_block(view, grid, transform, dimension_est, inverted, false);
-    [tr, tr.map(|b| reverse_bits(b, 18)), bl, bl.map(|b| reverse_bits(b, 18))]
-        .into_iter()
-        .flatten()
-        .find_map(bch_decode_version)
+    [
+        tr,
+        tr.map(|b| reverse_bits(b, 18)),
+        bl,
+        bl.map(|b| reverse_bits(b, 18)),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(bch_decode_version)
 }
 
 #[cfg(test)]
@@ -419,9 +433,13 @@ mod tests {
     fn ramp_view_and_transform() -> (Vec<u8>, PerspectiveTransform) {
         let dim = 10usize;
         let data: Vec<u8> = (0..dim * dim).map(|i| (10 * (i % dim)) as u8).collect();
-        let transform =
-            PerspectiveTransform::square_to_quad([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])
-                .unwrap();
+        let transform = PerspectiveTransform::square_to_quad([
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+        ])
+        .unwrap();
         (data, transform)
     }
 
@@ -505,7 +523,9 @@ mod tests {
     fn timing_transitions_formula_matches_real_matrices() {
         for v in 1i16..=6 {
             let code = qrcode::QrCode::with_version(
-                b"HELLO", qrcode::Version::Normal(v), qrcode::EcLevel::M,
+                b"HELLO",
+                qrcode::Version::Normal(v),
+                qrcode::EcLevel::M,
             )
             .unwrap();
             let dim = code.width();
@@ -537,7 +557,10 @@ mod tests {
         let x0 = quiet * scale;
         let x1 = x0 + dim as f64 * scale;
         let quad = [[x0, x0], [x1, x0], [x1, x1], [x0, x1]];
-        (PerspectiveTransform::square_to_quad(quad).unwrap(), img_side)
+        (
+            PerspectiveTransform::square_to_quad(quad).unwrap(),
+            img_side,
+        )
     }
 
     /// Render `payload` at `version`/`ecc` through `transform` into an
@@ -568,13 +591,14 @@ mod tests {
     #[test]
     fn read_version_bits_v7_and_v20_axis_aligned() {
         for version in [7i16, 20] {
-            let (transform, img_side) = axis_aligned_transform(
-                17 + 4 * version as usize,
-                4.0,
-                4.0,
+            let (transform, img_side) = axis_aligned_transform(17 + 4 * version as usize, 4.0, 4.0);
+            let (img, dim) = render(
+                b"HELLO WORLD",
+                version,
+                qrcode::EcLevel::M,
+                &transform,
+                img_side,
             );
-            let (img, dim) =
-                render(b"HELLO WORLD", version, qrcode::EcLevel::M, &transform, img_side);
             let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
             let grid = TileGrid::build(&view);
             let got = read_version_bits(&view, &grid, &transform, dim as u32, false);
@@ -593,7 +617,13 @@ mod tests {
         let version = 7i16;
         let dim = 17 + 4 * version as usize; // 45
         let (transform, img_side) = axis_aligned_transform(dim, 4.0, 4.0);
-        let (img, _) = render(b"CROPPED", version, qrcode::EcLevel::M, &transform, img_side);
+        let (img, _) = render(
+            b"CROPPED",
+            version,
+            qrcode::EcLevel::M,
+            &transform,
+            img_side,
+        );
 
         // TR block's sampled rows (0..5) land at pixel y in roughly
         // [16 + 0.5*4, 16 + 5.5*4] = [18, 38]; BL block's sampled rows
@@ -602,7 +632,10 @@ mod tests {
         // the TR block fully in-frame while placing the BL block's rows
         // entirely outside the cropped image.
         let crop_h = 100usize;
-        assert!(crop_h < img_side, "test assumption: crop must be a real crop");
+        assert!(
+            crop_h < img_side,
+            "test assumption: crop must be a real crop"
+        );
         let cropped = &img[..img_side * crop_h];
         let view = LumaView::new(cropped, img_side, crop_h, img_side).unwrap();
         let grid = TileGrid::build(&view);
@@ -650,12 +683,16 @@ mod tests {
         let half = side_px / 2.0;
         // Axis-aligned corners relative to center, then rotated.
         let corners = [[-half, -half], [half, -half], [half, half], [-half, half]];
-        let quad: [[f64; 2]; 4] = corners.map(|[dx, dy]| {
-            [center + dx * c - dy * s, center + dx * s + dy * c]
-        });
+        let quad: [[f64; 2]; 4] =
+            corners.map(|[dx, dy]| [center + dx * c - dy * s, center + dx * s + dy * c]);
         let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
-        let (img, dim_rendered) =
-            render(b"ROTATED", version, qrcode::EcLevel::M, &transform, img_side);
+        let (img, dim_rendered) = render(
+            b"ROTATED",
+            version,
+            qrcode::EcLevel::M,
+            &transform,
+            img_side,
+        );
         assert_eq!(dim_rendered, dim);
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let grid = TileGrid::build(&view);

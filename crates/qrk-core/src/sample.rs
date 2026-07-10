@@ -95,7 +95,10 @@ impl SampleRegion {
             self.transform.map(x1 as f64 / dimf, y1 as f64 / dimf),
             self.transform.map(x0 as f64 / dimf, y1 as f64 / dimf),
         ];
-        SampleRegionTrace { module_rect: self.module_rect, quad }
+        SampleRegionTrace {
+            module_rect: self.module_rect,
+            quad,
+        }
     }
 }
 
@@ -346,7 +349,10 @@ pub(crate) fn fit_line_tls_weighted(pts: &[[f64; 2]], weights: &[f64]) -> EdgeFi
         syy += w * dy * dy;
     }
     let theta = 0.5 * (2.0 * sxy).atan2(sxx - syy);
-    EdgeFit { centroid: [cx, cy], dir: [theta.cos(), theta.sin()] }
+    EdgeFit {
+        centroid: [cx, cy],
+        dir: [theta.cos(), theta.sin()],
+    }
 }
 
 /// Intersection of two `EdgeFit` lines; `None` when near-parallel (the two
@@ -587,9 +593,7 @@ fn robust_edge_fit(pass: &EdgePass, mode: EdgeFitMode) -> EdgeFit {
                 .points
                 .iter()
                 .copied()
-                .filter(|p| {
-                    ((p[0] - a0[0]) * normal[0] + (p[1] - a0[1]) * normal[1]).abs() <= tol
-                })
+                .filter(|p| ((p[0] - a0[0]) * normal[0] + (p[1] - a0[1]) * normal[1]).abs() <= tol)
                 .collect();
             // `kept` always contains the two anchors themselves, so a TLS
             // fit is always defined.
@@ -602,10 +606,18 @@ fn robust_edge_fit(pass: &EdgePass, mode: EdgeFitMode) -> EdgeFit {
         if normal[0] * out_dir[0] + normal[1] * out_dir[1] < 0.0 {
             normal = [-normal[0], -normal[1]];
         }
-        let residual =
-            |p: &[f64; 2]| (p[0] - fit.centroid[0]) * normal[0] + (p[1] - fit.centroid[1]) * normal[1];
-        let r_max = points.iter().map(residual).fold(f64::NEG_INFINITY, f64::max);
-        points.iter().copied().filter(|p| residual(p) >= r_max - tol).collect()
+        let residual = |p: &[f64; 2]| {
+            (p[0] - fit.centroid[0]) * normal[0] + (p[1] - fit.centroid[1]) * normal[1]
+        };
+        let r_max = points
+            .iter()
+            .map(residual)
+            .fold(f64::NEG_INFINITY, f64::max);
+        points
+            .iter()
+            .copied()
+            .filter(|p| residual(p) >= r_max - tol)
+            .collect()
     }
 
     let tol = 0.5 * pass.mean_module_px;
@@ -616,8 +628,12 @@ fn robust_edge_fit(pass: &EdgePass, mode: EdgeFitMode) -> EdgeFit {
     // Isolated outward outlier: drop it and re-hull the remainder.
     if pass.points.len() >= 3 && kept.len() == 1 {
         let outlier = kept[0];
-        let rest: Vec<[f64; 2]> =
-            pass.points.iter().copied().filter(|p| *p != outlier).collect();
+        let rest: Vec<[f64; 2]> = pass
+            .points
+            .iter()
+            .copied()
+            .filter(|p| *p != outlier)
+            .collect();
         let kept2 = hull_kept(&rest, pass.out_dir, tol);
         if kept2.len() >= 2 {
             return fit_line_tls(&kept2);
@@ -659,7 +675,15 @@ fn probe_edge_line(
         return None;
     }
     let guide = robust_edge_fit(&pass1, mode);
-    let pass2 = probe_edge_pass(view, grid, inverted, dimension, provisional, edge, Some(&guide));
+    let pass2 = probe_edge_pass(
+        view,
+        grid,
+        inverted,
+        dimension,
+        provisional,
+        edge,
+        Some(&guide),
+    );
     if pass2.points.len() < BR_MIN_EDGE_POINTS {
         return None;
     }
@@ -683,10 +707,24 @@ pub(crate) fn refine_fourth_corner(
     provisional: &PerspectiveTransform,
     mode: EdgeFitMode,
 ) -> Option<[f64; 2]> {
-    let bottom =
-        probe_edge_line(view, grid, t.inverted, dimension, provisional, ProbeEdge::Bottom, mode)?;
-    let right =
-        probe_edge_line(view, grid, t.inverted, dimension, provisional, ProbeEdge::Right, mode)?;
+    let bottom = probe_edge_line(
+        view,
+        grid,
+        t.inverted,
+        dimension,
+        provisional,
+        ProbeEdge::Bottom,
+        mode,
+    )?;
+    let right = probe_edge_line(
+        view,
+        grid,
+        t.inverted,
+        dimension,
+        provisional,
+        ProbeEdge::Right,
+        mode,
+    )?;
     intersect_lines(&bottom, &right)
 }
 
@@ -854,13 +892,21 @@ pub(crate) fn sample_grid(
             (Some(ap), _) => provisional_quad(t, dimension, Some(ap)),
             // Task 5b: image-derived outer corner as the 4th anchor.
             (None, Some(rc)) => (
-                [[3.5, 3.5], [dimf - 3.5, 3.5], [dimf, dimf], [3.5, dimf - 3.5]],
+                [
+                    [3.5, 3.5],
+                    [dimf - 3.5, 3.5],
+                    [dimf, dimf],
+                    [3.5, dimf - 3.5],
+                ],
                 [t.tl, t.tr, rc, t.bl],
             ),
             (None, None) => provisional_quad(t, dimension, None),
         };
         let transform = build_transform(src, dst, dimension as f64)?;
-        vec![SampleRegion { module_rect: [0, 0, dimension, dimension], transform }]
+        vec![SampleRegion {
+            module_rect: [0, 0, dimension, dimension],
+            transform,
+        }]
     } else {
         let provisional = provisional_transform(t, dimension);
         let ctx = AnchorContext {
@@ -899,7 +945,10 @@ pub(crate) fn sample_grid(
                     col1 = dimension;
                 }
 
-                regions.push(SampleRegion { module_rect: [col0, row0, col1, row1], transform });
+                regions.push(SampleRegion {
+                    module_rect: [col0, row0, col1, row1],
+                    transform,
+                });
             }
         }
         regions
@@ -921,15 +970,25 @@ pub(crate) fn sample_grid(
                 let (mx, my) = (x as f64 + 0.5, y as f64 + 0.5);
                 let (ink, gray) = match (source, &source_transform) {
                     (Some(src), Some(src_transform)) => {
-                        let gray = sample_module_gray_bilinear(src.view, src_transform, dimension, mx, my);
+                        let gray =
+                            sample_module_gray_bilinear(src.view, src_transform, dimension, mx, my);
                         let ink = gray.map(|g| {
-                            let (xu, yu) = working_tile_coords(view, &region.transform, dimension, mx, my);
+                            let (xu, yu) =
+                                working_tile_coords(view, &region.transform, dimension, mx, my);
                             (g < grid.threshold_at(xu, yu) as f32) != t.inverted
                         });
                         (ink, gray)
                     }
                     _ => (
-                        sample_module_ink(view, grid, &region.transform, dimension, mx, my, t.inverted),
+                        sample_module_ink(
+                            view,
+                            grid,
+                            &region.transform,
+                            dimension,
+                            mx,
+                            my,
+                            t.inverted,
+                        ),
                         sample_module_gray(view, &region.transform, dimension, mx, my),
                     ),
                 };
@@ -947,7 +1006,12 @@ pub(crate) fn sample_grid(
         }
     }
     let oob_fraction = oob as f64 / (dim * dim) as f64;
-    Some(SampledGrid { bits, regions, oob_fraction, grays })
+    Some(SampledGrid {
+        bits,
+        regions,
+        oob_fraction,
+        grays,
+    })
 }
 
 #[cfg(test)]
@@ -1057,9 +1121,12 @@ mod tests {
         transform: &PerspectiveTransform,
         img_side: usize,
     ) -> (Vec<u8>, qrcode::QrCode) {
-        let code =
-            qrcode::QrCode::with_version(payload, qrcode::Version::Normal(version), qrcode::EcLevel::M)
-                .unwrap();
+        let code = qrcode::QrCode::with_version(
+            payload,
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
+        )
+        .unwrap();
         let dim = code.width();
         let img = render_module_grid_transformed(
             dim,
@@ -1113,7 +1180,11 @@ mod tests {
     ) {
         let dim = 17 + 4 * version as usize;
         let (img, code) = render_code(payload, version, transform, img_side);
-        assert_eq!(code.width(), dim, "{label}: qrcode crate produced an unexpected dimension");
+        assert_eq!(
+            code.width(),
+            dim,
+            "{label}: qrcode crate produced an unexpected dimension"
+        );
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let tile_grid = TileGrid::build(&view);
 
@@ -1123,8 +1194,14 @@ mod tests {
         // pipeline stage would have to work with before any alignment
         // pattern has been located.
         let provisional = provisional_transform(&t, dim as u32);
-        let alignment =
-            locate_alignment_patterns(&view, &tile_grid, &provisional, version as u32, false, false);
+        let alignment = locate_alignment_patterns(
+            &view,
+            &tile_grid,
+            &provisional,
+            version as u32,
+            false,
+            false,
+        );
         let sampled = sample_grid(&view, &tile_grid, &t, dim as u32, &alignment, None, None)
             .unwrap_or_else(|| panic!("{label}: sample_grid returned None"));
         assert_bit_for_bit(&sampled.bits, &code, label);
@@ -1144,7 +1221,10 @@ mod tests {
             let (aa_quad, aa_side) = axis_aligned_quad(dim, scale, 4.0);
             let aa_transform = PerspectiveTransform::square_to_quad(aa_quad).unwrap();
             run_pipeline_and_assert(
-                format!("AA{version}").as_bytes(), version, &aa_transform, aa_side,
+                format!("AA{version}").as_bytes(),
+                version,
+                &aa_transform,
+                aa_side,
                 &format!("v{version} axis-aligned"),
             );
 
@@ -1152,7 +1232,10 @@ mod tests {
             let rot_quad = rotated_quad(dim, scale, 30.0, rot_side);
             let rot_transform = PerspectiveTransform::square_to_quad(rot_quad).unwrap();
             run_pipeline_and_assert(
-                format!("RO{version}").as_bytes(), version, &rot_transform, rot_side,
+                format!("RO{version}").as_bytes(),
+                version,
+                &rot_transform,
+                rot_side,
                 &format!("v{version} rotated-30deg"),
             );
 
@@ -1160,7 +1243,10 @@ mod tests {
             let persp_quad = perspective_quad(dim, scale, 0.97, persp_side);
             let persp_transform = PerspectiveTransform::square_to_quad(persp_quad).unwrap();
             run_pipeline_and_assert(
-                format!("PW{version}").as_bytes(), version, &persp_transform, persp_side,
+                format!("PW{version}").as_bytes(),
+                version,
+                &persp_transform,
+                persp_side,
                 &format!("v{version} perspective-warped"),
             );
         }
@@ -1230,8 +1316,14 @@ mod tests {
         // whether triplet/alignment detection survives a cropped frame.
         let t = triplet_from_transform(&transform, dim);
         let provisional = provisional_transform(&t, dim as u32);
-        let alignment =
-            locate_alignment_patterns(&view, &tile_grid, &provisional, version as u32, false, false);
+        let alignment = locate_alignment_patterns(
+            &view,
+            &tile_grid,
+            &provisional,
+            version as u32,
+            false,
+            false,
+        );
         let sampled = sample_grid(&view, &tile_grid, &t, dim as u32, &alignment, None, None)
             .expect("sample_grid should still return a (bad) result, not None");
         assert!(
@@ -1279,7 +1371,8 @@ mod tests {
 
         // Downscale (production NN formula) to a working resolution whose
         // own module scale is `working_module_px` px/module.
-        let max_working_dim = (img_side as f64 * working_module_px / source_scale_px).round() as u32;
+        let max_working_dim =
+            (img_side as f64 * working_module_px / source_scale_px).round() as u32;
         let (working_buf, working_w, working_h) = downscale_luma(&source_view, max_working_dim)
             .expect("test setup: a downscale must actually be needed here");
         let working_view = LumaView::new(&working_buf, working_w, working_h, working_w).unwrap();
@@ -1297,7 +1390,12 @@ mod tests {
         let t = triplet_from_transform(&working_transform, dim);
         let provisional = provisional_transform(&t, dim as u32);
         let alignment = locate_alignment_patterns(
-            &working_view, &working_tile_grid, &provisional, version as u32, false, false,
+            &working_view,
+            &working_tile_grid,
+            &provisional,
+            version as u32,
+            false,
+            false,
         );
 
         let sampled = sample_grid(
@@ -1307,7 +1405,11 @@ mod tests {
             dim as u32,
             &alignment,
             None,
-            Some(SourceView { view: &source_view, sx, sy }),
+            Some(SourceView {
+                view: &source_view,
+                sx,
+                sy,
+            }),
         )
         .unwrap_or_else(|| panic!("sample_grid returned None"));
         (sampled.bits, code, sx)
@@ -1316,7 +1418,11 @@ mod tests {
     #[test]
     fn source_resolution_sampling_is_bit_exact_at_2px_per_module_working_v1() {
         let (bits, code, scale) = run_source_resolution_pipeline(b"SRCRES1", 1, 16.0, 2.0);
-        assert_bit_for_bit(&bits, &code, &format!("v1 source-res (working scale {scale:.4})"));
+        assert_bit_for_bit(
+            &bits,
+            &code,
+            &format!("v1 source-res (working scale {scale:.4})"),
+        );
     }
 
     #[test]
@@ -1324,7 +1430,9 @@ mod tests {
         let (bits, code, scale) =
             run_source_resolution_pipeline(b"SRCRESMULTIREGION", 7, 16.0, 2.0);
         assert_bit_for_bit(
-            &bits, &code, &format!("v7 source-res multi-region (working scale {scale:.4})"),
+            &bits,
+            &code,
+            &format!("v7 source-res multi-region (working scale {scale:.4})"),
         );
     }
 
@@ -1383,7 +1491,11 @@ mod tests {
         let source_view = LumaView::new(&source_buf, src_w, src_h, src_w).unwrap();
         let (_working_buf, working_w, working_h) = downscale_luma(&source_view, max_dim)
             .expect("test setup: a downscale must actually be needed here");
-        assert_eq!((working_w, working_h), (128, 97), "production rounding changed?");
+        assert_eq!(
+            (working_w, working_h),
+            (128, 97),
+            "production rounding changed?"
+        );
 
         let sx = working_w as f64 / src_w as f64;
         let sy = working_h as f64 / src_h as f64;
@@ -1404,7 +1516,11 @@ mod tests {
         ])
         .unwrap();
 
-        let src = SourceView { view: &source_view, sx, sy };
+        let src = SourceView {
+            view: &source_view,
+            sx,
+            sy,
+        };
         let lifted = src.lift(&working);
         let got = lifted.map(1.0, 1.0); // bottom-right corner
         let want = [src_w as f64, src_h as f64];
@@ -1433,7 +1549,13 @@ mod tests {
 
     #[test]
     fn fit_line_tls_weighted_with_equal_weights_matches_unweighted() {
-        let pts = [[0.0, 0.1], [1.0, -0.1], [2.0, 0.15], [3.0, -0.05], [4.0, 0.0]];
+        let pts = [
+            [0.0, 0.1],
+            [1.0, -0.1],
+            [2.0, 0.15],
+            [3.0, -0.05],
+            [4.0, 0.0],
+        ];
         let unweighted = fit_line_tls(&pts);
         let weighted = fit_line_tls_weighted(&pts, &[1.0; 5]);
         assert!((unweighted.centroid[0] - weighted.centroid[0]).abs() < 1e-12);

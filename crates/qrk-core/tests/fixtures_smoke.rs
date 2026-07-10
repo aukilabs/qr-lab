@@ -18,7 +18,14 @@ fn suite_loads_and_ground_truth_is_sane() {
                 assert!(x > 0.0 && x < f.width as f64 - 1.0);
                 assert!(y > 0.0 && y < f.height as f64 - 1.0);
             }
-            assert!(c.module_size_px > 1.5, "{}: {}", f.name, c.module_size_px);
+            if f.degraded {
+                // Plan 6 degraded families deliberately go below the nominal
+                // module floor (lowres_ targets 1.4 px/module — sub-Nyquist
+                // headroom probes); only pin that the value is physical.
+                assert!(c.module_size_px > 1.0, "{}: {}", f.name, c.module_size_px);
+            } else {
+                assert!(c.module_size_px > 1.5, "{}: {}", f.name, c.module_size_px);
+            }
         }
     }
     assert_eq!(multi_max, 4, "multi_ scenarios must reach 4 codes");
@@ -30,7 +37,10 @@ fn luma_pixels_match_ground_truth_ink() {
     // (0.35 modules per axis) — inside is dark finder ink, outside is the
     // light quiet zone. (1.5*module would overshoot the finder's 1-module
     // dark outer ring into the white second ring.)
-    for f in common::load_all() {
+    // Golden fixtures only: Plan 6 degradations (occlusion over the TL
+    // finder, deep shadow, glare) legitimately break these probes — that is
+    // what they are for.
+    for f in common::load_golden() {
         let v = f.view();
         for c in &f.codes {
             let tl = c.corners_px[0];
@@ -57,8 +67,7 @@ fn luma_pixels_match_ground_truth_ink() {
             match (c.opaque_plate, c.inverted) {
                 (true, false) => assert!(outside > 150, "{}: out={}", f.name, outside),
                 (true, true) => assert!(outside < 110, "{}: out={}", f.name, outside),
-                (false, _) => assert!(outside > 95 && outside < 165,
-                                      "{}: out={}", f.name, outside),
+                (false, _) => assert!(outside > 95 && outside < 165, "{}: out={}", f.name, outside),
             }
         }
     }

@@ -36,7 +36,7 @@ export interface CameraSimControlsProps {
 function row(label: string, control: ReactNode, valueLabel: string) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
-      <span style={{ display: "flex", justifyContent: "space-between", color: "#9ca3af" }}>
+      <span style={{ display: "flex", justifyContent: "space-between", color: "var(--text-muted)" }}>
         <span>{label}</span>
         <span style={{ fontVariantNumeric: "tabular-nums" }}>{valueLabel}</span>
       </span>

@@ -47,46 +47,46 @@ use crate::LumaView;
 /// `c + 0.5` — the same `index + 0.5` convention `version.rs` already uses
 /// for its own module-center sampling.
 const ALIGNMENT_COORDS: [&[u8]; 40] = [
-    &[],                                  // v1
-    &[6, 18],                             // v2
-    &[6, 22],                             // v3
-    &[6, 26],                             // v4
-    &[6, 30],                             // v5
-    &[6, 34],                             // v6
-    &[6, 22, 38],                         // v7
-    &[6, 24, 42],                         // v8
-    &[6, 26, 46],                         // v9
-    &[6, 28, 50],                         // v10
-    &[6, 30, 54],                         // v11
-    &[6, 32, 58],                         // v12
-    &[6, 34, 62],                         // v13
-    &[6, 26, 46, 66],                     // v14
-    &[6, 26, 48, 70],                     // v15
-    &[6, 26, 50, 74],                     // v16
-    &[6, 30, 54, 78],                     // v17
-    &[6, 30, 56, 82],                     // v18
-    &[6, 30, 58, 86],                     // v19
-    &[6, 34, 62, 90],                     // v20
-    &[6, 28, 50, 72, 94],                 // v21
-    &[6, 26, 50, 74, 98],                 // v22
-    &[6, 30, 54, 78, 102],                // v23
-    &[6, 28, 54, 80, 106],                // v24
-    &[6, 32, 58, 84, 110],                // v25
-    &[6, 30, 58, 86, 114],                // v26
-    &[6, 34, 62, 90, 118],                // v27
-    &[6, 26, 50, 74, 98, 122],            // v28
-    &[6, 30, 54, 78, 102, 126],           // v29
-    &[6, 26, 52, 78, 104, 130],           // v30
-    &[6, 30, 56, 82, 108, 134],           // v31
-    &[6, 34, 60, 86, 112, 138],           // v32
-    &[6, 30, 58, 86, 114, 142],           // v33
-    &[6, 34, 62, 90, 118, 146],           // v34
-    &[6, 30, 54, 78, 102, 126, 150],      // v35
-    &[6, 24, 50, 76, 102, 128, 154],      // v36
-    &[6, 28, 54, 80, 106, 132, 158],      // v37
-    &[6, 32, 58, 84, 110, 136, 162],      // v38
-    &[6, 26, 54, 82, 110, 138, 166],      // v39
-    &[6, 30, 58, 86, 114, 142, 170],      // v40
+    &[],                             // v1
+    &[6, 18],                        // v2
+    &[6, 22],                        // v3
+    &[6, 26],                        // v4
+    &[6, 30],                        // v5
+    &[6, 34],                        // v6
+    &[6, 22, 38],                    // v7
+    &[6, 24, 42],                    // v8
+    &[6, 26, 46],                    // v9
+    &[6, 28, 50],                    // v10
+    &[6, 30, 54],                    // v11
+    &[6, 32, 58],                    // v12
+    &[6, 34, 62],                    // v13
+    &[6, 26, 46, 66],                // v14
+    &[6, 26, 48, 70],                // v15
+    &[6, 26, 50, 74],                // v16
+    &[6, 30, 54, 78],                // v17
+    &[6, 30, 56, 82],                // v18
+    &[6, 30, 58, 86],                // v19
+    &[6, 34, 62, 90],                // v20
+    &[6, 28, 50, 72, 94],            // v21
+    &[6, 26, 50, 74, 98],            // v22
+    &[6, 30, 54, 78, 102],           // v23
+    &[6, 28, 54, 80, 106],           // v24
+    &[6, 32, 58, 84, 110],           // v25
+    &[6, 30, 58, 86, 114],           // v26
+    &[6, 34, 62, 90, 118],           // v27
+    &[6, 26, 50, 74, 98, 122],       // v28
+    &[6, 30, 54, 78, 102, 126],      // v29
+    &[6, 26, 52, 78, 104, 130],      // v30
+    &[6, 30, 56, 82, 108, 134],      // v31
+    &[6, 34, 60, 86, 112, 138],      // v32
+    &[6, 30, 58, 86, 114, 142],      // v33
+    &[6, 34, 62, 90, 118, 146],      // v34
+    &[6, 30, 54, 78, 102, 126, 150], // v35
+    &[6, 24, 50, 76, 102, 128, 154], // v36
+    &[6, 28, 54, 80, 106, 132, 158], // v37
+    &[6, 32, 58, 84, 110, 136, 162], // v38
+    &[6, 26, 54, 82, 110, 138, 166], // v39
+    &[6, 30, 58, 86, 114, 142, 170], // v40
 ];
 
 /// The alignment-pattern coordinate set for `version`.
@@ -196,7 +196,10 @@ impl AlignmentGrid {
                          is_finder_corner above — the two have gone out of sync"
                     ),
                 };
-                out.push(AlignmentTraceEntry { predicted: self.predicted[i * n + j], found });
+                out.push(AlignmentTraceEntry {
+                    predicted: self.predicted[i * n + j],
+                    found,
+                });
             }
         }
         out
@@ -316,8 +319,20 @@ struct ProbeContext<'a> {
 /// cross-section cannot confirm a pattern.
 fn cross_section_matches(ctx: &ProbeContext, cu: f64, cv: f64, horizontal: bool) -> bool {
     for (k, &offset) in CROSS_SECTION_OFFSETS.iter().enumerate() {
-        let (col, row) = if horizontal { (cu + offset, cv) } else { (cu, cv + offset) };
-        match sample_module_ink(ctx.view, ctx.grid, ctx.transform, ctx.dim, col, row, ctx.inverted) {
+        let (col, row) = if horizontal {
+            (cu + offset, cv)
+        } else {
+            (cu, cv + offset)
+        };
+        match sample_module_ink(
+            ctx.view,
+            ctx.grid,
+            ctx.transform,
+            ctx.dim,
+            col,
+            row,
+            ctx.inverted,
+        ) {
             Some(ink) if ink == EXPECTED_CROSS_SECTION[k] => {}
             _ => return false,
         }
@@ -357,7 +372,13 @@ fn recenter_alignment_pattern(
     let inverse = provisional.inverse();
     let [u0, v0] = inverse.map(predicted[0], predicted[1]);
     let (center_u, center_v) = (u0 * dimf, v0 * dimf);
-    let ctx = ProbeContext { view, grid, transform: provisional, dim, inverted };
+    let ctx = ProbeContext {
+        view,
+        grid,
+        transform: provisional,
+        dim,
+        inverted,
+    };
 
     let steps = (ALIGNMENT_PROBE_HALF_MODULES / PROBE_STEP_MODULES).round() as i32;
     let mut hit_sum = (0.0f64, 0.0f64);
@@ -368,7 +389,8 @@ fn recenter_alignment_pattern(
         for dj in -steps..=steps {
             let du = dj as f64 * PROBE_STEP_MODULES;
             let cu = center_u + du;
-            if cross_section_matches(&ctx, cu, cv, true) && cross_section_matches(&ctx, cu, cv, false)
+            if cross_section_matches(&ctx, cu, cv, true)
+                && cross_section_matches(&ctx, cu, cv, false)
             {
                 hit_sum.0 += du;
                 hit_sum.1 += dv;
@@ -412,10 +434,18 @@ pub(crate) fn locate_alignment_patterns(
     let coords = alignment_coords(version).to_vec();
     let n = coords.len();
     let mut found = vec![AnchorSlot::Missing; n * n];
-    let mut predicted = if want_trace { vec![[0.0, 0.0]; n * n] } else { Vec::new() };
+    let mut predicted = if want_trace {
+        vec![[0.0, 0.0]; n * n]
+    } else {
+        Vec::new()
+    };
     if n == 0 {
         // v1: no alignment patterns at all.
-        return AlignmentGrid { coords, found, predicted };
+        return AlignmentGrid {
+            coords,
+            found,
+            predicted,
+        };
     }
     for &(ci, cj) in &[(0usize, 0usize), (0, n - 1), (n - 1, 0)] {
         found[ci * n + cj] = AnchorSlot::FinderCorner;
@@ -441,12 +471,17 @@ pub(crate) fn locate_alignment_patterns(
             if want_trace {
                 predicted[i * n + j] = p;
             }
-            found[i * n + j] = recenter_alignment_pattern(view, grid, provisional, dim, p, inverted)
-                .map(AnchorSlot::Found)
-                .unwrap_or(AnchorSlot::Missing);
+            found[i * n + j] =
+                recenter_alignment_pattern(view, grid, provisional, dim, p, inverted)
+                    .map(AnchorSlot::Found)
+                    .unwrap_or(AnchorSlot::Missing);
         }
     }
-    AlignmentGrid { coords, found, predicted }
+    AlignmentGrid {
+        coords,
+        found,
+        predicted,
+    }
 }
 
 #[cfg(test)]
@@ -533,16 +568,22 @@ mod tests {
         let x0 = quiet * scale;
         let x1 = x0 + dim as f64 * scale;
         let quad = [[x0, x0], [x1, x0], [x1, x1], [x0, x1]];
-        (PerspectiveTransform::square_to_quad(quad).unwrap(), img_side)
+        (
+            PerspectiveTransform::square_to_quad(quad).unwrap(),
+            img_side,
+        )
     }
 
     /// Render a v7 `qrcode`-crate matrix through `transform` into an
     /// `img_side`-square luma buffer.
-    fn render_v7(payload: &[u8], transform: &PerspectiveTransform, img_side: usize) -> (Vec<u8>, usize) {
-        let code = qrcode::QrCode::with_version(
-            payload, qrcode::Version::Normal(7), qrcode::EcLevel::M,
-        )
-        .unwrap();
+    fn render_v7(
+        payload: &[u8],
+        transform: &PerspectiveTransform,
+        img_side: usize,
+    ) -> (Vec<u8>, usize) {
+        let code =
+            qrcode::QrCode::with_version(payload, qrcode::Version::Normal(7), qrcode::EcLevel::M)
+                .unwrap();
         let dim = code.width();
         let img = render_module_grid_transformed(
             dim,
@@ -589,7 +630,11 @@ mod tests {
         // want_trace = true: the dense predicted lattice must be populated
         // and convertible to trace entries (one per searched slot; the
         // *found* positions checked below are the precise geometric gate).
-        assert_eq!(ag.predicted.len(), n * n, "want_trace=true must populate predicted");
+        assert_eq!(
+            ag.predicted.len(),
+            n * n,
+            "want_trace=true must populate predicted"
+        );
         assert_eq!(ag.to_trace_entries().len(), n * n - 3);
 
         let half_module_px = 0.5 * scale;
@@ -602,8 +647,12 @@ mod tests {
                 let expected = analytic_position(&transform, &ag.coords, i, j, dim);
                 match ag.found[i * n + j] {
                     AnchorSlot::Found(p) => {
-                        let d = ((p[0] - expected[0]).powi(2) + (p[1] - expected[1]).powi(2)).sqrt();
-                        assert!(d < half_module_px, "node ({i},{j}) off by {d}px (limit {half_module_px}px)");
+                        let d =
+                            ((p[0] - expected[0]).powi(2) + (p[1] - expected[1]).powi(2)).sqrt();
+                        assert!(
+                            d < half_module_px,
+                            "node ({i},{j}) off by {d}px (limit {half_module_px}px)"
+                        );
                         checked += 1;
                     }
                     other => panic!("node ({i},{j}) not found: {other:?}"),
@@ -638,7 +687,10 @@ mod tests {
         // want_trace = false (the untraced hot path): no predicted lattice
         // may be allocated at all — the review-mandated gating this test
         // pins alongside its main bias-recovery assertion.
-        assert!(ag.predicted.is_empty(), "want_trace=false must leave predicted empty");
+        assert!(
+            ag.predicted.is_empty(),
+            "want_trace=false must leave predicted empty"
+        );
         let n = ag.coords.len();
         let half_module_px = 0.5 * scale;
         let mut checked = 0;
@@ -653,7 +705,8 @@ mod tests {
                 let expected = analytic_position(&true_transform, &ag.coords, i, j, dim);
                 match ag.found[i * n + j] {
                     AnchorSlot::Found(p) => {
-                        let d = ((p[0] - expected[0]).powi(2) + (p[1] - expected[1]).powi(2)).sqrt();
+                        let d =
+                            ((p[0] - expected[0]).powi(2) + (p[1] - expected[1]).powi(2)).sqrt();
                         assert!(
                             d < half_module_px,
                             "node ({i},{j}) off by {d}px (limit {half_module_px}px) despite bias correction"

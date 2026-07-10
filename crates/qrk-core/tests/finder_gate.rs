@@ -12,7 +12,10 @@ use common::expected_finder_centers as expected_centers;
 fn every_ground_truth_finder_is_detected() {
     let mut missed: Vec<String> = Vec::new();
     let mut worst_fp = 0usize;
-    for fx in common::load_all() {
+    // Golden (non-degraded) fixtures only: degraded fixtures may have
+    // expect_detect == false by design and are measured by the Plan 6
+    // robustness gate/bench instead of this 100% gate.
+    for fx in common::load_golden() {
         let view = fx.view();
         let grid = TileGrid::build(&view);
         let found = find_finders(&view, &grid);
@@ -27,7 +30,8 @@ fn every_ground_truth_finder_is_detected() {
                 if best > tol {
                     missed.push(format!(
                         "{} code v{} finder {k}: nearest {best:.2}px (tol {tol:.2})",
-                        fx.name, c.version));
+                        fx.name, c.version
+                    ));
                 }
             }
         }

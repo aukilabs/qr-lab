@@ -1,0 +1,462 @@
+{
+  "detections": {
+    "finders": [
+      {
+        "x": 466.75,
+        "y": 102.0,
+        "module": 1.7857142857142856,
+        "inverted": true,
+        "hits": 2
+      },
+      {
+        "x": 454.72222222222223,
+        "y": 276.1666666666667,
+        "module": 6.634920634920634,
+        "inverted": false,
+        "hits": 9
+      },
+      {
+        "x": 559.7222222222222,
+        "y": 406.5,
+        "module": 6.650793650793649,
+        "inverted": false,
+        "hits": 9
+      },
+      {
+        "x": 441.5,
+        "y": 393.875,
+        "module": 6.749999999999999,
+        "inverted": false,
+        "hits": 4
+      }
+    ],
+    "triplets": [
+      {
+        "tl": [
+          441.5,
+          393.875
+        ],
+        "tr": [
+          454.77777777777777,
+          276.0
+        ],
+        "bl": [
+          559.7222222222222,
+          406.5
+        ],
+        "module": 7.299754687813247,
+        "dimension": 25,
+        "snap_error": 1.5,
+        "inverted": false,
+        "finder_indices": [
+          1,
+          0,
+          2
+        ]
+      }
+    ],
+    "codes": [
+      {
+        "payload": "Q:shadow_04:0",
+        "payload_bytes": [
+          81,
+          58,
+          115,
+          104,
+          97,
+          100,
+          111,
+          119,
+          95,
+          48,
+          52,
+          58,
+          48
+        ],
+        "version": 2,
+        "ecc": "M",
+        "mirrored": false,
+        "dimension": 25,
+        "corners": [
+          [
+            415.64946807106463,
+            414.92198265621295
+          ],
+          [
+            434.77682920576325,
+            251.12851868943244
+          ],
+          [
+            594.8317019703802,
+            269.03541523285173
+          ],
+          [
+            580.5425654752532,
+            432.39041095890417
+          ]
+        ],
+        "inverted": false,
+        "finder_indices": [
+          1,
+          0,
+          2
+        ],
+        "refined_corners": [
+          [
+            416.18670599960075,
+            414.1620022141627
+          ],
+          [
+            434.4770983709208,
+            250.90332550187384
+          ],
+          [
+            597.6204618628758,
+            267.9746648388484
+          ],
+          [
+            580.1718258981876,
+            431.51105124789353
+          ]
+        ],
+        "corner_refined": [
+          true,
+          true,
+          true,
+          true
+        ]
+      }
+    ],
+    "timings": {
+      "tiles_ns": 0,
+      "finders_ns": 0,
+      "triplets_ns": 0,
+      "version_ns": 0,
+      "alignment_ns": 0,
+      "sample_decode_ns": 0,
+      "refine_ns": 0
+    },
+    "source_scale": 1.0
+  },
+  "robust": {
+    "codes": [
+      {
+        "code": {
+          "payload": "Q:shadow_04:0",
+          "payload_bytes": [
+            81,
+            58,
+            115,
+            104,
+            97,
+            100,
+            111,
+            119,
+            95,
+            48,
+            52,
+            58,
+            48
+          ],
+          "version": 2,
+          "ecc": "M",
+          "mirrored": false,
+          "dimension": 25,
+          "corners": [
+            [
+              415.64946807106463,
+              414.92198265621295
+            ],
+            [
+              434.77682920576325,
+              251.12851868943244
+            ],
+            [
+              594.8317019703802,
+              269.03541523285173
+            ],
+            [
+              580.5425654752532,
+              432.39041095890417
+            ]
+          ],
+          "inverted": false,
+          "finder_indices": [
+            1,
+            0,
+            2
+          ],
+          "refined_corners": [
+            [
+              416.18670599960075,
+              414.1620022141627
+            ],
+            [
+              434.4770983709208,
+              250.90332550187384
+            ],
+            [
+              597.6204618628758,
+              267.9746648388484
+            ],
+            [
+              580.1718258981876,
+              431.51105124789353
+            ]
+          ],
+          "corner_refined": [
+            true,
+            true,
+            true,
+            true
+          ]
+        },
+        "corners_source": [
+          [
+            415.64946807106463,
+            414.92198265621295
+          ],
+          [
+            434.77682920576325,
+            251.12851868943244
+          ],
+          [
+            594.8317019703802,
+            269.03541523285173
+          ],
+          [
+            580.5425654752532,
+            432.39041095890417
+          ]
+        ],
+        "refined_corners_source": [
+          [
+            416.18670599960075,
+            414.1620022141627
+          ],
+          [
+            434.4770983709208,
+            250.90332550187384
+          ],
+          [
+            597.6204618628758,
+            267.9746648388484
+          ],
+          [
+            580.1718258981876,
+            431.51105124789353
+          ]
+        ],
+        "variant": "SauvolaThreshold",
+        "stage": 3
+      }
+    ],
+    "variants": [
+      {
+        "kind": "Baseline",
+        "stage": 0,
+        "timings": {
+          "tiles_ns": 0,
+          "finders_ns": 0,
+          "triplets_ns": 0,
+          "version_ns": 0,
+          "alignment_ns": 0,
+          "sample_decode_ns": 0,
+          "refine_ns": 0
+        },
+        "total_ns": 0,
+        "finders": 3,
+        "triplets": 0,
+        "codes": 0,
+        "new_codes": 0
+      },
+      {
+        "kind": {
+          "Pyramid": {
+            "level": 1
+          }
+        },
+        "stage": 1,
+        "timings": {
+          "tiles_ns": 0,
+          "finders_ns": 0,
+          "triplets_ns": 0,
+          "version_ns": 0,
+          "alignment_ns": 0,
+          "sample_decode_ns": 0,
+          "refine_ns": 0
+        },
+        "total_ns": 0,
+        "finders": 1,
+        "triplets": 0,
+        "codes": 0,
+        "new_codes": 0
+      },
+      {
+        "kind": {
+          "ThresholdOffset": {
+            "offset": -8
+          }
+        },
+        "stage": 2,
+        "timings": {
+          "tiles_ns": 0,
+          "finders_ns": 0,
+          "triplets_ns": 0,
+          "version_ns": 0,
+          "alignment_ns": 0,
+          "sample_decode_ns": 0,
+          "refine_ns": 0
+        },
+        "total_ns": 0,
+        "finders": 2,
+        "triplets": 0,
+        "codes": 0,
+        "new_codes": 0
+      },
+      {
+        "kind": {
+          "ThresholdOffset": {
+            "offset": 8
+          }
+        },
+        "stage": 2,
+        "timings": {
+          "tiles_ns": 0,
+          "finders_ns": 0,
+          "triplets_ns": 0,
+          "version_ns": 0,
+          "alignment_ns": 0,
+          "sample_decode_ns": 0,
+          "refine_ns": 0
+        },
+        "total_ns": 0,
+        "finders": 2,
+        "triplets": 0,
+        "codes": 0,
+        "new_codes": 0
+      },
+      {
+        "kind": "LowContrastFloor",
+        "stage": 2,
+        "timings": {
+          "tiles_ns": 0,
+          "finders_ns": 0,
+          "triplets_ns": 0,
+          "version_ns": 0,
+          "alignment_ns": 0,
+          "sample_decode_ns": 0,
+          "refine_ns": 0
+        },
+        "total_ns": 0,
+        "finders": 3,
+        "triplets": 0,
+        "codes": 0,
+        "new_codes": 0
+      },
+      {
+        "kind": "SauvolaThreshold",
+        "stage": 3,
+        "timings": {
+          "tiles_ns": 0,
+          "finders_ns": 0,
+          "triplets_ns": 0,
+          "version_ns": 0,
+          "alignment_ns": 0,
+          "sample_decode_ns": 0,
+          "refine_ns": 0
+        },
+        "total_ns": 0,
+        "finders": 3,
+        "triplets": 1,
+        "codes": 1,
+        "new_codes": 1
+      },
+      {
+        "kind": "Upscaled2x",
+        "stage": 5,
+        "timings": {
+          "tiles_ns": 0,
+          "finders_ns": 0,
+          "triplets_ns": 0,
+          "version_ns": 0,
+          "alignment_ns": 0,
+          "sample_decode_ns": 0,
+          "refine_ns": 0
+        },
+        "total_ns": 0,
+        "finders": 2,
+        "triplets": 0,
+        "codes": 0,
+        "new_codes": 0
+      }
+    ],
+    "early_exited": false,
+    "budget_exhausted": false,
+    "total_ns": 0,
+    "triplet_evidence": [
+      [
+        485.3333333333333,
+        358.7916666666667
+      ]
+    ],
+    "finders": [
+      {
+        "x": 466.75,
+        "y": 102.0,
+        "module": 1.7857142857142856,
+        "inverted": true,
+        "hits": 2
+      },
+      {
+        "x": 454.72222222222223,
+        "y": 276.1666666666667,
+        "module": 6.634920634920634,
+        "inverted": false,
+        "hits": 9
+      },
+      {
+        "x": 559.7222222222222,
+        "y": 406.5,
+        "module": 6.650793650793649,
+        "inverted": false,
+        "hits": 9
+      },
+      {
+        "x": 441.5,
+        "y": 393.875,
+        "module": 6.749999999999999,
+        "inverted": false,
+        "hits": 4
+      }
+    ],
+    "triplets": [
+      {
+        "tl": [
+          441.5,
+          393.875
+        ],
+        "tr": [
+          454.77777777777777,
+          276.0
+        ],
+        "bl": [
+          559.7222222222222,
+          406.5
+        ],
+        "module": 7.299754687813247,
+        "dimension": 25,
+        "snap_error": 1.5,
+        "inverted": false,
+        "finder_indices": [
+          1,
+          0,
+          2
+        ]
+      }
+    ]
+  },
+  "snapshots": null,
+  "scan_width": 1280,
+  "scan_height": 720
+}

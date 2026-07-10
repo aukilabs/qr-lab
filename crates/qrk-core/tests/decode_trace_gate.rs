@@ -30,7 +30,10 @@ fn near_00_trace_has_populated_decode_fields() {
 
     // attempts: one per attempted candidate this frame, every one carrying
     // per-round visibility (Task 6's carried-item fix).
-    assert!(!trace.attempts.is_empty(), "expected at least one recorded attempt");
+    assert!(
+        !trace.attempts.is_empty(),
+        "expected at least one recorded attempt"
+    );
     assert!(
         trace.attempts.iter().any(|a| a.outcome == "decoded"),
         "expected a decoded attempt among {:?}",
@@ -59,7 +62,10 @@ fn near_00_trace_has_populated_decode_fields() {
         "Plan 5C: singular sample_regions is failure-diagnosis only, got {:?}",
         trace.sample_regions
     );
-    assert!(trace.bits.is_none(), "Plan 5C: singular bits is failure-diagnosis only");
+    assert!(
+        trace.bits.is_none(),
+        "Plan 5C: singular bits is failure-diagnosis only"
+    );
 
     // alignment: near_00's ground-truth code is v1 (dimension 21), which
     // has NO alignment patterns at all (ISO 18004) — so an empty vec here
@@ -74,7 +80,11 @@ fn near_00_trace_has_populated_decode_fields() {
     );
 
     // sample_regions: v1 always samples through a single whole-grid region.
-    assert_eq!(code_trace.sample_regions.len(), 1, "v1 candidates sample through one region");
+    assert_eq!(
+        code_trace.sample_regions.len(),
+        1,
+        "v1 candidates sample through one region"
+    );
     let region = &code_trace.sample_regions[0];
     assert_eq!(region.module_rect, [0, 0, 21, 21]);
     assert_eq!(region.quad.len(), 4);
@@ -111,7 +121,11 @@ fn multi_07_trace_has_one_codes_entry_per_decoded_code() {
     // append-only — collectively covering every index exactly once).
     let mut indices: Vec<usize> = trace.codes.iter().map(|c| c.code_index).collect();
     indices.sort_unstable();
-    assert_eq!(indices, vec![0, 1, 2, 3], "code_index values must be distinct and cover 0..4");
+    assert_eq!(
+        indices,
+        vec![0, 1, 2, 3],
+        "code_index values must be distinct and cover 0..4"
+    );
 
     for code_trace in &trace.codes {
         assert!(
@@ -148,7 +162,10 @@ fn multi_07_trace_has_one_codes_entry_per_decoded_code() {
 fn round_budget_never_binds_on_the_golden_fixture_suite() {
     const MAX_DECODE_ROUNDS: usize = 72;
     let mut worst: (String, usize) = (String::new(), 0);
-    for fixture in common::load_all() {
+    // Golden fixtures only: the round budget is allowed to bind on
+    // hostile input, and Plan 6 degraded fixtures are deliberately
+    // hostile.
+    for fixture in common::load_golden() {
         let view = fixture.view();
         let mut trace = Trace::new();
         let _ = detect_traced(&view, &mut trace);
@@ -165,6 +182,12 @@ fn round_budget_never_binds_on_the_golden_fixture_suite() {
     }
     // Sanity: the suite actually exercised a non-trivial amount of work
     // (catches an accidentally-empty fixture list silently passing).
-    assert!(worst.1 > 0, "expected at least one fixture to run at least one round");
-    println!("worst-case golden-suite rounds: {} ({} rounds)", worst.0, worst.1);
+    assert!(
+        worst.1 > 0,
+        "expected at least one fixture to run at least one round"
+    );
+    println!(
+        "worst-case golden-suite rounds: {} ({} rounds)",
+        worst.0, worst.1
+    );
 }

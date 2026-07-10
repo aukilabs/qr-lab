@@ -22,9 +22,14 @@ const THROTTLE_MS = 100;
 
 export interface VideoControlsProps {
   videoState: VideoSourceState;
+  /** Called once when the user grabs the scrubber (pointerdown — covers both
+   * a click-to-jump and a drag). Plan 6 uses it to reset the temporal
+   * session's cross-frame pool on a large seek; optional so non-session
+   * callers can omit it. */
+  onScrubStart?: () => void;
 }
 
-export function VideoControls({ videoState }: VideoControlsProps) {
+export function VideoControls({ videoState, onScrubStart }: VideoControlsProps) {
   // Note (review nit, accepted): starts at 0 rather than
   // `videoState.currentTime`, so a REMOUNT mid-video (e.g. leaving and
   // re-entering media mode) paints one frame with the thumb/label at
@@ -94,6 +99,9 @@ export function VideoControls({ videoState }: VideoControlsProps) {
     // the existing mode-switch pause behavior in `App.tsx`).
     if (videoState.playing) videoState.pause();
     setDragging(true);
+    // A grab is the start of a large temporal jump — let the owner reset any
+    // cross-frame session pool before the landed frames stream in (Plan 6).
+    onScrubStart?.();
   };
 
   const handlePointerUp = () => {

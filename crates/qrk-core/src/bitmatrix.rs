@@ -338,11 +338,15 @@ fn decode_sharpen(grays: &[f32], dim: usize, k: f32) -> Vec<f32> {
                 continue;
             }
             let (xi, yi) = (x as isize, y as isize);
-            let neighbors: Vec<f32> =
-                [at(xi, yi - 1), at(xi, yi + 1), at(xi - 1, yi), at(xi + 1, yi)]
-                    .into_iter()
-                    .flatten()
-                    .collect();
+            let neighbors: Vec<f32> = [
+                at(xi, yi - 1),
+                at(xi, yi + 1),
+                at(xi - 1, yi),
+                at(xi + 1, yi),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
             out[y * dim + x] = if neighbors.is_empty() {
                 v
             } else {
@@ -377,15 +381,63 @@ pub(crate) fn build_reference_threshold_bits(
 ) -> Option<BitMatrix> {
     let threshold = finder_reference_threshold(grays, dim)?;
     let sharpened = decode_sharpen(grays, dim, crate::consts::SHARPEN_K);
+    Some(binarize_grays(&sharpened, dim, threshold, inverted))
+}
+
+/// Threshold offsets (8-bit gray) applied to the finder-reference midpoint
+/// for the Fix-C sweep. ±8 is the same print-dot-gain / JPEG-ringing
+/// amplitude the ladder's binarize offset uses — principled, not
+/// fixture-tuned. Kept to two arms so the failure-path cost stays µs-scale
+/// even when every geometry round fails (domain p95 measurement).
+const GRAY_THRESH_DELTAS: [f32; 2] = [-8.0, 8.0];
+
+fn binarize_grays(grays: &[f32], dim: usize, threshold: f32, inverted: bool) -> BitMatrix {
     let mut bits = BitMatrix::new(dim);
     for y in 0..dim {
         for x in 0..dim {
-            let v = sharpened[y * dim + x];
+            let v = grays[y * dim + x];
             let dark = !v.is_nan() && (v < threshold) != inverted;
             bits.set(x, y, dark);
         }
     }
-    Some(bits)
+    bits
+}
+
+/// Plan 6 Fix C (decode-fragile / handheld margin): yield alternative bit
+/// matrices from the SAME sampled grays after Fix B's single reference
+/// threshold failed. Two cheap arms only:
+/// 1. Default-K sharpened grays at finder-reference ±8
+/// 2. Global mid of all valid samples (ignores finder-block bias when the
+///    finders themselves are half-LSB washed)
+///
+/// All arms are pure O(modules) bit-matrix rebuilds — no resampling. The
+/// caller RS-validates each; a wrong threshold can only fail, never invent
+/// a payload. Empty if the reference threshold itself is undefined.
+pub(crate) fn gray_threshold_variants(
+    grays: &[f32],
+    dim: usize,
+    inverted: bool,
+) -> Vec<BitMatrix> {
+    let Some(t0) = finder_reference_threshold(grays, dim) else {
+        return Vec::new();
+    };
+    let sharpened = decode_sharpen(grays, dim, crate::consts::SHARPEN_K);
+    let mut out = Vec::with_capacity(GRAY_THRESH_DELTAS.len() + 1);
+    for &d in &GRAY_THRESH_DELTAS {
+        out.push(binarize_grays(&sharpened, dim, t0 + d, inverted));
+    }
+    // Global mid of finite samples.
+    let (mut sum, mut n) = (0.0f64, 0u32);
+    for &v in grays {
+        if !v.is_nan() {
+            sum += v as f64;
+            n += 1;
+        }
+    }
+    if n > 0 {
+        out.push(binarize_grays(grays, dim, (sum / n as f64) as f32, inverted));
+    }
+    out
 }
 
 /// Decode a QR payload from a sampled bit matrix.
@@ -412,8 +464,9 @@ mod tests {
     use super::*;
 
     fn qr_matrix(payload: &str, version: i16, ecc: qrcode::EcLevel) -> BitMatrix {
-        let code = qrcode::QrCode::with_version(
-            payload.as_bytes(), qrcode::Version::Normal(version), ecc).unwrap();
+        let code =
+            qrcode::QrCode::with_version(payload.as_bytes(), qrcode::Version::Normal(version), ecc)
+                .unwrap();
         let dim = code.width();
         let mut m = BitMatrix::new(dim);
         for y in 0..dim {
@@ -427,15 +480,21 @@ mod tests {
     #[test]
     fn packing_round_trips() {
         let mut m = BitMatrix::new(41); // v6: crosses a u32 word boundary
-        m.set(0, 0, true); m.set(31, 3, true); m.set(32, 3, true); m.set(40, 40, true);
+        m.set(0, 0, true);
+        m.set(31, 3, true);
+        m.set(32, 3, true);
+        m.set(40, 40, true);
         assert!(m.get(0, 0) && m.get(31, 3) && m.get(32, 3) && m.get(40, 40));
         assert!(!m.get(1, 0) && !m.get(33, 3));
     }
 
     #[test]
     fn decodes_v1_and_v7_and_v40() {
-        for (v, payload) in [(1i16, "Q:test:1"), (7, "HTTPS://R8.HR/O9MKM1ZO3W5"),
-                             (40, &"x".repeat(1000) as &str)] {
+        for (v, payload) in [
+            (1i16, "Q:test:1"),
+            (7, "HTTPS://R8.HR/O9MKM1ZO3W5"),
+            (40, &"x".repeat(1000) as &str),
+        ] {
             let m = qr_matrix(payload, v, qrcode::EcLevel::M);
             let d = decode_bits(&m).unwrap_or_else(|e| panic!("v{v}: {e:?}"));
             assert_eq!(d.payload, payload, "v{v}");
@@ -494,7 +553,11 @@ mod tests {
     #[test]
     fn garbage_fails_cleanly() {
         let mut m = BitMatrix::new(21);
-        for y in 0..21 { for x in 0..21 { m.set(x, y, (x * 31 + y * 17) % 3 == 0); } }
+        for y in 0..21 {
+            for x in 0..21 {
+                m.set(x, y, (x * 31 + y * 17) % 3 == 0);
+            }
+        }
         assert!(decode_bits(&m).is_err()); // no panic
     }
 
@@ -521,7 +584,11 @@ mod tests {
                 for c in 0..7usize {
                     let dark = finder_module_is_dark(r, c);
                     let v: f32 = if dark {
-                        if toggle { 32.0 } else { 28.0 }
+                        if toggle {
+                            32.0
+                        } else {
+                            28.0
+                        }
                     } else if toggle {
                         205.0
                     } else {
@@ -542,7 +609,10 @@ mod tests {
         let expected = ((dark_sum / dark_n as f64 + light_sum / light_n as f64) / 2.0) as f32;
         // Sanity-check the fixture itself actually exercises two well-
         // separated polarities (not a degenerate all-equal grid).
-        assert!(expected > 50.0 && expected < 250.0, "fixture sanity: {expected}");
+        assert!(
+            expected > 50.0 && expected < 250.0,
+            "fixture sanity: {expected}"
+        );
 
         let threshold = finder_reference_threshold(&grays, dim)
             .expect("all three finder blocks fully populated: threshold must be defined");
@@ -586,7 +656,11 @@ mod tests {
         let sharpened = decode_sharpen(&grays, dim, 0.25);
         let at = |x: usize, y: usize| sharpened[y * dim + x];
         assert!((at(1, 1) - 120.0).abs() < 1e-4, "center: got {}", at(1, 1));
-        assert!((at(1, 0) - 15.0).abs() < 1e-4, "top-mid edge: got {}", at(1, 0));
+        assert!(
+            (at(1, 0) - 15.0).abs() < 1e-4,
+            "top-mid edge: got {}",
+            at(1, 0)
+        );
         assert!((at(0, 0) - 7.5).abs() < 1e-4, "corner: got {}", at(0, 0));
     }
 
@@ -619,7 +693,9 @@ mod tests {
     #[test]
     fn build_reference_threshold_bits_recovers_a_clean_grid_from_true_grays() {
         let code = qrcode::QrCode::with_version(
-            b"REFBITS", qrcode::Version::Normal(2), qrcode::EcLevel::H,
+            b"REFBITS",
+            qrcode::Version::Normal(2),
+            qrcode::EcLevel::H,
         )
         .unwrap();
         let dim = code.width();
@@ -630,8 +706,11 @@ mod tests {
         let mut grays = vec![0.0f32; dim * dim];
         for y in 0..dim {
             for x in 0..dim {
-                grays[y * dim + x] =
-                    if code[(x, y)] == qrcode::Color::Dark { 30.0 } else { 220.0 };
+                grays[y * dim + x] = if code[(x, y)] == qrcode::Color::Dark {
+                    30.0
+                } else {
+                    220.0
+                };
             }
         }
         let refbits = build_reference_threshold_bits(&grays, dim, false)
@@ -664,18 +743,20 @@ mod tests {
     /// accident of the threshold, is what carries the polarity.
     #[test]
     fn build_reference_threshold_bits_handles_inverted_polarity() {
-        let code = qrcode::QrCode::with_version(
-            b"INVREF", qrcode::Version::Normal(2), qrcode::EcLevel::H,
-        )
-        .unwrap();
+        let code =
+            qrcode::QrCode::with_version(b"INVREF", qrcode::Version::Normal(2), qrcode::EcLevel::H)
+                .unwrap();
         let dim = code.width();
         // Inverted render: spec-ink (Dark) modules are painted LIGHT
         // (220.0) on a dark (30.0) background.
         let mut grays = vec![0.0f32; dim * dim];
         for y in 0..dim {
             for x in 0..dim {
-                grays[y * dim + x] =
-                    if code[(x, y)] == qrcode::Color::Dark { 220.0 } else { 30.0 };
+                grays[y * dim + x] = if code[(x, y)] == qrcode::Color::Dark {
+                    220.0
+                } else {
+                    30.0
+                };
             }
         }
 

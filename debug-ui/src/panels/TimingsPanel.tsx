@@ -17,6 +17,12 @@ export interface TimingsSample {
    * promise resolving, in ms — covers worker wall time plus postMessage
    * marshalling/queueing overhead. */
   roundTripMs: number;
+  /** Plan 6: the robust ladder's whole-frame wall time (`robust.total_ns`,
+   * every rung incl. baseline) — the per-stage rows above only show the
+   * BASELINE variant's timings in robust mode, so without this row the
+   * recovery rungs' cost is invisible here. `null`/absent in classic mode
+   * (renders "n/a", same as any stage that didn't run). */
+  ladderTotalNs?: number | null;
 }
 
 export interface TimingsPanelProps {
@@ -41,8 +47,8 @@ interface Row {
 
 const SPARKLINE_WIDTH = 120;
 const SPARKLINE_HEIGHT = 24;
-const SPARKLINE_LINE_COLOR = "#4ade80";
-const SPARKLINE_FILL_COLOR = "rgba(74, 222, 128, 0.15)";
+const SPARKLINE_LINE_COLOR = "#3de0c5";
+const SPARKLINE_FILL_COLOR = "rgba(61, 224, 197, 0.14)";
 
 /**
  * Draw a filled line sparkline of `values` (chronological, oldest first)
@@ -119,6 +125,15 @@ export function TimingsPanel({ sample, sampleId }: TimingsPanelProps) {
       // `ScanOptions.refine` is `false` (the default), same "n/a" reading
       // `formatNs` already gives any other stage that didn't run.
       { label: "refine", buffer: new RollingBuffer(), format: formatNs, pick: (s) => s.timings.refine_ns },
+      // Plan 6: the robust ladder's total (all rungs) — the stage rows
+      // above are baseline-only in robust mode; this is where escalation
+      // cost shows up. "n/a" (0) whenever robust mode is off.
+      {
+        label: "ladder total",
+        buffer: new RollingBuffer(),
+        format: formatNs,
+        pick: (s) => s.ladderTotalNs ?? 0,
+      },
       { label: "worker wall", buffer: new RollingBuffer(), format: formatMs, pick: (s) => s.wallMs },
       { label: "round trip", buffer: new RollingBuffer(), format: formatMs, pick: (s) => s.roundTripMs },
     ],
@@ -143,22 +158,22 @@ export function TimingsPanel({ sample, sampleId }: TimingsPanelProps) {
   }, [sample, sampleId, rows]);
 
   return (
-    <table style={{ borderCollapse: "collapse", fontSize: 12, fontFamily: "monospace" }}>
+    <table className="timings-table">
       <thead>
         <tr>
-          <th style={{ textAlign: "left", padding: "2px 8px 2px 0" }}>stage</th>
-          <th style={{ textAlign: "left", padding: "2px 8px" }}>latest</th>
-          <th style={{ textAlign: "left", padding: "2px 0" }}>last 60</th>
+          <th>stage</th>
+          <th>latest</th>
+          <th>last 60</th>
         </tr>
       </thead>
       <tbody>
         {rows.map((row, i) => (
           <tr key={row.label}>
-            <td style={{ padding: "2px 8px 2px 0", color: "#9ca3af" }}>{row.label}</td>
-            <td style={{ padding: "2px 8px", fontVariantNumeric: "tabular-nums" }}>
+            <td>{row.label}</td>
+            <td style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-primary)" }}>
               {sample ? row.format(row.pick(sample)) : "n/a"}
             </td>
-            <td style={{ padding: "2px 0" }}>
+            <td>
               <canvas
                 ref={(el) => {
                   canvasRefs.current[i] = el;

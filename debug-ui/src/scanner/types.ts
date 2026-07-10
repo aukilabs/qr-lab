@@ -248,15 +248,21 @@ export class ScanResultParseError extends Error {
   }
 }
 
-function fail(path: string, message: string): never {
+// The primitive expect*/parse* helpers below (and parseStageTimings/
+// parseDecodedCode/parseDetections further down) are exported so
+// `robust-types.ts` — the Plan 6 robust envelope's parser — shares ONE
+// canonical strict-parsing toolkit instead of duplicating it. They are not
+// part of this module's public contract beyond that.
+
+export function fail(path: string, message: string): never {
   throw new ScanResultParseError(path, message);
 }
 
-function joinPath(path: string, key: string): string {
+export function joinPath(path: string, key: string): string {
   return path ? `${path}.${key}` : key;
 }
 
-function indexPath(path: string, index: number): string {
+export function indexPath(path: string, index: number): string {
   return `${path}[${index}]`;
 }
 
@@ -266,42 +272,42 @@ function typeOf(v: unknown): string {
   return typeof v;
 }
 
-function expectObject(v: unknown, path: string): Record<string, unknown> {
+export function expectObject(v: unknown, path: string): Record<string, unknown> {
   if (typeof v !== "object" || v === null || Array.isArray(v)) {
     fail(path, `expected an object, got ${typeOf(v)}`);
   }
   return v as Record<string, unknown>;
 }
 
-function expectNumber(v: unknown, path: string): number {
+export function expectNumber(v: unknown, path: string): number {
   if (typeof v !== "number" || Number.isNaN(v)) {
     fail(path, `expected a number, got ${typeOf(v)}`);
   }
   return v;
 }
 
-function expectBoolean(v: unknown, path: string): boolean {
+export function expectBoolean(v: unknown, path: string): boolean {
   if (typeof v !== "boolean") {
     fail(path, `expected a boolean, got ${typeOf(v)}`);
   }
   return v;
 }
 
-function expectArray(v: unknown, path: string): unknown[] {
+export function expectArray(v: unknown, path: string): unknown[] {
   if (!Array.isArray(v)) {
     fail(path, `expected an array, got ${typeOf(v)}`);
   }
   return v;
 }
 
-function expectField(obj: Record<string, unknown>, key: string, path: string): unknown {
+export function expectField(obj: Record<string, unknown>, key: string, path: string): unknown {
   if (!(key in obj)) {
     fail(joinPath(path, key), "required field is missing");
   }
   return obj[key];
 }
 
-function parsePair(v: unknown, path: string): [number, number] {
+export function parsePair(v: unknown, path: string): [number, number] {
   const arr = expectArray(v, path);
   if (arr.length !== 2) {
     fail(path, `expected a 2-element tuple, got ${arr.length} elements`);
@@ -313,7 +319,7 @@ function parsePair(v: unknown, path: string): [number, number] {
 }
 
 /** `[TL, TR, BR, BL]`-style 4-corner quad, each corner a 2-element pair. */
-function parseQuad(
+export function parseQuad(
   v: unknown,
   path: string,
 ): [[number, number], [number, number], [number, number], [number, number]] {
@@ -329,7 +335,7 @@ function parseQuad(
   ];
 }
 
-function parseQuadOrNull(
+export function parseQuadOrNull(
   v: unknown,
   path: string,
 ): [[number, number], [number, number], [number, number], [number, number]] | null {
@@ -365,7 +371,7 @@ function parseTriple(v: unknown, path: string): [number, number, number] {
   ];
 }
 
-function expectString(v: unknown, path: string): string {
+export function expectString(v: unknown, path: string): string {
   if (typeof v !== "string") {
     fail(path, `expected a string, got ${typeOf(v)}`);
   }
@@ -447,7 +453,7 @@ function parseTripletCandidateArray(v: unknown, path: string): TripletCandidate[
   return arr.map((item, i) => parseTripletCandidate(item, indexPath(path, i)));
 }
 
-function parseDecodedCode(v: unknown, path: string): DecodedCode {
+export function parseDecodedCode(v: unknown, path: string): DecodedCode {
   const obj = expectObject(v, path);
   return {
     payload: expectString(expectField(obj, "payload", path), joinPath(path, "payload")),
@@ -670,7 +676,7 @@ function parseRefineTraceOrNull(v: unknown, path: string): RefineTrace | null {
   return parseRefineTrace(v, path);
 }
 
-function parseStageTimings(v: unknown, path: string): StageTimings {
+export function parseStageTimings(v: unknown, path: string): StageTimings {
   const obj = expectObject(v, path);
   return {
     tiles_ns: expectNumber(
@@ -704,7 +710,7 @@ function parseStageTimings(v: unknown, path: string): StageTimings {
   };
 }
 
-function parseDetections(v: unknown, path: string): Detections {
+export function parseDetections(v: unknown, path: string): Detections {
   const obj = expectObject(v, path);
   return {
     finders: parseFinderCandidateArray(

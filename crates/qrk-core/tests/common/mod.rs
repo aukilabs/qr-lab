@@ -17,6 +17,23 @@ pub struct CodeTruth {
     pub corners_px: [[f64; 2]; 4],
     pub inverted: bool,
     pub opaque_plate: bool,
+    /// Plan 6 degraded-fixture expectations (absent on the legacy golden
+    /// families ⇒ default `true`/`0`): whether the BASELINE scanner is
+    /// physically expected to detect/decode this code (rules documented in
+    /// tools/fixtures/scenarios.py `expectations()`). Legacy gates stay
+    /// 100%-exact on the golden set; codes with `expect_decode == false`
+    /// exist to measure the robustness ladder's headroom and are reported,
+    /// not gated.
+    #[serde(default = "default_true")]
+    pub expect_detect: bool,
+    #[serde(default = "default_true")]
+    pub expect_decode: bool,
+    #[serde(default)]
+    pub difficulty: u8,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -25,6 +42,9 @@ struct Meta {
     width: usize,
     height: usize,
     codes: Vec<CodeTruth>,
+    /// Present (non-null) only on Plan 6 degraded fixtures.
+    #[serde(default)]
+    degradations: Option<serde_json::Value>,
 }
 
 // `name`/`codes` unused by `decode_trace_gate.rs` (Plan 4 Task 6), which
@@ -37,6 +57,10 @@ pub struct Fixture {
     pub height: usize,
     pub luma: Vec<u8>,
     pub codes: Vec<CodeTruth>,
+    /// `true` for Plan 6 degraded fixtures (a `degradations` key in the
+    /// JSON): these are excluded from the 100%-exact golden gates and
+    /// measured by the robustness gate / benchmark instead.
+    pub degraded: bool,
 }
 
 impl Fixture {
@@ -55,8 +79,8 @@ pub fn load(name: &str) -> Fixture {
         .unwrap_or_else(|e| panic!("{name}.json: {e}"));
     let meta: Meta =
         serde_json::from_str(&json_text).unwrap_or_else(|e| panic!("{name}.json: {e}"));
-    let luma = fs::read(dir.join(format!("{name}.luma")))
-        .unwrap_or_else(|e| panic!("{name}.luma: {e}"));
+    let luma =
+        fs::read(dir.join(format!("{name}.luma"))).unwrap_or_else(|e| panic!("{name}.luma: {e}"));
     assert_eq!(luma.len(), meta.width * meta.height, "{name}: luma size");
     Fixture {
         name: meta.name,
@@ -64,7 +88,16 @@ pub fn load(name: &str) -> Fixture {
         height: meta.height,
         luma,
         codes: meta.codes,
+        degraded: meta.degradations.is_some(),
     }
+}
+
+/// The legacy golden suite only — every fixture WITHOUT degradations. The
+/// 100%-exact gates (decode gate 1, refine gate, smoke ink probes) run on
+/// this subset; degraded fixtures are measured, not gated at 100%.
+#[allow(dead_code)]
+pub fn load_golden() -> Vec<Fixture> {
+    load_all().into_iter().filter(|f| !f.degraded).collect()
 }
 
 /// Ground-truth pixel centers of a code's three finder patterns (TL, TR,
@@ -94,8 +127,7 @@ pub fn load_all() -> Vec<Fixture> {
         .expect("fixtures/ missing — run tools/fixtures/generate.py")
         .filter_map(|e| {
             let p = e.unwrap().path();
-            (p.extension()? == "json")
-                .then(|| p.file_stem().unwrap().to_str().unwrap().to_string())
+            (p.extension()? == "json").then(|| p.file_stem().unwrap().to_str().unwrap().to_string())
         })
         .collect();
     names.sort();

@@ -151,9 +151,15 @@ impl PerspectiveTransform {
 
     fn from_matrix(m: [[f64; 3]; 3]) -> Self {
         Self {
-            a11: m[0][0], a21: m[0][1], a31: m[0][2],
-            a12: m[1][0], a22: m[1][1], a32: m[1][2],
-            a13: m[2][0], a23: m[2][1], a33: m[2][2],
+            a11: m[0][0],
+            a21: m[0][1],
+            a31: m[0][2],
+            a12: m[1][0],
+            a22: m[1][1],
+            a32: m[1][2],
+            a13: m[2][0],
+            a23: m[2][1],
+            a33: m[2][2],
         }
     }
 
@@ -211,8 +217,7 @@ impl PerspectiveTransform {
 mod tests {
     use super::*;
 
-    const Q: [[f64; 2]; 4] =
-        [[100.0, 50.0], [420.0, 80.0], [400.0, 380.0], [90.0, 350.0]];
+    const Q: [[f64; 2]; 4] = [[100.0, 50.0], [420.0, 80.0], [400.0, 380.0], [90.0, 350.0]];
 
     #[test]
     fn corners_map_exactly() {
@@ -227,8 +232,9 @@ mod tests {
 
     #[test]
     fn affine_case_scales() {
-        let h = PerspectiveTransform::square_to_quad(
-            [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]]).unwrap();
+        let h =
+            PerspectiveTransform::square_to_quad([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]])
+                .unwrap();
         let p = h.map(0.25, 0.75);
         assert!((p[0] - 0.5).abs() < 1e-12 && (p[1] - 1.5).abs() < 1e-12);
     }
@@ -281,10 +287,8 @@ mod tests {
     /// genuinely projective destination quad — exercises the general
     /// branch of `square_to_quad` on both sides of the composition, not
     /// just the affine shortcut.
-    const SRC_Q: [[f64; 2]; 4] =
-        [[10.0, 10.0], [50.0, 12.0], [46.0, 54.0], [8.0, 50.0]];
-    const DST_Q: [[f64; 2]; 4] =
-        [[100.0, 20.0], [300.0, 15.0], [310.0, 220.0], [90.0, 210.0]];
+    const SRC_Q: [[f64; 2]; 4] = [[10.0, 10.0], [50.0, 12.0], [46.0, 54.0], [8.0, 50.0]];
+    const DST_Q: [[f64; 2]; 4] = [[100.0, 20.0], [300.0, 15.0], [310.0, 220.0], [90.0, 210.0]];
 
     #[test]
     fn quad_to_quad_corners_map_exactly() {
@@ -305,7 +309,10 @@ mod tests {
         for &[x, y] in &[[25.0, 25.0], [30.0, 40.0], [15.0, 45.0], [40.0, 20.0]] {
             let p = fwd.map(x, y);
             let b = back.map(p[0], p[1]);
-            assert!((b[0] - x).abs() < 1e-6 && (b[1] - y).abs() < 1e-6, "({x},{y}) -> {p:?} -> {b:?}");
+            assert!(
+                (b[0] - x).abs() < 1e-6 && (b[1] - y).abs() < 1e-6,
+                "({x},{y}) -> {p:?} -> {b:?}"
+            );
         }
     }
 
@@ -322,7 +329,10 @@ mod tests {
     fn scaled_maps_a_known_point_exactly() {
         let s = PerspectiveTransform::scaled(2.0, 0.5);
         let p = s.map(3.0, 10.0);
-        assert!((p[0] - 6.0).abs() < 1e-12 && (p[1] - 5.0).abs() < 1e-12, "{p:?}");
+        assert!(
+            (p[0] - 6.0).abs() < 1e-12 && (p[1] - 5.0).abs() < 1e-12,
+            "{p:?}"
+        );
     }
 
     #[test]
@@ -332,7 +342,10 @@ mod tests {
         for &(x, y) in &[(1.0, 1.0), (3.5, -2.0), (0.0, 7.0)] {
             let p = s.map(x, y);
             let b = inv.map(p[0], p[1]);
-            assert!((b[0] - x).abs() < 1e-9 && (b[1] - y).abs() < 1e-9, "({x},{y}) -> {p:?} -> {b:?}");
+            assert!(
+                (b[0] - x).abs() < 1e-9 && (b[1] - y).abs() < 1e-9,
+                "({x},{y}) -> {p:?} -> {b:?}"
+            );
         }
     }
 

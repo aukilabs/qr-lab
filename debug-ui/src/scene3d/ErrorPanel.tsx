@@ -112,7 +112,7 @@ export function ErrorPanel({ sample, sampleId }: ErrorPanelProps) {
         <tbody>
           {rows.map(([label, value]) => (
             <tr key={label}>
-              <td style={{ padding: "2px 8px 2px 0", color: "#9ca3af" }}>{label}</td>
+              <td style={{ padding: "2px 8px 2px 0", color: "var(--text-muted)" }}>{label}</td>
               <td style={{ padding: "2px 0", fontVariantNumeric: "tabular-nums" }}>
                 {value == null ? "n/a" : fmtPx(value)}
               </td>

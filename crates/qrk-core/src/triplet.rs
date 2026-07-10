@@ -179,7 +179,13 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
 /// crossing completes; `None` when the walk leaves the image or reaches
 /// `to` first (a truncated walk — the caller applies the amendment's
 /// border correction).
-fn bwb_run(view: &LumaView, grid: &TileGrid, inverted: bool, from: [f64; 2], to: [f64; 2]) -> Option<f64> {
+fn bwb_run(
+    view: &LumaView,
+    grid: &TileGrid,
+    inverted: bool,
+    from: [f64; 2],
+    to: [f64; 2],
+) -> Option<f64> {
     let (w, h) = (view.width() as isize, view.height() as isize);
     let dx = to[0] - from[0];
     let dy = to[1] - from[1];
@@ -222,7 +228,13 @@ fn bwb_run(view: &LumaView, grid: &TileGrid, inverted: bool, from: [f64; 2], to:
 /// contributes its partner's value doubled instead (the amendment's zxing
 /// border correction); both truncated means this endpoint measures
 /// nothing.
-fn bwb_both(view: &LumaView, grid: &TileGrid, inverted: bool, a: [f64; 2], b: [f64; 2]) -> Option<f64> {
+fn bwb_both(
+    view: &LumaView,
+    grid: &TileGrid,
+    inverted: bool,
+    a: [f64; 2],
+    b: [f64; 2],
+) -> Option<f64> {
     let toward = bwb_run(view, grid, inverted, a, b);
     let away_target = [2.0 * a[0] - b[0], 2.0 * a[1] - b[1]];
     let away = bwb_run(view, grid, inverted, a, away_target);
@@ -240,7 +252,13 @@ fn bwb_both(view: &LumaView, grid: &TileGrid, inverted: bool, a: [f64; 2], b: [f
 /// endpoint's measurement failed entirely, the other alone divided by 7
 /// (zxing's NaN fallback); both failed -> `None` (caller rejects the
 /// triple).
-fn leg_module(view: &LumaView, grid: &TileGrid, inverted: bool, a: [f64; 2], b: [f64; 2]) -> Option<f64> {
+fn leg_module(
+    view: &LumaView,
+    grid: &TileGrid,
+    inverted: bool,
+    a: [f64; 2],
+    b: [f64; 2],
+) -> Option<f64> {
     match (
         bwb_both(view, grid, inverted, a, b),
         bwb_both(view, grid, inverted, b, a),
@@ -359,19 +377,72 @@ fn try_group(
 /// per-leg module measurement on the binarized `view`), then sorts
 /// survivors by ascending `snap_error` and caps the result at
 /// [`MAX_TRIPLETS`].
-pub fn group_triplets(view: &LumaView, grid: &TileGrid, finders: &[FinderCandidate]) -> Vec<TripletCandidate> {
+pub fn group_triplets(
+    view: &LumaView,
+    grid: &TileGrid,
+    finders: &[FinderCandidate],
+) -> Vec<TripletCandidate> {
     let n = finders.len();
+    if n < 3 {
+        return Vec::new();
+    }
     let mut out = Vec::new();
-    for i in 0..n {
-        for j in (i + 1)..n {
-            for k in (j + 1)..n {
-                if let Some(t) = try_group(view, grid, finders[i], i, finders[j], j, finders[k], k) {
-                    out.push(t);
+
+    // Build the cheap compatibility graph once instead of rediscovering
+    // the same polarity/module-size rejection inside every O(n^3) triple.
+    // Each surviving triangle is still passed through `try_group`, so the
+    // geometry, image-space module measurement, dimension, ordering, and
+    // output are unchanged. This follows the candidate-locality direction
+    // used by current zxing-cpp while keeping this scanner exhaustive: no
+    // spatial or top-K cap can discard a valid multi-code candidate.
+    // Below this point the cubic loop has at most 165 triples, cheaper than
+    // allocating and filling the graph on ordinary one-to-four-code frames.
+    const COMPAT_GRAPH_MIN_FINDERS: usize = 12;
+    if n < COMPAT_GRAPH_MIN_FINDERS {
+        for i in 0..n {
+            for j in (i + 1)..n {
+                for k in (j + 1)..n {
+                    if let Some(t) =
+                        try_group(view, grid, finders[i], i, finders[j], j, finders[k], k)
+                    {
+                        out.push(t);
+                    }
+                }
+            }
+        }
+    } else {
+        let mut compatible = vec![false; n * n];
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let a = finders[i];
+                let b = finders[j];
+                compatible[i * n + j] =
+                    a.inverted == b.inverted && ratio_ge1(a.module, b.module) <= MAX_MODULE_RATIO;
+            }
+        }
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if !compatible[i * n + j] {
+                    continue;
+                }
+                for k in (j + 1)..n {
+                    if !compatible[i * n + k] || !compatible[j * n + k] {
+                        continue;
+                    }
+                    if let Some(t) =
+                        try_group(view, grid, finders[i], i, finders[j], j, finders[k], k)
+                    {
+                        out.push(t);
+                    }
                 }
             }
         }
     }
-    out.sort_by(|x, y| x.snap_error.partial_cmp(&y.snap_error).unwrap_or(std::cmp::Ordering::Equal));
+    out.sort_by(|x, y| {
+        x.snap_error
+            .partial_cmp(&y.snap_error)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     out.truncate(MAX_TRIPLETS);
     out
 }
@@ -383,7 +454,13 @@ mod tests {
     use crate::testpaint::{paint_finder, paint_finder_rotated};
 
     fn f(x: f64, y: f64) -> FinderCandidate {
-        FinderCandidate { x, y, module: 4.0, inverted: false, hits: 3 }
+        FinderCandidate {
+            x,
+            y,
+            module: 4.0,
+            inverted: false,
+            hits: 3,
+        }
     }
 
     /// 220x220 light image with the axis-aligned v1 layout the accept-path
@@ -410,7 +487,11 @@ mod tests {
         let img = v1_image();
         let view = crate::LumaView::new(&img, 220, 220, 220).unwrap();
         let grid = TileGrid::build(&view);
-        let t = group_triplets(&view, &grid, &[f(100.0, 100.0), f(156.0, 100.0), f(100.0, 156.0)]);
+        let t = group_triplets(
+            &view,
+            &grid,
+            &[f(100.0, 100.0), f(156.0, 100.0), f(100.0, 156.0)],
+        );
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].dimension, 21);
         assert_eq!(t[0].tl, [100.0, 100.0]);
@@ -431,11 +512,14 @@ mod tests {
         let img = v1_image();
         let view = crate::LumaView::new(&img, 220, 220, 220).unwrap();
         let grid = TileGrid::build(&view);
-        let t = group_triplets(&view, &grid, &[f(100.0, 100.0), f(100.0, 156.0), f(156.0, 100.0)]);
+        let t = group_triplets(
+            &view,
+            &grid,
+            &[f(100.0, 100.0), f(100.0, 156.0), f(156.0, 100.0)],
+        );
         assert_eq!(t.len(), 1);
         let (tl, tr, bl) = (t[0].tl, t[0].tr, t[0].bl);
-        let cross = (tr[0] - tl[0]) * (bl[1] - tl[1])
-            - (tr[1] - tl[1]) * (bl[0] - tl[0]);
+        let cross = (tr[0] - tl[0]) * (bl[1] - tl[1]) - (tr[1] - tl[1]) * (bl[0] - tl[0]);
         assert!(cross > 0.0);
         // Input order was [tl@0, bl@1, tr@2]: the tr/bl swap that fixes the
         // point order must swap the paired indices in lockstep too.
@@ -451,9 +535,13 @@ mod tests {
         inv.inverted = true;
         assert!(group_triplets(&view, &grid, &[f(100.0, 100.0), inv, f(100.0, 156.0)]).is_empty());
         // Collinear points: no ~90° corner.
-        assert!(group_triplets(&view, &grid, &[f(0.0, 0.0), f(50.0, 0.0), f(100.0, 0.0)]).is_empty());
+        assert!(
+            group_triplets(&view, &grid, &[f(0.0, 0.0), f(50.0, 0.0), f(100.0, 0.0)]).is_empty()
+        );
         // Legs too unbalanced (14 vs 40 modules).
-        assert!(group_triplets(&view, &grid, &[f(0.0, 0.0), f(56.0, 0.0), f(0.0, 160.0)]).is_empty());
+        assert!(
+            group_triplets(&view, &grid, &[f(0.0, 0.0), f(56.0, 0.0), f(0.0, 160.0)]).is_empty()
+        );
     }
 
     #[test]
@@ -475,12 +563,41 @@ mod tests {
         }
         let view = crate::LumaView::new(&img, w, h, w).unwrap();
         let grid = TileGrid::build(&view);
-        let t = group_triplets(&view, &grid, &[
-            f(200.0, 200.0),
-            f(200.0 + 39.6, 200.0 + 39.6),
-            f(200.0 - 39.6, 200.0 + 39.6),
-        ]);
+        let t = group_triplets(
+            &view,
+            &grid,
+            &[
+                f(200.0, 200.0),
+                f(200.0 + 39.6, 200.0 + 39.6),
+                f(200.0 - 39.6, 200.0 + 39.6),
+            ],
+        );
         assert_eq!(t.len(), 1);
         assert_eq!(t[0].dimension, 21);
+    }
+
+    #[test]
+    fn compatibility_graph_keeps_valid_triplet_in_crowded_frame() {
+        let img = v1_image();
+        let view = crate::LumaView::new(&img, 220, 220, 220).unwrap();
+        let grid = TileGrid::build(&view);
+        let mut finders = vec![f(100.0, 100.0), f(156.0, 100.0), f(100.0, 156.0)];
+        // Force the >=12-finder compatibility-graph path with candidates
+        // that are pair-incompatible by polarity or module scale.
+        for i in 0..9 {
+            let mut noise = f(12.0 + i as f64 * 18.0, 20.0);
+            if i % 2 == 0 {
+                noise.inverted = true;
+            } else {
+                noise.module = 12.0;
+            }
+            finders.push(noise);
+        }
+        let t = group_triplets(&view, &grid, &finders);
+        assert!(t.iter().any(|candidate| {
+            candidate.dimension == 21
+                && candidate.finder_indices == [0, 1, 2]
+                && candidate.snap_error < 0.6
+        }));
     }
 }

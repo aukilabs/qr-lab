@@ -51,7 +51,9 @@
 //! arbitration property Gate 3 checks.
 
 use crate::alignment::{locate_alignment_patterns, AnchorSlot};
-use crate::bitmatrix::{build_reference_threshold_bits, decode_bits, BitMatrix, DecodeFailure};
+use crate::bitmatrix::{
+    build_reference_threshold_bits, decode_bits, gray_threshold_variants, BitMatrix, DecodeFailure,
+};
 use crate::consts::{MAX_DECODE_ROUNDS, MAX_OOB_FRACTION};
 use crate::finder::FinderCandidate;
 use crate::refine::{refine_corners, RefinedCorners};
@@ -546,8 +548,11 @@ fn attempt_candidate(
     // frame (bounded by [`MAX_DECODE_ROUNDS`]'s per-frame round budget) is
     // real, avoidable work on the untraced hot path
     // `detect()`/`with_trace: false` take).
-    let alignment_trace =
-        if want_trace { alignment.to_trace_entries() } else { Vec::new() };
+    let alignment_trace = if want_trace {
+        alignment.to_trace_entries()
+    } else {
+        Vec::new()
+    };
 
     let sample_decode_clock = StageClock::start();
 
@@ -630,7 +635,9 @@ fn attempt_candidate(
                     "sample_grid's regions tile [0,dimension) x [0,dimension) with no \
                      gaps, so every grid corner touches at least one region's module_rect",
                 );
-            region.transform.map(mx as f64 / dimension as f64, my as f64 / dimension as f64)
+            region
+                .transform
+                .map(mx as f64 / dimension as f64, my as f64 / dimension as f64)
         };
         let corners = [
             corner_via_region(0, 0),
@@ -639,13 +646,20 @@ fn attempt_candidate(
             corner_via_region(0, dimension),
         ];
         let sample_regions_trace: Vec<SampleRegionTrace> = if want_trace {
-            sampled.regions.iter().map(|r| r.to_trace(dimension)).collect()
+            sampled
+                .regions
+                .iter()
+                .map(|r| r.to_trace(dimension))
+                .collect()
         } else {
             Vec::new()
         };
         if sampled.oob_fraction > MAX_OOB_FRACTION {
             return RoundOutcome {
-                outcome: format!("oob_fraction {:.4} exceeds {:.4}", sampled.oob_fraction, MAX_OOB_FRACTION),
+                outcome: format!(
+                    "oob_fraction {:.4} exceeds {:.4}",
+                    sampled.oob_fraction, MAX_OOB_FRACTION
+                ),
                 oob_fraction: sampled.oob_fraction,
                 corners,
                 payload: None,
@@ -661,8 +675,8 @@ fn attempt_candidate(
         // below, so the version cross-check / trace-building logic isn't
         // duplicated.
         let outcome_from = |bits: &crate::bitmatrix::BitMatrix,
-                             result: Result<crate::bitmatrix::DecodedPayload, DecodeFailure>,
-                             used_refbits: bool| {
+                            result: Result<crate::bitmatrix::DecodedPayload, DecodeFailure>,
+                            used_refbits: bool| {
             match result {
                 Ok(payload) => {
                     // Cross-check consistency (Global Constraints,
@@ -686,8 +700,10 @@ fn attempt_candidate(
                             payload.version
                         )
                     };
-                    let bits_trace = want_trace
-                        .then(|| BitsTrace { dim: bits.dim as u32, words: bits.words().to_vec() });
+                    let bits_trace = want_trace.then(|| BitsTrace {
+                        dim: bits.dim as u32,
+                        words: bits.words().to_vec(),
+                    });
                     RoundOutcome {
                         outcome,
                         oob_fraction: sampled.oob_fraction,
@@ -720,14 +736,38 @@ fn attempt_candidate(
         // Exactly one extra `decode_bits` call, no resampling: same
         // `sampled.grays` this round already captured, just a different
         // bit matrix built from them (see `build_reference_threshold_bits`).
+        //
+        // Plan 6 Fix C: when Fix B also fails on the FIRST (parallelogram)
+        // round, sweep a short list of gray-threshold variants on the SAME
+        // grays (domain decode-fragile cases at ~4 px/module where half-LSB
+        // illumination bias flips just enough modules to break ECC). Still
+        // no resampling. Skipped on refined-BR geometry rounds — those
+        // already change the sample lattice, and re-paying the sweep on
+        // each of them tripled failure-path cost on domain hard frames
+        // with zero measured extra recall.
         if let Err(e) = &primary {
-            if matches!(e, DecodeFailure::Ecc | DecodeFailure::Content | DecodeFailure::Format) {
+            if matches!(
+                e,
+                DecodeFailure::Ecc | DecodeFailure::Content | DecodeFailure::Format
+            ) {
                 if let Some(refbits) =
                     build_reference_threshold_bits(&sampled.grays, dimension as usize, t.inverted)
                 {
                     let retry = decode_bits(&refbits);
                     if retry.is_ok() {
                         return outcome_from(&refbits, retry, true);
+                    }
+                }
+                if refined_br.is_none() {
+                    for alt in gray_threshold_variants(
+                        &sampled.grays,
+                        dimension as usize,
+                        t.inverted,
+                    ) {
+                        let retry = decode_bits(&alt);
+                        if retry.is_ok() {
+                            return outcome_from(&alt, retry, true);
+                        }
                     }
                 }
             }
@@ -743,11 +783,20 @@ fn attempt_candidate(
     // (e.g. `"outer_hull+refbits:decoded"`). Defined before `first` is
     // destructured below so it can still borrow `first` whole.
     let round_entry = |name: &str, r: &RoundOutcome| -> String {
-        format!("{}{}:{}", name, if r.used_refbits { "+refbits" } else { "" }, round_tag(&r.outcome))
+        format!(
+            "{}{}:{}",
+            name,
+            if r.used_refbits { "+refbits" } else { "" },
+            round_tag(&r.outcome)
+        )
     };
 
     // First round: the Task 5 behavior — parallelogram / single-AP
-    // anchored sampling, exactly as previously gated.
+    // anchored sampling, exactly as previously gated. Fix C (gray
+    // threshold sweep) runs ONLY on this first round: the refined-BR
+    // geometry rounds already change the sample lattice, so re-paying
+    // Fix C on each of them tripled failure-path cost on domain hard
+    // frames with zero measured extra recall.
     let first = run_round(None);
     let mut rounds = vec![round_entry("parallelogram", &first)];
     let mut outcome = first.outcome;
@@ -777,6 +826,8 @@ fn attempt_candidate(
         // Two robust edge-fit estimators with complementary failure
         // domains (see `sample::EdgeFitMode`), each RS-validated — a wrong
         // corner estimate can only fail the retry, never mis-decode.
+        // Refined-BR rounds keep Fix B (inside `run_round`) but skip the
+        // Fix C gray sweep — see first-round note above.
         let mut tried: Option<[f64; 2]> = None;
         for mode in [EdgeFitMode::AnchorLine, EdgeFitMode::OuterHull] {
             let Some(rc) = refine_fourth_corner(view, grid, t, dimension, &transform, mode) else {
@@ -792,6 +843,9 @@ fn attempt_candidate(
                 }
             }
             tried = Some(rc);
+            // Temporarily disable Fix C for refined rounds by re-using
+            // run_round which still has Fix C — gate Fix C on refined_br
+            // being None inside run_round instead.
             let r = run_round(Some(rc));
             rounds.push(round_entry(round_name(mode), &r));
             if r.payload.is_some() {
@@ -877,7 +931,9 @@ fn attempt_candidate(
 /// running the full image pipeline — see the `corner_refined_flags_*` tests
 /// below.
 fn corner_refined_flags(refine_result: Option<&RefinedCorners>) -> [bool; 4] {
-    refine_result.map(|r| r.corner_refined).unwrap_or([false; 4])
+    refine_result
+        .map(|r| r.corner_refined)
+        .unwrap_or([false; 4])
 }
 
 /// Decode every plausible QR code in one frame: proximity-dedup `triplets`,
@@ -911,9 +967,18 @@ pub(crate) fn decode_candidates(
     want_trace: bool,
     source: Option<SourceView>,
     refine: bool,
-) -> (Vec<DecodedCode>, Vec<DecodeAttemptTrace>, DecodeTimings, DecodeTraceData) {
-    let mut timings =
-        DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0, refine_ns: 0 };
+) -> (
+    Vec<DecodedCode>,
+    Vec<DecodeAttemptTrace>,
+    DecodeTimings,
+    DecodeTraceData,
+) {
+    let mut timings = DecodeTimings {
+        version_ns: 0,
+        alignment_ns: 0,
+        sample_decode_ns: 0,
+        refine_ns: 0,
+    };
     let mut consumed = vec![false; finders.len()];
     let mut codes = Vec::new();
     let mut attempts = Vec::new();
@@ -990,8 +1055,16 @@ pub(crate) fn decode_candidates(
                 r
             };
 
-            let result =
-                attempt_candidate(view, grid, idx, &rotated, &mut timings, want_trace, source, refine);
+            let result = attempt_candidate(
+                view,
+                grid,
+                idx,
+                &rotated,
+                &mut timings,
+                want_trace,
+                source,
+                refine,
+            );
             // Each entry in `result.trace.rounds` is one `run_round` call
             // (`sample_grid`+`decode_bits`, optionally with Fix B's
             // same-grays refbits retry folded in — see
@@ -1218,7 +1291,11 @@ mod tests {
         ([[x0, x0], [x1, x0], [x1, x1], [x0, x1]], img_side)
     }
 
-    fn triplet_from_transform(transform: &PerspectiveTransform, dim: usize, dimension_est: u32) -> TripletCandidate {
+    fn triplet_from_transform(
+        transform: &PerspectiveTransform,
+        dim: usize,
+        dimension_est: u32,
+    ) -> TripletCandidate {
         let dimf = dim as f64;
         TripletCandidate {
             tl: transform.map(3.5 / dimf, 3.5 / dimf),
@@ -1234,7 +1311,13 @@ mod tests {
 
     fn dummy_finders(n: usize) -> Vec<FinderCandidate> {
         (0..n)
-            .map(|_| FinderCandidate { x: 0.0, y: 0.0, module: 4.0, inverted: false, hits: 3 })
+            .map(|_| FinderCandidate {
+                x: 0.0,
+                y: 0.0,
+                module: 4.0,
+                inverted: false,
+                hits: 3,
+            })
             .collect()
     }
 
@@ -1246,19 +1329,34 @@ mod tests {
         let (quad, img_side) = axis_aligned_quad(dim, scale, 4.0);
         let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
         let code = qrcode::QrCode::with_version(
-            b"HELLO", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+            b"HELLO",
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
         )
         .unwrap();
         assert_eq!(code.width(), dim);
         let img = render_module_grid_transformed(
-            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+            dim,
+            |x, y| code[(x, y)] == qrcode::Color::Dark,
+            25,
+            235,
+            &transform,
+            img_side,
+            img_side,
         );
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let grid = TileGrid::build(&view);
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
-        let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
+        let (codes, attempts, _timings, ..) = decode_candidates(
+            &view,
+            &grid,
+            &dummy_finders(3),
+            std::slice::from_ref(&t),
+            false,
+            None,
+            false,
+        );
         assert_eq!(attempts.len(), 1);
         assert_eq!(attempts[0].outcome, "decoded");
         assert_eq!(codes.len(), 1);
@@ -1286,20 +1384,35 @@ mod tests {
         let (quad, img_side) = axis_aligned_quad(dim, scale, 4.0);
         let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
         let code = qrcode::QrCode::with_version(
-            b"VERSION40TEST", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+            b"VERSION40TEST",
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
         )
         .unwrap();
         assert_eq!(code.width(), dim);
         let img = render_module_grid_transformed(
-            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+            dim,
+            |x, y| code[(x, y)] == qrcode::Color::Dark,
+            25,
+            235,
+            &transform,
+            img_side,
+            img_side,
         );
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let grid = TileGrid::build(&view);
 
         let wrong_est_dim = dim - 4; // v39's dimension (173), one version step short of the true v40 (177).
         let t = triplet_from_transform(&transform, dim, wrong_est_dim as u32);
-        let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
+        let (codes, attempts, _timings, ..) = decode_candidates(
+            &view,
+            &grid,
+            &dummy_finders(3),
+            std::slice::from_ref(&t),
+            false,
+            None,
+            false,
+        );
         assert_eq!(attempts.len(), 1, "{attempts:?}");
         assert_eq!(attempts[0].dimension_est, wrong_est_dim as u32);
         assert_eq!(attempts[0].dimension_final, dim as u32);
@@ -1317,11 +1430,19 @@ mod tests {
         let (quad, img_side) = axis_aligned_quad(dim, scale, 4.0);
         let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
         let code = qrcode::QrCode::with_version(
-            b"ARBIT", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+            b"ARBIT",
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
         )
         .unwrap();
         let img = render_module_grid_transformed(
-            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+            dim,
+            |x, y| code[(x, y)] == qrcode::Color::Dark,
+            25,
+            235,
+            &transform,
+            img_side,
+            img_side,
         );
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let grid = TileGrid::build(&view);
@@ -1339,11 +1460,29 @@ mod tests {
         better.snap_error = 0.1;
         let triplets = [worse, better];
 
-        let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), &triplets, false, None, false);
-        assert_eq!(codes.len(), 1, "expected exactly one decode, no spurious duplicate");
-        assert_eq!(attempts.len(), 1, "the duplicate must be deduped away before attempting");
-        assert_eq!(attempts[0].triplet_index, 1, "the lower-snap_error (index 1) survivor must be the one attempted");
+        let (codes, attempts, _timings, ..) = decode_candidates(
+            &view,
+            &grid,
+            &dummy_finders(3),
+            &triplets,
+            false,
+            None,
+            false,
+        );
+        assert_eq!(
+            codes.len(),
+            1,
+            "expected exactly one decode, no spurious duplicate"
+        );
+        assert_eq!(
+            attempts.len(),
+            1,
+            "the duplicate must be deduped away before attempting"
+        );
+        assert_eq!(
+            attempts[0].triplet_index, 1,
+            "the lower-snap_error (index 1) survivor must be the one attempted"
+        );
     }
 
     #[test]
@@ -1354,11 +1493,19 @@ mod tests {
         let (quad, img_side) = axis_aligned_quad(dim, scale, 4.0);
         let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
         let code = qrcode::QrCode::with_version(
-            b"OOBTEST", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+            b"OOBTEST",
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
         )
         .unwrap();
         let img = render_module_grid_transformed(
-            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+            dim,
+            |x, y| code[(x, y)] == qrcode::Color::Dark,
+            25,
+            235,
+            &transform,
+            img_side,
+            img_side,
         );
         // Crop the frame's own width in half, same trick sample.rs's own
         // OOB test uses: the triplet still reflects the true (pre-crop)
@@ -1369,13 +1516,24 @@ mod tests {
         let grid = TileGrid::build(&view);
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
-        let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
+        let (codes, attempts, _timings, ..) = decode_candidates(
+            &view,
+            &grid,
+            &dummy_finders(3),
+            std::slice::from_ref(&t),
+            false,
+            None,
+            false,
+        );
         assert!(codes.is_empty());
         // One attempt per corner-role rotation (all fail), each rejected
         // by the OOB gate before decode.
         assert_eq!(attempts.len(), 3);
-        assert!(attempts[0].outcome.starts_with("oob_fraction"), "{}", attempts[0].outcome);
+        assert!(
+            attempts[0].outcome.starts_with("oob_fraction"),
+            "{}",
+            attempts[0].outcome
+        );
     }
 
     #[test]
@@ -1395,8 +1553,15 @@ mod tests {
             inverted: false,
             finder_indices: [0, 1, 2],
         };
-        let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
+        let (codes, attempts, _timings, ..) = decode_candidates(
+            &view,
+            &grid,
+            &dummy_finders(3),
+            std::slice::from_ref(&t),
+            false,
+            None,
+            false,
+        );
         assert!(codes.is_empty());
         // One attempt per corner-role rotation, all failing cleanly. Each
         // costs exactly 1 round (confirmed via `rounds`: no alignment
@@ -1441,12 +1606,22 @@ mod tests {
                 finder_indices: [i * 3, i * 3 + 1, i * 3 + 2],
             })
             .collect();
-        let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(total * 3), &triplets, false, None, false);
+        let (codes, attempts, _timings, ..) = decode_candidates(
+            &view,
+            &grid,
+            &dummy_finders(total * 3),
+            &triplets,
+            false,
+            None,
+            false,
+        );
         assert!(codes.is_empty());
         assert_eq!(attempts.len(), MAX_DECODE_ROUNDS);
         let rounds_run: usize = attempts.iter().map(|a| a.rounds.len().max(1)).sum();
-        assert_eq!(rounds_run, MAX_DECODE_ROUNDS, "budget must bind exactly at 1 round/attempt on this geometry");
+        assert_eq!(
+            rounds_run, MAX_DECODE_ROUNDS,
+            "budget must bind exactly at 1 round/attempt on this geometry"
+        );
     }
 
     // --- Task 5b: image-derived 4th corner + corner-role rotation ---
@@ -1481,25 +1656,43 @@ mod tests {
         let quad = keystone_quad(dim, scale, 0.90, img_side);
         let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
         let code = qrcode::QrCode::with_version(
-            b"KEYSTONE", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+            b"KEYSTONE",
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
         )
         .unwrap();
         assert_eq!(code.width(), dim);
         let img = render_module_grid_transformed(
-            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+            dim,
+            |x, y| code[(x, y)] == qrcode::Color::Dark,
+            25,
+            235,
+            &transform,
+            img_side,
+            img_side,
         );
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let grid = TileGrid::build(&view);
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
-        let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
+        let (codes, attempts, _timings, ..) = decode_candidates(
+            &view,
+            &grid,
+            &dummy_finders(3),
+            std::slice::from_ref(&t),
+            false,
+            None,
+            false,
+        );
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "KEYSTONE");
         // The decode must have come through the image-derived corner — the
         // whole point of Task 5b — not the parallelogram fallback (which
         // this keystone is pinned to defeat).
-        let decoded_attempt = attempts.iter().find(|a| a.outcome.starts_with("decoded")).unwrap();
+        let decoded_attempt = attempts
+            .iter()
+            .find(|a| a.outcome.starts_with("decoded"))
+            .unwrap();
         assert!(
             decoded_attempt.refined_corner,
             "expected the refined-corner path, got: {decoded_attempt:?}"
@@ -1515,7 +1708,8 @@ mod tests {
             decoded_attempt.rounds
         );
         assert!(
-            decoded_attempt.rounds[0].starts_with("parallelogram:") && decoded_attempt.rounds[0] != "parallelogram:decoded",
+            decoded_attempt.rounds[0].starts_with("parallelogram:")
+                && decoded_attempt.rounds[0] != "parallelogram:decoded",
             "expected the first round to be a FAILED parallelogram attempt, got: {:?}",
             decoded_attempt.rounds
         );
@@ -1549,19 +1743,34 @@ mod tests {
         let quad = keystone_quad(dim, scale, 0.90, img_side);
         let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
         let code = qrcode::QrCode::with_version(
-            b"MULTIREGIONKEYSTONE", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+            b"MULTIREGIONKEYSTONE",
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
         )
         .unwrap();
         assert_eq!(code.width(), dim);
         let img = render_module_grid_transformed(
-            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+            dim,
+            |x, y| code[(x, y)] == qrcode::Color::Dark,
+            25,
+            235,
+            &transform,
+            img_side,
+            img_side,
         );
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let grid = TileGrid::build(&view);
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
-        let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, false);
+        let (codes, attempts, _timings, ..) = decode_candidates(
+            &view,
+            &grid,
+            &dummy_finders(3),
+            std::slice::from_ref(&t),
+            false,
+            None,
+            false,
+        );
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "MULTIREGIONKEYSTONE");
 
@@ -1605,11 +1814,19 @@ mod tests {
         let (quad, img_side) = axis_aligned_quad(dim, scale, 4.0);
         let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
         let code = qrcode::QrCode::with_version(
-            b"ROTROLE", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+            b"ROTROLE",
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
         )
         .unwrap();
         let img = render_module_grid_transformed(
-            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+            dim,
+            |x, y| code[(x, y)] == qrcode::Color::Dark,
+            25,
+            235,
+            &transform,
+            img_side,
+            img_side,
         );
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let grid = TileGrid::build(&view);
@@ -1624,8 +1841,15 @@ mod tests {
         rotated.bl = good.tl;
         rotated.finder_indices = [1, 2, 0];
 
-        let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&rotated), false, None, false);
+        let (codes, attempts, _timings, ..) = decode_candidates(
+            &view,
+            &grid,
+            &dummy_finders(3),
+            std::slice::from_ref(&rotated),
+            false,
+            None,
+            false,
+        );
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "ROTROLE");
         assert!(
@@ -1656,13 +1880,23 @@ mod tests {
         // sample-region quads are distinguishable) and disjoint finder
         // indices (so proximity dedup keeps both, and both get attempted).
         let a = TripletCandidate {
-            tl: [10.0, 10.0], tr: [50.0, 10.0], bl: [10.0, 50.0],
-            module: 4.0, dimension: 21, snap_error: 0.1, inverted: false,
+            tl: [10.0, 10.0],
+            tr: [50.0, 10.0],
+            bl: [10.0, 50.0],
+            module: 4.0,
+            dimension: 21,
+            snap_error: 0.1,
+            inverted: false,
             finder_indices: [0, 1, 2],
         };
         let b = TripletCandidate {
-            tl: [5.0, 5.0], tr: [55.0, 8.0], bl: [8.0, 55.0],
-            module: 4.0, dimension: 21, snap_error: 0.2, inverted: false,
+            tl: [5.0, 5.0],
+            tr: [55.0, 8.0],
+            bl: [8.0, 55.0],
+            module: 4.0,
+            dimension: 21,
+            snap_error: 0.2,
+            inverted: false,
             finder_indices: [3, 4, 5],
         };
 
@@ -1670,9 +1904,17 @@ mod tests {
         // attempt (candidate A, rotation 0 — i.e. `a` unrotated) produces,
         // computed directly via `attempt_candidate` so this test doesn't
         // need to hand-derive the sampled quad geometry itself.
-        let mut timings = DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0, refine_ns: 0 };
+        let mut timings = DecodeTimings {
+            version_ns: 0,
+            alignment_ns: 0,
+            sample_decode_ns: 0,
+            refine_ns: 0,
+        };
         let expected = attempt_candidate(&view, &grid, 0, &a, &mut timings, true, None, false);
-        assert!(expected.code.is_none(), "test setup: candidate A must not decode");
+        assert!(
+            expected.code.is_none(),
+            "test setup: candidate A must not decode"
+        );
         assert!(
             !expected.sample_regions_trace.is_empty(),
             "test setup: a v1 candidate must still produce one whole-grid sample region"
@@ -1680,25 +1922,39 @@ mod tests {
 
         let (codes, attempts, _timings, trace_data) =
             decode_candidates(&view, &grid, &dummy_finders(6), &[a, b], true, None, false);
-        assert!(codes.is_empty(), "test setup: nothing in this frame should decode");
+        assert!(
+            codes.is_empty(),
+            "test setup: nothing in this frame should decode"
+        );
         assert!(
             attempts.len() > 1,
             "expected multiple attempts (A's rotation retries and/or B): {attempts:?}"
         );
 
-        assert_eq!(trace_data.sample_regions.len(), expected.sample_regions_trace.len());
-        for (got, want) in trace_data.sample_regions.iter().zip(expected.sample_regions_trace.iter()) {
+        assert_eq!(
+            trace_data.sample_regions.len(),
+            expected.sample_regions_trace.len()
+        );
+        for (got, want) in trace_data
+            .sample_regions
+            .iter()
+            .zip(expected.sample_regions_trace.iter())
+        {
             assert_eq!(got.module_rect, want.module_rect);
             for k in 0..4 {
                 assert!(
                     (got.quad[k][0] - want.quad[k][0]).abs() < 1e-9
                         && (got.quad[k][1] - want.quad[k][1]).abs() < 1e-9,
                     "sample_regions corner {k} mismatch: got {:?}, want {:?}",
-                    got.quad[k], want.quad[k],
+                    got.quad[k],
+                    want.quad[k],
                 );
             }
         }
-        assert!(trace_data.bits.is_none(), "nothing decoded, so bits must stay None");
+        assert!(
+            trace_data.bits.is_none(),
+            "nothing decoded, so bits must stay None"
+        );
     }
 
     #[test]
@@ -1713,11 +1969,19 @@ mod tests {
         let (quad, img_side) = axis_aligned_quad(dim, scale, 4.0);
         let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
         let code = qrcode::QrCode::with_version(
-            b"FIXAORDER", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+            b"FIXAORDER",
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
         )
         .unwrap();
         let img = render_module_grid_transformed(
-            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+            dim,
+            |x, y| code[(x, y)] == qrcode::Color::Dark,
+            25,
+            235,
+            &transform,
+            img_side,
+            img_side,
         );
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let grid = TileGrid::build(&view);
@@ -1735,7 +1999,13 @@ mod tests {
         garbage.finder_indices = [3, 4, 5];
 
         let (codes, attempts, _timings, trace_data) = decode_candidates(
-            &view, &grid, &dummy_finders(6), &[good, garbage], true, None, false,
+            &view,
+            &grid,
+            &dummy_finders(6),
+            &[good, garbage],
+            true,
+            None,
+            false,
         );
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "FIXAORDER");
@@ -1781,11 +2051,19 @@ mod tests {
         let (quad, img_side) = axis_aligned_quad(dim, scale, 4.0);
         let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
         let code = qrcode::QrCode::with_version(
-            b"LATERWINS", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+            b"LATERWINS",
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
         )
         .unwrap();
         let img = render_module_grid_transformed(
-            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side,
+            dim,
+            |x, y| code[(x, y)] == qrcode::Color::Dark,
+            25,
+            235,
+            &transform,
+            img_side,
+            img_side,
         );
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let grid = TileGrid::build(&view);
@@ -1809,12 +2087,27 @@ mod tests {
 
         // Ground truth: the decoded attempt's own trace, computed directly
         // (same technique as the total-failure test above).
-        let mut timings = DecodeTimings { version_ns: 0, alignment_ns: 0, sample_decode_ns: 0, refine_ns: 0 };
+        let mut timings = DecodeTimings {
+            version_ns: 0,
+            alignment_ns: 0,
+            sample_decode_ns: 0,
+            refine_ns: 0,
+        };
         let expected = attempt_candidate(&view, &grid, 1, &good, &mut timings, true, None, false);
-        assert!(expected.code.is_some(), "test setup: the good candidate must decode on its own");
+        assert!(
+            expected.code.is_some(),
+            "test setup: the good candidate must decode on its own"
+        );
 
-        let (codes, attempts, _timings, trace_data) =
-            decode_candidates(&view, &grid, &dummy_finders(6), &[garbage, good], true, None, false);
+        let (codes, attempts, _timings, trace_data) = decode_candidates(
+            &view,
+            &grid,
+            &dummy_finders(6),
+            &[garbage, good],
+            true,
+            None,
+            false,
+        );
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "LATERWINS");
         assert!(
@@ -1855,9 +2148,14 @@ mod tests {
             }
         }
         let bits = &trace_data.codes[0].bits;
-        let want_bits = expected.bits_trace.expect("expected attempt decoded, so it carries bits");
+        let want_bits = expected
+            .bits_trace
+            .expect("expected attempt decoded, so it carries bits");
         assert_eq!(bits.dim, want_bits.dim);
-        assert_eq!(bits.words, want_bits.words, "bits must be the decoded candidate's matrix");
+        assert_eq!(
+            bits.words, want_bits.words,
+            "bits must be the decoded candidate's matrix"
+        );
     }
 
     // --- `DecodedCode::corner_refined` plumbing (final-review carried item) ---
@@ -1903,19 +2201,35 @@ mod tests {
         let (quad, img_side) = axis_aligned_quad(dim, scale, 4.0);
         let transform = PerspectiveTransform::square_to_quad(quad).unwrap();
         let code = qrcode::QrCode::with_version(
-            b"CORNERFLAGS", qrcode::Version::Normal(version), qrcode::EcLevel::M,
+            b"CORNERFLAGS",
+            qrcode::Version::Normal(version),
+            qrcode::EcLevel::M,
         )
         .unwrap();
         assert_eq!(code.width(), dim);
         let img = crate::testpaint::render_module_grid_transformed_antialiased(
-            dim, |x, y| code[(x, y)] == qrcode::Color::Dark, 25, 235, &transform, img_side, img_side, 8,
+            dim,
+            |x, y| code[(x, y)] == qrcode::Color::Dark,
+            25,
+            235,
+            &transform,
+            img_side,
+            img_side,
+            8,
         );
         let view = LumaView::new(&img, img_side, img_side, img_side).unwrap();
         let grid = TileGrid::build(&view);
 
         let t = triplet_from_transform(&transform, dim, dim as u32);
-        let (codes, attempts, _timings, ..) =
-            decode_candidates(&view, &grid, &dummy_finders(3), std::slice::from_ref(&t), false, None, true);
+        let (codes, attempts, _timings, ..) = decode_candidates(
+            &view,
+            &grid,
+            &dummy_finders(3),
+            std::slice::from_ref(&t),
+            false,
+            None,
+            true,
+        );
         assert_eq!(codes.len(), 1, "attempts: {attempts:?}");
         assert_eq!(codes[0].payload, "CORNERFLAGS");
         assert!(

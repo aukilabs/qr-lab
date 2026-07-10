@@ -1,3 +1,18 @@
 [workspace]
 resolver = "2"
-members = ["crates/qrk-core", "crates/qrk-wasm"]
+members = [
+  "crates/qrk-core",
+  "crates/qrk-wasm",
+  "crates/qrk-bench",
+  "crates/qrk-ffi",
+]
+
+# Mobile / size-sensitive release for qrk-ffi (cdylib + staticlib).
+# Host benches/tests keep the default release profile.
+[profile.release-mobile]
+inherits = "release"
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+panic = "abort"

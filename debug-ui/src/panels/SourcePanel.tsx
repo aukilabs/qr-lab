@@ -149,31 +149,21 @@ export function SourcePanel({
   const currentFileLabel = source?.kind === "file" ? source.file.name : null;
 
   return (
-    <section style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <h2 style={{ fontSize: 13, margin: 0, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 0.5 }}>
-        Source
-      </h2>
+    <section className="panel-section">
+      <h2 className="panel-title">Source</h2>
 
       <div
+        className={dragActive ? "dropzone dropzone-active" : "dropzone"}
         onDragOver={(e) => {
           e.preventDefault();
           setDragActive(true);
         }}
         onDragLeave={() => setDragActive(false)}
         onDrop={handleDrop}
-        style={{
-          border: `1px dashed ${dragActive ? "#4ade80" : "#4b5563"}`,
-          borderRadius: 4,
-          padding: "10px 8px",
-          fontSize: 12,
-          textAlign: "center",
-          color: "#9ca3af",
-          background: dragActive ? "rgba(74, 222, 128, 0.08)" : "transparent",
-        }}
       >
-        <div>Drag & drop an image or video here</div>
-        <div style={{ margin: "6px 0" }}>or</div>
-        <label style={{ cursor: "pointer", color: "#4ade80", textDecoration: "underline" }}>
+        <div>Drag & drop an image or video</div>
+        <div style={{ margin: "6px 0", color: "var(--text-dim)" }}>or</div>
+        <label className="dropzone-link">
           choose a file
           <input
             type="file"
@@ -183,13 +173,27 @@ export function SourcePanel({
           />
         </label>
         {currentFileLabel && (
-          <div style={{ marginTop: 6, color: "#e5e7eb", overflowWrap: "anywhere" }}>{currentFileLabel}</div>
+          <div
+            style={{
+              marginTop: 8,
+              color: "var(--text-primary)",
+              overflowWrap: "anywhere",
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+            }}
+          >
+            {currentFileLabel}
+          </div>
         )}
-        {pickError && <div style={{ marginTop: 6, color: "#f87171" }}>{pickError}</div>}
+        {pickError && (
+          <div className="danger-text" style={{ marginTop: 6 }}>
+            {pickError}
+          </div>
+        )}
       </div>
 
-      <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
-        <span style={{ color: "#9ca3af" }}>Golden fixture</span>
+      <label className="field-stack">
+        <span className="field-label">Golden fixture</span>
         <select value={currentFixtureName} onChange={handleFixtureChange}>
           <option value="" disabled>
             {fixtures.length === 0 ? "(loading…)" : "Choose a fixture…"}
@@ -201,11 +205,11 @@ export function SourcePanel({
             </option>
           ))}
         </select>
-        {manifestError && <span style={{ color: "#f87171" }}>manifest: {manifestError}</span>}
+        {manifestError && <span className="danger-text">manifest: {manifestError}</span>}
       </label>
 
-      <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
-        <span style={{ color: "#9ca3af" }}>Working resolution</span>
+      <label className="field-stack">
+        <span className="field-label">Working resolution</span>
         <select
           value={String(resolution)}
           onChange={(e) => onResolutionChange(parseResolutionOption(e.target.value))}

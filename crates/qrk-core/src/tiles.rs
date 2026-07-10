@@ -1,6 +1,45 @@
 use crate::consts::{CONTRAST_FLOOR, TILE};
 use crate::LumaView;
 
+/// Binarization parameters for [`TileGrid::build_with`] (Plan 6). The
+/// default is EXACTLY the historical [`TileGrid::build`] behavior — same
+/// integer arithmetic, same skip rule — so every existing entry point stays
+/// bit-identical. The robustness ladder perturbs these to re-scan a frame
+/// without touching any pixels:
+///
+/// - `threshold_offset`: added to each tile's computed threshold, clamped to
+///   `0..=255`. ±8 (~3% of the 8-bit range, the amplitude of typical print
+///   dot-gain / JPEG ringing) recovers codes whose ink bleeds dark (`-8`) or
+///   washes light (`+8`) relative to the local midpoint.
+/// - `contrast_floor`: replaces [`CONTRAST_FLOOR`] (12 = 6σ of the σ≈2
+///   sensor-noise model). The ladder's low-contrast rung drops it to 6 (3σ)
+///   to reach glare-washed codes the default floor skips entirely — at the
+///   cost of more noise-triggered candidate work, which is why it is a
+///   recovery rung and not the default.
+/// - `sauvola`: use a tile-granular Sauvola threshold surface
+///   (`t = m·(1 + k·(s/R − 1))`, k=0.2, R=128 — Sauvola's published
+///   normalization constants) computed from 3×3-dilated tile mean/std
+///   instead of the min/max midpoint. The std term pulls thresholds toward
+///   background in low-variance regions, so quiet zones stay clean where a
+///   midpoint threshold speckles — the DIBCO-transfer rung for noisy,
+///   unevenly lit frames.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BinarizeSpec {
+    pub threshold_offset: i16,
+    pub contrast_floor: u8,
+    pub sauvola: bool,
+}
+
+impl Default for BinarizeSpec {
+    fn default() -> Self {
+        Self {
+            threshold_offset: 0,
+            contrast_floor: CONTRAST_FLOOR,
+            sauvola: false,
+        }
+    }
+}
+
 pub struct TileGrid {
     pub tiles_x: usize,
     pub tiles_y: usize,
@@ -10,20 +49,66 @@ pub struct TileGrid {
 
 impl TileGrid {
     pub fn build(view: &LumaView) -> TileGrid {
+        Self::build_with(view, BinarizeSpec::default())
+    }
+
+    /// [`TileGrid::build`] with explicit [`BinarizeSpec`] parameters. With
+    /// `BinarizeSpec::default()` this is bit-identical to the historical
+    /// `build` (same loops, same integer ops — the default-path pins in
+    /// `decode_gate.rs` continue to hold).
+    pub fn build_with(view: &LumaView, spec: BinarizeSpec) -> TileGrid {
         let (w, h) = (view.width(), view.height());
         let tiles_x = w.div_ceil(TILE);
         let tiles_y = h.div_ceil(TILE);
         let mut mins = vec![255u8; tiles_x * tiles_y];
         let mut maxs = vec![0u8; tiles_x * tiles_y];
+        // Sauvola-only tile statistics; untouched (empty) on the default
+        // path so the historical path allocates nothing extra beyond two
+        // empty Vecs.
+        let mut sums = Vec::new();
+        let mut sumsqs = Vec::new();
+        let mut counts = Vec::new();
+        if spec.sauvola {
+            sums = vec![0u32; tiles_x * tiles_y];
+            sumsqs = vec![0u64; tiles_x * tiles_y];
+            counts = vec![0u32; tiles_x * tiles_y];
+        }
         for ty in 0..tiles_y {
             for y in ty * TILE..((ty + 1) * TILE).min(h) {
                 let row = view.row(y);
                 for tx in 0..tiles_x {
-                    let s = &row[tx * TILE..((tx + 1) * TILE).min(w)];
+                    let x0 = tx * TILE;
+                    let x1 = (x0 + TILE).min(w);
+                    let s = &row[x0..x1];
                     let idx = ty * tiles_x + tx;
+                    // Full TILE-wide segment: NEON min/max (+ optional
+                    // sum/sumsq) is bit-identical to the scalar fold and
+                    // is the unconditional full-frame cost of every scan.
+                    #[cfg(target_arch = "aarch64")]
+                    {
+                        if s.len() == TILE {
+                            let arr: &[u8; TILE] = s.try_into().expect("TILE bytes");
+                            let (lo, hi) = crate::neon::min_max_u8x16(arr);
+                            mins[idx] = mins[idx].min(lo);
+                            maxs[idx] = maxs[idx].max(hi);
+                            if spec.sauvola {
+                                sums[idx] += crate::neon::sum_u8x16(arr);
+                                sumsqs[idx] += crate::neon::sumsq_u8x16(arr);
+                                counts[idx] += TILE as u32;
+                            }
+                            continue;
+                        }
+                    }
                     for &p in s {
                         mins[idx] = mins[idx].min(p);
                         maxs[idx] = maxs[idx].max(p);
+                    }
+                    if spec.sauvola {
+                        for &p in s {
+                            sums[idx] += p as u32;
+                            sumsqs[idx] += (p as u64) * (p as u64);
+                        }
+                        counts[idx] += s.len() as u32;
                     }
                 }
             }
@@ -33,18 +118,42 @@ impl TileGrid {
         for ty in 0..tiles_y {
             for tx in 0..tiles_x {
                 let (mut lo, mut hi) = (255u8, 0u8);
+                let (mut sum, mut sumsq, mut count) = (0u64, 0u64, 0u64);
                 for ny in ty.saturating_sub(1)..=(ty + 1).min(tiles_y - 1) {
                     for nx in tx.saturating_sub(1)..=(tx + 1).min(tiles_x - 1) {
                         lo = lo.min(mins[ny * tiles_x + nx]);
                         hi = hi.max(maxs[ny * tiles_x + nx]);
+                        if spec.sauvola {
+                            sum += sums[ny * tiles_x + nx] as u64;
+                            sumsq += sumsqs[ny * tiles_x + nx];
+                            count += counts[ny * tiles_x + nx] as u64;
+                        }
                     }
                 }
                 let idx = ty * tiles_x + tx;
-                threshold[idx] = ((lo as u16 + hi as u16) / 2) as u8;
-                skip[idx] = hi - lo < CONTRAST_FLOOR;
+                let base = if spec.sauvola && count > 0 {
+                    // Sauvola over the dilated neighborhood: m·(1 + k·(s/R − 1))
+                    // with k=0.2, R=128, in f64 (identical on every host —
+                    // IEEE-754, no fast-math).
+                    let m = sum as f64 / count as f64;
+                    let var = (sumsq as f64 / count as f64) - m * m;
+                    let s = var.max(0.0).sqrt();
+                    (m * (1.0 + 0.2 * (s / 128.0 - 1.0)))
+                        .round()
+                        .clamp(0.0, 255.0) as i16
+                } else {
+                    ((lo as u16 + hi as u16) / 2) as i16
+                };
+                threshold[idx] = (base + spec.threshold_offset).clamp(0, 255) as u8;
+                skip[idx] = hi - lo < spec.contrast_floor;
             }
         }
-        TileGrid { tiles_x, tiles_y, threshold, skip }
+        TileGrid {
+            tiles_x,
+            tiles_y,
+            threshold,
+            skip,
+        }
     }
 
     /// # Panics

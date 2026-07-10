@@ -1,5 +1,6 @@
 """Generate the golden fixture suite. See README.md."""
 import argparse
+import dataclasses
 import json
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import cv2
 import numpy as np
 
 import camera
+import degrade
 import render
 import scenarios
 
@@ -38,11 +40,53 @@ def render_fixture(spec, intr):
             "inverted": code.inverted, "opaque_plate": code.opaque_plate,
         })
 
+    # Degradations apply in the order documented in degrade.py: optics
+    # (motion/defocus) -> illumination -> resolution -> blur_sigma ->
+    # occlusion -> noise -> jpeg. `deg is None` (all pre-plan6 specs) takes
+    # exactly the legacy path, byte-identically.
+    deg = spec.degradations
+    if deg is not None:
+        if deg.motion_blur is not None:
+            mb = deg.motion_blur
+            img = degrade.motion_blur(img, mb.length_px, mb.angle_deg,
+                                      mb.curve)
+        if deg.defocus_radius_px is not None:
+            img = degrade.defocus_blur(img, deg.defocus_radius_px)
+        if deg.shadow is not None:
+            sh = deg.shadow
+            img = degrade.shadow(img, sh.strength, sh.softness_px,
+                                 sh.angle_deg, sh.offset_xy, sh.shape,
+                                 sh.size_px)
+        if deg.illum_gradient is not None:
+            ig = deg.illum_gradient
+            img = degrade.illum_gradient(img, ig.min_gain, ig.max_gain,
+                                         ig.angle_deg)
+        if deg.glare is not None:
+            gl = deg.glare
+            img = degrade.glare(img, gl.center_xy, gl.radius_px, gl.gain)
+        if deg.contrast_scale is not None:
+            img = degrade.contrast_compress(img, deg.contrast_scale)
+        if deg.resolution is not None:
+            img = degrade.resolution(img, deg.resolution.factor,
+                                     deg.resolution.method)
+
     if spec.blur_sigma > 0:
         img = cv2.GaussianBlur(img, (0, 0), spec.blur_sigma)
+    if deg is not None and deg.occlusion is not None:
+        img = degrade.occlusion(img, deg.occlusion.rect_xyxy,
+                                deg.occlusion.gray)
     if spec.noise_sigma > 0:
-        noise = rng.normal(0, spec.noise_sigma, img.shape)
+        if deg is not None and deg.shot_noise:
+            # Signal-dependent (shot) noise: per-pixel sigma scales with
+            # sqrt(signal), normalized to noise_sigma at mid-gray (128).
+            sigma = spec.noise_sigma * np.sqrt(
+                np.maximum(img.astype(np.float32), 1.0) / 128.0)
+            noise = rng.normal(0.0, 1.0, img.shape) * sigma
+        else:
+            noise = rng.normal(0, spec.noise_sigma, img.shape)
         img = np.clip(np.rint(img.astype(np.float32) + noise), 0, 255).astype(np.uint8)
+    if deg is not None and deg.jpeg_quality is not None:
+        img = degrade.jpeg(img, deg.jpeg_quality)
 
     meta = {
         "name": spec.name, "width": intr.width, "height": intr.height,
@@ -50,6 +94,15 @@ def render_fixture(spec, intr):
         "blur_sigma": spec.blur_sigma, "noise_sigma": spec.noise_sigma,
         "seed": spec.seed, "codes": truths,
     }
+    if deg is not None:
+        meta["degradations"] = {
+            k: v for k, v in dataclasses.asdict(deg).items()
+            if v is not None and not (k == "shot_noise" and not v)}
+        for truth in truths:
+            detect, decode, difficulty = scenarios.expectations(truth, deg)
+            truth["expect_detect"] = detect
+            truth["expect_decode"] = decode
+            truth["difficulty"] = difficulty
     return img, meta
 
 

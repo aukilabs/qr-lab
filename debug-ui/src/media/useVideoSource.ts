@@ -51,6 +51,13 @@ export interface VideoSourceState {
    * UX) — a caller that wants "seek without touching play state" (e.g. a
    * click on the bar while paused) gets exactly that. */
   seek(time: number): void;
+  /** Re-deliver the CURRENT frame to `onFrame` without seeking or touching
+   * play state (Plan 6): robust mode's "capture on paused frames only"
+   * policy scans playing frames without visualization payload, so pausing
+   * must re-scan the frame the user stopped on — with capture — to light
+   * up the filmstrip/baseline overlays for it. No-ops before the first
+   * frame has decoded (same guard as every other capture path). */
+  recapture(): void;
 }
 
 export interface VideoFrame {
@@ -257,6 +264,10 @@ export function useVideoSource(
     video.currentTime = clampTime(time, video.duration);
   };
 
+  const recapture = () => {
+    captureFrame(videoRef.current?.currentTime ?? 0);
+  };
+
   return {
     videoRef,
     width,
@@ -271,5 +282,6 @@ export function useVideoSource(
     pause,
     stepFrame,
     seek,
+    recapture,
   };
 }

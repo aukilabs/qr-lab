@@ -105,7 +105,8 @@ fn fixture_prefix(name: &str) -> String {
     let mut s = name;
     if let Some(pos) = s.rfind('_') {
         let tail = &s[pos + 1..];
-        if tail.len() > 1 && tail.starts_with('v') && tail[1..].bytes().all(|b| b.is_ascii_digit()) {
+        if tail.len() > 1 && tail.starts_with('v') && tail[1..].bytes().all(|b| b.is_ascii_digit())
+        {
             s = &s[..pos];
         }
     }
@@ -170,8 +171,16 @@ impl PrefixStats {
 
 #[test]
 fn fixture_accuracy_gate() {
-    let fixtures = common::load_all();
-    assert_eq!(fixtures.len(), 81, "expected exactly 81 golden fixtures in fixtures/");
+    // Golden (non-degraded) fixtures only: the 0.10px accuracy bar is
+    // defined on nominal imaging conditions; corner accuracy under Plan 6
+    // degradations (blur, shadow, low-res) is a robustness metric owned
+    // by the benchmark, not this gate.
+    let fixtures = common::load_golden();
+    assert_eq!(
+        fixtures.len(),
+        81,
+        "expected exactly 81 golden fixtures in fixtures/"
+    );
 
     let mut stats: BTreeMap<String, PrefixStats> = BTreeMap::new();
     let mut hard_failures: Vec<String> = Vec::new();
@@ -179,7 +188,13 @@ fn fixture_accuracy_gate() {
     for fx in &fixtures {
         let prefix = fixture_prefix(&fx.name);
         let view = fx.view();
-        let det = scan(&view, &ScanOptions { max_working_dim: 0, refine: true });
+        let det = scan(
+            &view,
+            &ScanOptions {
+                max_working_dim: 0,
+                refine: true,
+            },
+        );
         assert_eq!(
             det.source_scale, 1.0,
             "{}: expected source_scale == 1.0 (max_working_dim: 0 disables downscale)",
@@ -200,7 +215,9 @@ fn fixture_accuracy_gate() {
 
             match code.refined_corners {
                 None => {
-                    entry.refine_failures.push(format!("{}: {:?}", fx.name, truth.payload));
+                    entry
+                        .refine_failures
+                        .push(format!("{}: {:?}", fx.name, truth.payload));
                 }
                 Some(refined) => {
                     let want = permuted_truth_corners(truth);

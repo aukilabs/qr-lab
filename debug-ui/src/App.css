@@ -1,12 +1,51 @@
-/* Task 6: app shell layout — left sidebar (source/layers/timings, stacked
- * and independently scrollable) + main area (viewport, video controls when
- * applicable, status bar). Panel-internal styling (SourcePanel, LayerPanel,
- * TimingsPanel) stays inline in each component per this codebase's existing
- * precedent; this file only owns the shell around them plus a couple of
- * shared primitives (banners, section headers) reused across panels. */
+/* App shell — Palantir / Foundry-inspired ops console.
+ * Dense, cool-dark surfaces, cyan telemetry accents, monospace metrics.
+ * Panel-internal layout mostly stays inline; colors come from tokens below. */
 
 :root {
   color-scheme: dark;
+
+  --bg-void: #07090d;
+  --bg-base: #0a0d12;
+  --bg-panel: #0e1219;
+  --bg-elevated: #141a24;
+  --bg-hover: #1a2230;
+  --bg-active: #1e2a3a;
+
+  --border-subtle: #1a2332;
+  --border-default: #243044;
+  --border-strong: #2f3f56;
+
+  --text-primary: #e8edf5;
+  --text-secondary: #9aabbf;
+  --text-muted: #6b7c91;
+  --text-dim: #4a5a6e;
+
+  --accent: #3de0c5;
+  --accent-dim: rgba(61, 224, 197, 0.14);
+  --accent-strong: #5eebcf;
+  --accent-text: #0a1210;
+
+  --warn: #e8b84a;
+  --warn-dim: rgba(232, 184, 74, 0.12);
+  --danger: #f07178;
+  --danger-dim: rgba(240, 113, 120, 0.12);
+  --success: #3de0c5;
+
+  --radius: 2px;
+  --radius-sm: 1px;
+
+  --font-ui:
+    "Inter",
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  --sidebar-width: 300px;
+  --header-h: 40px;
 }
 
 html,
@@ -17,46 +56,109 @@ body,
 }
 
 body {
-  background: #0b0f17;
-  color: #e5e7eb;
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    Roboto,
-    sans-serif;
+  background: var(--bg-void);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
+/* ── Shell ─────────────────────────────────────────────────────────── */
 
 .app {
   display: flex;
   height: 100vh;
   overflow: hidden;
+  background: var(--bg-base);
 }
 
 .sidebar {
-  width: 280px;
+  width: var(--sidebar-width);
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 12px;
+  gap: 0;
+  padding: 0;
   overflow-y: auto;
-  background: #111827;
-  border-right: 1px solid #1f2937;
+  overflow-x: hidden;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border-subtle);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-default) transparent;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 6px;
+}
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: 3px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--header-h);
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex: none;
+  background: linear-gradient(180deg, #10151e 0%, var(--bg-panel) 100%);
+}
+
+.brand-mark {
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  box-shadow: 0 0 10px rgba(61, 224, 197, 0.55);
+  flex: none;
+}
+
+.brand-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+.brand-sub {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.04em;
+}
+
+.sidebar-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 10px 12px 16px;
+  flex: 1;
 }
 
 .panel-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.panel-section:last-child {
+  border-bottom: none;
 }
 
 .panel-title {
-  font-size: 13px;
+  font-size: 10px;
+  font-weight: 600;
   margin: 0;
-  color: #9ca3af;
+  color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.12em;
 }
 
 .main {
@@ -64,13 +166,24 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  background: var(--bg-void);
 }
 
 .viewport-wrap {
   position: relative;
   flex: 1;
   min-height: 0;
-  background: #000;
+  /* subtle ops-grid behind empty/letterboxed areas */
+  background-color: var(--bg-void);
+  background-image:
+    linear-gradient(rgba(36, 48, 68, 0.28) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(36, 48, 68, 0.28) 1px, transparent 1px),
+    radial-gradient(ellipse 80% 60% at 50% 45%, #0c1018 0%, var(--bg-void) 72%);
+  background-size:
+    24px 24px,
+    24px 24px,
+    auto;
+  background-position: center;
 }
 
 .loading-overlay {
@@ -79,31 +192,226 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #9ca3af;
-  font-size: 13px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   pointer-events: none;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(7, 9, 13, 0.55);
+  backdrop-filter: blur(2px);
 }
 
 .banner {
-  padding: 8px 12px;
+  padding: 8px 14px;
   font-size: 12px;
+  font-family: var(--font-mono);
   flex: none;
 }
 
 .banner-error {
-  background: #450a0a;
-  color: #fca5a5;
-  border-bottom: 1px solid #7f1d1d;
+  background: var(--danger-dim);
+  color: var(--danger);
+  border-bottom: 1px solid rgba(240, 113, 120, 0.25);
 }
+
+/* ── Mode tabs ─────────────────────────────────────────────────────── */
+
+.mode-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 4px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-base);
+}
+
+.mode-tab {
+  flex: 1;
+  padding: 7px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-right: 1px solid var(--border-default);
+  border-radius: 0;
+  cursor: pointer;
+  transition:
+    color 0.12s ease,
+    background 0.12s ease;
+}
+
+.mode-tab:last-child {
+  border-right: none;
+}
+
+.mode-tab:hover:not(.mode-tab-active) {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.mode-tab-active {
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+  box-shadow: inset 0 -1px 0 var(--accent);
+}
+
+/* ── Shared form controls ──────────────────────────────────────────── */
+
+button,
+select,
+input[type="number"],
+input[type="text"] {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius);
+  outline: none;
+}
+
+button {
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+button:active:not(:disabled) {
+  background: var(--bg-active);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-dim);
+}
+
+select {
+  padding: 5px 8px;
+  width: 100%;
+  cursor: pointer;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-size:
+    4px 4px,
+    4px 4px;
+  background-repeat: no-repeat;
+  padding-right: 24px;
+}
+
+select:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+input[type="number"] {
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+}
+
+input[type="checkbox"]:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+/* ── Source dropzone helpers (used by SourcePanel classes) ─────────── */
+
+.dropzone {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 12px 10px;
+  font-size: 12px;
+  text-align: center;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.dropzone-active {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--accent-dim);
+  color: var(--accent-strong);
+}
+
+.dropzone-link {
+  cursor: pointer;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(61, 224, 197, 0.35);
+}
+
+.dropzone-link:hover {
+  color: var(--accent-strong);
+  border-bottom-color: var(--accent-strong);
+}
+
+.field-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+}
+
+.field-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.danger-text {
+  color: var(--danger);
+}
+
+/* ── Video controls ────────────────────────────────────────────────── */
 
 .video-controls {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 6px 12px;
-  background: #111827;
-  border-top: 1px solid #1f2937;
+  gap: 8px;
+  padding: 8px 14px 10px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
   font-size: 12px;
   flex: none;
 }
@@ -112,22 +420,30 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.video-controls-row button {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  padding: 5px 10px;
 }
 
 .video-frame-counter {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  color: #9ca3af;
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin-left: 4px;
 }
 
 .video-warn {
-  color: #fbbf24;
+  color: var(--warn);
+  font-size: 11px;
+  font-family: var(--font-mono);
 }
 
-/* Task 5e: timeline scrubber — full width of the controls row (its own
- * row, below the buttons/labels) so it's a comfortably large drag target
- * regardless of sidebar/window width. Custom thumb/track styling (rather
- * than the browser default) needs the `-webkit-`/`-moz-` prefixed
- * pseudo-elements repeated per engine; there's no unprefixed standard yet. */
 .video-scrub {
   width: 100%;
   height: 16px;
@@ -140,65 +456,42 @@ body {
 
 .video-scrub:disabled {
   cursor: default;
-  opacity: 0.5;
+  opacity: 0.45;
 }
 
 .video-scrub::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 2px;
-  background: #374151;
+  height: 3px;
+  border-radius: 1px;
+  background: var(--border-default);
 }
 
 .video-scrub::-moz-range-track {
-  height: 4px;
-  border-radius: 2px;
-  background: #374151;
+  height: 3px;
+  border-radius: 1px;
+  background: var(--border-default);
 }
 
 .video-scrub::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  margin-top: -5px;
-  border-radius: 50%;
-  background: #4ade80;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 1px;
+  background: var(--accent);
   border: none;
+  box-shadow: 0 0 8px rgba(61, 224, 197, 0.4);
 }
 
 .video-scrub::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: #4ade80;
+  width: 12px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--accent);
   border: none;
+  box-shadow: 0 0 8px rgba(61, 224, 197, 0.4);
 }
 
-/* Plan 5 Task 5: mode tabs (Media / 3D Scene) + the 3D-scene mode's own
- * layout — a canvas area (WebGL `<Canvas>` + a same-sized 2D overlay
- * canvas stacked on top via `position: absolute`) plus a right-hand
- * sidebar of scene/camera-sim/error/timings controls, mirroring the
- * media mode's own sidebar+main split. */
-.mode-tabs {
-  display: flex;
-  gap: 4px;
-}
-
-.mode-tab {
-  flex: 1;
-  padding: 6px 8px;
-  font-size: 12px;
-  background: #1f2937;
-  color: #9ca3af;
-  border: 1px solid #374151;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.mode-tab-active {
-  background: #2563eb;
-  color: #eff6ff;
-  border-color: #3b82f6;
-}
+/* ── 3D scene mode ─────────────────────────────────────────────────── */
 
 .app > .scene3d {
   flex: 1;
@@ -206,24 +499,17 @@ body {
   min-width: 0;
 }
 
-/* Centers a forced-square canvas area — see `Scene3D.tsx`'s doc comment
- * on why the on-screen container MUST be square (camera.aspect has to
- * match the square offscreen render target the scan loop reads back
- * from, or the rendered geometry stretches and detection breaks). */
 .scene3d-canvas-area {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #000;
+  background: var(--bg-void);
   padding: 12px;
 }
 
 .scene3d-canvas-wrap {
-  /* width/height are set inline (px) by `Scene3D.tsx`, measured from the
-   * container — see that file's doc comment on why CSS alone
-   * (aspect-ratio + height/max-width) isn't reliable here. */
   position: relative;
 }
 
@@ -237,17 +523,80 @@ body {
 
 .scene3d-sidebar {
   border-right: none;
-  border-left: 1px solid #1f2937;
+  border-left: 1px solid var(--border-subtle);
 }
+
+/* ── Filmstrip ─────────────────────────────────────────────────────── */
+
+.filmstrip {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+  flex: none;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+/* ── Status / telemetry bar ────────────────────────────────────────── */
 
 .status-bar {
   display: flex;
-  gap: 16px;
-  padding: 6px 12px;
-  background: #111827;
-  border-top: 1px solid #1f2937;
-  font-size: 12px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  color: #d1d5db;
+  gap: 0;
+  padding: 0;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
   flex: none;
+  min-height: 28px;
+  align-items: stretch;
+}
+
+.status-bar > span {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border-right: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.status-bar > span:last-child {
+  border-right: none;
+}
+
+.status-bar > span::before {
+  content: none;
+}
+
+/* Timings table polish (class optional; also works via cascade) */
+.timings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.timings-table th {
+  text-align: left;
+  padding: 2px 8px 4px 0;
+  color: var(--text-dim);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.timings-table td {
+  padding: 3px 8px 3px 0;
+  vertical-align: middle;
+}
+
+.timings-table td:first-child {
+  color: var(--text-muted);
 }

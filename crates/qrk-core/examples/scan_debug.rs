@@ -20,7 +20,10 @@ fn main() {
     // Optional nearest-neighbor downscale to max_dim (production-style).
     let (dw, dh, data) = if max_dim > 0 && w.max(h) > max_dim {
         let s = max_dim as f64 / w.max(h) as f64;
-        let (dw, dh) = ((w as f64 * s).round() as usize, (h as f64 * s).round() as usize);
+        let (dw, dh) = (
+            (w as f64 * s).round() as usize,
+            (h as f64 * s).round() as usize,
+        );
         let mut out = vec![0u8; dw * dh];
         for y in 0..dh {
             for x in 0..dw {
@@ -49,7 +52,15 @@ fn main() {
     for t in &trips {
         println!(
             "  tl=({:.0},{:.0}) tr=({:.0},{:.0}) bl=({:.0},{:.0}) dim={} snap_err={:.2} inv={}",
-            t.tl[0], t.tl[1], t.tr[0], t.tr[1], t.bl[0], t.bl[1], t.dimension, t.snap_error, t.inverted
+            t.tl[0],
+            t.tl[1],
+            t.tr[0],
+            t.tr[1],
+            t.bl[0],
+            t.bl[1],
+            t.dimension,
+            t.snap_error,
+            t.inverted
         );
     }
 }

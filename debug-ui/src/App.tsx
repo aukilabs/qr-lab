@@ -25,16 +25,21 @@ import { useVideoSource, type VideoFrame } from "./media/useVideoSource";
 import { alignmentLayer } from "./overlays/layers/alignment";
 import { bitsLayer } from "./overlays/layers/bits";
 import { decodedLayer } from "./overlays/layers/decoded";
+import { evidenceLayer } from "./overlays/layers/evidence";
 import { findersLayer } from "./overlays/layers/finders";
 import { groundtruthLayer } from "./overlays/layers/groundtruth";
 import { refinedLayer } from "./overlays/layers/refined";
+import { robustCodesLayer } from "./overlays/layers/robust-codes";
 import { samplegridLayer } from "./overlays/layers/samplegrid";
 import { tilesLayer } from "./overlays/layers/tiles";
 import { tripletsLayer } from "./overlays/layers/triplets";
 import { parseGroundTruth, type GroundTruthCode } from "./overlays/groundtruth-types";
 import { createRegistry, type OverlayContext } from "./overlays/registry";
 import { Scene3D } from "./scene3d/Scene3D";
+import { FilmstripPanel } from "./panels/FilmstripPanel";
+import { LadderPanel } from "./panels/LadderPanel";
 import { LayerPanel } from "./panels/LayerPanel";
+import { RobustPanel, type RobustCaptureMode } from "./panels/RobustPanel";
 import { VideoControls } from "./panels/VideoControls";
 import {
   DEFAULT_RESOLUTION,
@@ -46,6 +51,12 @@ import {
 import { TimingsPanel, type TimingsSample } from "./panels/TimingsPanel";
 import { downscaleRgba } from "./scanner/downscale";
 import { ScannerClient, StaleScanError, WorkerInitTimeoutError } from "./scanner/client";
+import type {
+  RobustConfig,
+  RobustDetections,
+  RobustPresets,
+  RobustSnapshot,
+} from "./scanner/robust-types";
 import type { ScanResult } from "./scanner/types";
 import type { ViewTransform } from "./viewport/transform";
 import { Viewport } from "./viewport/Viewport";
@@ -64,10 +75,20 @@ const overlayRegistry = createRegistry([
   bitsLayer,
   decodedLayer,
   refinedLayer,
+  robustCodesLayer,
+  evidenceLayer,
 ]);
 
 interface ScanState {
-  result: ScanResult;
+  /** The pipeline result — classic scan, or in robust mode the UNIFIED
+   * detections the robust envelope carries (same shape, assembled in Rust
+   * from the ladder's cross-variant union; trace-less). One pipeline: the
+   * classic overlays always draw, robust flags just mean more entries. */
+  result: ScanResult | null;
+  /** Plan 6 ladder result — `null` outside robust mode. */
+  robust: RobustDetections | null;
+  /** Per-variant ladder thumbnails — robust mode + capture only. */
+  snapshots: RobustSnapshot[] | null;
   wallMs: number;
   roundTripMs: number;
   scanWidth: number;
@@ -115,6 +136,45 @@ export function App() {
   const [source, setSource] = useState<SourceDescriptor | null>(null);
   const [resolution, setResolution] = useState<ResolutionOption>(DEFAULT_RESOLUTION);
   const [groundTruth, setGroundTruth] = useState<GroundTruthCode[] | null>(null);
+
+  // Plan 6 robust mode. Off by default — with `robustEnabled` false the
+  // scan path below is byte-identical to the pre-Plan-6 behavior. The
+  // config starts `null` and is seeded from `robust_presets()`'s
+  // robustFast once the fetch lands (the RobustPanel's master toggle stays
+  // disabled until then), so preset values are never hardcoded here.
+  const [robustEnabled, setRobustEnabled] = useState(false);
+  const [robustConfig, setRobustConfig] = useState<RobustConfig | null>(null);
+  // Capture policy, not a boolean: capture (the per-variant thumbnail
+  // filmstrip) is pure visualization payload, and serializing it across
+  // the worker boundary per VIDEO frame was measured at >200ms round
+  // trips. "paused" (the default) scans playing frames without capture —
+  // pure ladder cost — and re-captures the frame the user pauses on (see
+  // the pause-recapture effect below). Detections (and thus every
+  // overlay) are identical in all modes: the unified result always rides
+  // the envelope.
+  const [robustCaptureMode, setRobustCaptureMode] = useState<RobustCaptureMode>("paused");
+  const [robustPresets, setRobustPresets] = useState<RobustPresets | null>(null);
+  // The most recent scan that DID carry capture — kept so the filmstrip
+  // can keep showing the last captured frame (marked stale) while playing
+  // frames scan capture-free. Reset on source change.
+  const [lastSnapshots, setLastSnapshots] = useState<RobustSnapshot[] | null>(null);
+  // Plan 6 session mode: the STATEFUL temporal video path. Off by default;
+  // applies ONLY in robust mode + a video source (App gates below — stills
+  // and non-robust are byte-identical to before). The two knobs tune the
+  // temporal amortization (rung rotation cadence + cross-frame candidate
+  // lifetime); defaults mirror the Rust `SessionConfig` defaults (3, 4).
+  const [robustSession, setRobustSession] = useState(false);
+  const [sessionRotationPeriod, setSessionRotationPeriod] = useState(3);
+  const [sessionPoolTtl, setSessionPoolTtl] = useState(4);
+  // Read by `runScan` at call time (a state dep would rebuild the scan
+  // callback mid-playback); assigned from `videoState.playing` below.
+  const playingRef = useRef(false);
+  // Whether session routing is live for the frame `runScan` is about to
+  // send — assigned during render (below, once `isVideoMode` is known), read
+  // synchronously at the top of `runScan`. Lets one shared `runScan` route
+  // video frames through the session while still scanning image frames the
+  // classic robust way.
+  const sessionActiveRef = useRef(false);
 
   const [scanState, setScanState] = useState<ScanState | null>(null);
   const [scanError, setScanError] = useState<string | null>(null);
@@ -174,6 +234,28 @@ export function App() {
     };
   }, []);
 
+  // One-shot presets fetch (worker-cached client-side) once the scanner is
+  // up; also seeds the initial robust config from robustFast — but only if
+  // the user hasn't already edited it (a StrictMode re-run or slow fetch
+  // must not clobber manual flags).
+  useEffect(() => {
+    if (!scannerReady) return;
+    let cancelled = false;
+    clientRef.current
+      ?.robustPresets()
+      .then((presets) => {
+        if (cancelled) return;
+        setRobustPresets(presets);
+        setRobustConfig((prev) => prev ?? presets.robustFast);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) console.error("failed to fetch robust presets", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scannerReady]);
+
   // Release the display bitmap's decoder resources on unmount (per-source
   // swaps release the *previous* bitmap inline in `runScan`, below).
   useEffect(() => {
@@ -181,6 +263,21 @@ export function App() {
       displayBitmapRef.current?.close();
     };
   }, []);
+
+  // Robust state collapsed to one dependency key for `runScan`: the full
+  // config while robust mode is on (any edit re-scans), a constant
+  // sentinel while it is off (config churn — e.g. the startup preset
+  // seed — must not re-fire the scan effect; the stale closure it leaves
+  // behind is unread on the classic path).
+  const robustDepsKey = robustEnabled
+    ? JSON.stringify([
+        robustConfig,
+        robustCaptureMode,
+        robustSession,
+        sessionRotationPeriod,
+        sessionPoolTtl,
+      ])
+    : "off";
 
   /**
    * Scan one full-resolution rgba frame, and rebuild the display bitmap /
@@ -207,17 +304,78 @@ export function App() {
       const startedAt = performance.now();
       // Wrapped into an always-resolving "settled" shape so the promise
       // can sit unawaited through the display work below without an early
-      // rejection being flagged as unhandled during that window.
+      // rejection being flagged as unhandled during that window. Both
+      // branches settle into the SAME `ScanState`-shaped fields so the
+      // commit code below stays branch-free.
       // `refine: true` (Plan 5 Task 7 QA fix): media mode never passed this
       // before, so `refined_corners` stayed `null` on every scan — the
       // `refinedLayer` overlay and the timings panel's `refine` row were
       // both permanently dead in this mode (Scene3D already hardcodes
       // `refine: true` the same way; per Task 6's re-baseline the cost is
       // ~0.1-0.4ms/frame, negligible for a dev tool with no UI toggle).
-      const scanSettled = client.scan(rgba, width, height, { maxDim, withTrace: true, refine: true }).then(
-        (outcome) => ({ ok: true as const, outcome }),
-        (err: unknown) => ({ ok: false as const, err }),
-      );
+      // Plan 6: robust mode routes through `scanRobust` instead — its
+      // envelope's UNIFIED detections (the ladder's cross-variant union,
+      // classic shape) feed the same overlays as a trace-less
+      // `ScanResult`, so robust flags simply mean more entries drawn.
+      const useRobust = robustEnabled && robustConfig !== null;
+      // Session routing (Plan 6): `sessionActiveRef` already folds in robust
+      // mode + a non-null config + the session toggle + a video source, so
+      // when it's set `robustConfig` is non-null and this is a video frame.
+      // Session frames scan through the persistent worker session
+      // (`scanSessionFrame`) — capture is inherently OFF there (no
+      // filmstrip), so `captureNow` doesn't apply. Image frames (and video
+      // frames with the session toggle off) keep the classic `scanRobust`
+      // path below.
+      const useSession = useRobust && sessionActiveRef.current;
+      // Capture policy resolved per frame (not per runScan identity):
+      // "paused" reads the live playing flag so a playing video scans
+      // capture-free while a paused/stepped/still frame captures.
+      const captureNow =
+        robustCaptureMode === "always" || (robustCaptureMode === "paused" && !playingRef.current);
+      // Both the session and the classic-robust paths return a
+      // `RobustScanOutcome` (same envelope), so they share one settle
+      // mapping; only the request call differs. `snapshots` rides through as
+      // `null` for session (capture off) → the filmstrip shows its
+      // session-unavailable hint.
+      const robustPromise = useSession
+        ? client.scanSessionFrame(rgba, width, height, { maxDim, refine: true })
+        : useRobust
+          ? client.scanRobust(rgba, width, height, {
+              maxDim,
+              refine: true,
+              config: robustConfig,
+              capture: captureNow,
+            })
+          : null;
+      const scanSettled = robustPromise
+        ? robustPromise.then(
+            (outcome) => ({
+              ok: true as const,
+              outcome: {
+                result: { detections: outcome.result.detections, trace: null },
+                robust: outcome.result.robust,
+                snapshots: outcome.result.snapshots,
+                wallMs: outcome.wallMs,
+                scanWidth: outcome.scanWidth,
+                scanHeight: outcome.scanHeight,
+              },
+            }),
+            (err: unknown) => ({ ok: false as const, err }),
+          )
+        : client.scan(rgba, width, height, { maxDim, withTrace: true, refine: true }).then(
+            (outcome) => ({
+              ok: true as const,
+              outcome: {
+                result: outcome.result as ScanResult | null,
+                robust: null,
+                snapshots: null,
+                wallMs: outcome.wallMs,
+                scanWidth: outcome.scanWidth,
+                scanHeight: outcome.scanHeight,
+              },
+            }),
+            (err: unknown) => ({ ok: false as const, err }),
+          );
 
       // Display path: same downscale, same maxDim, same source pixels the
       // worker is scanning right now — guarantees the bitmap drawn in the
@@ -247,9 +405,26 @@ export function App() {
       }
       displayFrameRef.current = down;
       if (bitmap) {
-        displayBitmapRef.current?.close();
+        // Defer closing the previous bitmap until after paint. Closing it
+        // synchronously here raced Viewport's rAF: a redraw mid-commit saw
+        // a detached ImageBitmap (width 0), skipped drawImage after
+        // clearRect, and flashed the canvas black — especially visible
+        // under robust mode where scan latency stretches the window
+        // between consecutive video frames.
+        const prev = displayBitmapRef.current;
         displayBitmapRef.current = bitmap;
         setDisplayBitmap(bitmap);
+        if (prev && prev !== bitmap) {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              try {
+                prev.close();
+              } catch {
+                // already closed (source swap, etc.)
+              }
+            });
+          });
+        }
       }
       setSourceDims({ width, height });
 
@@ -265,19 +440,41 @@ export function App() {
       setScanError(null);
       setScanState({
         result: settled.outcome.result,
+        robust: settled.outcome.robust,
+        snapshots: settled.outcome.snapshots,
         wallMs: settled.outcome.wallMs,
         roundTripMs,
         scanWidth: settled.outcome.scanWidth,
         scanHeight: settled.outcome.scanHeight,
       });
+      // Keep the newest CAPTURED filmstrip around across capture-free
+      // scans (playing video frames under the "paused" policy) so the
+      // strip shows the last captured frame — marked stale — instead of
+      // flashing empty during playback.
+      if (settled.outcome.snapshots) setLastSnapshots(settled.outcome.snapshots);
       setSampleId((n) => n + 1);
     },
-    [scannerReady, resolution],
+    // The robust deps mean any config/capture/toggle change refreshes
+    // `runScan`'s identity, which re-fires the image-mode effect below —
+    // a live re-scan on every robust-panel edit, same mechanism resolution
+    // changes already use. While robust mode is OFF they collapse to one
+    // stable sentinel so preset loading / panel edits don't re-scan (the
+    // startup preset seed used to trigger a same-source double scan —
+    // the close race Viewport's detached-bitmap guard also covers).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scannerReady, resolution, robustEnabled, robustDepsKey],
   );
 
   const isVideoMode = source?.mediaKind === "video";
   const imageInput = imageInputFor(source);
   const videoInput = videoInputFor(source);
+
+  // Session mode is live only for robust + a video source with a loaded
+  // config and the toggle on. Fed to `runScan` through a ref (so a mid-
+  // playback flip doesn't rebuild the scan callback) and used to gate the
+  // configure/reset lifecycle effects and the filmstrip's unavailable hint.
+  const sessionActive = robustEnabled && robustConfig !== null && robustSession && isVideoMode;
+  sessionActiveRef.current = sessionActive;
 
   const imageSourceState = useImageSource(imageInput);
 
@@ -316,6 +513,68 @@ export function App() {
   useEffect(() => {
     if (mode !== "media") videoPauseRef.current();
   }, [mode]);
+
+  // Keep `runScan`'s per-frame capture decision fed with the live playing
+  // flag (assignment-during-render, same pattern as the refs above).
+  playingRef.current = videoState.playing;
+
+  // Pause-recapture (Plan 6): under the "paused frames only" capture
+  // policy, playing frames scan capture-free — so when playback stops, the
+  // frame the user is now looking at has no filmstrip/baseline data.
+  // Re-deliver that exact frame once (no seek, no play-state change);
+  // `runScan` then sees `playing === false` and captures it. Keyed on the
+  // play→pause TRANSITION, not on `playing`'s value, so scrubbing while
+  // paused (each landed seek already captures) doesn't double-scan.
+  const videoRecaptureRef = useRef(videoState.recapture);
+  videoRecaptureRef.current = videoState.recapture;
+  const prevPlayingRef = useRef(false);
+  useEffect(() => {
+    const wasPlaying = prevPlayingRef.current;
+    prevPlayingRef.current = videoState.playing;
+    if (
+      wasPlaying &&
+      !videoState.playing &&
+      mode === "media" &&
+      robustEnabled &&
+      robustCaptureMode === "paused"
+    ) {
+      videoRecaptureRef.current();
+    }
+  }, [videoState.playing, mode, robustEnabled, robustCaptureMode]);
+
+  // Session lifecycle (Plan 6): (re)build the worker's persistent session
+  // whenever the robust config or the two temporal knobs change while
+  // session mode is active. Rebuilding the session drops its old cross-frame
+  // candidate pool — so a config/param/toggle change is an implicit reset,
+  // and no separate reset call is needed for those. Declared BEFORE the
+  // frame-re-scan effect below so the session-config message reaches the
+  // worker ahead of the scan-session-frame that a re-scan posts (both are
+  // synchronous posts; effect declaration order is their run order).
+  useEffect(() => {
+    if (!scannerReady || !sessionActive || !robustConfig) return;
+    clientRef.current?.configureSession(robustConfig, sessionRotationPeriod, sessionPoolTtl);
+  }, [scannerReady, sessionActive, robustConfig, sessionRotationPeriod, sessionPoolTtl]);
+
+  // Video-mode counterpart of image mode's config-edit live-rescan: video
+  // frames are PUSHED (rVFC/seeked), so a robust toggle or panel edit
+  // while the video sits paused would otherwise leave the displayed frame
+  // scanned under the OLD config until the next play/step/scrub.
+  // Re-deliver the current frame whenever the robust scan inputs change
+  // and no frame stream is running. (During playback the very next pushed
+  // frame picks the new config up anyway.) `robustDepsKey` also covers
+  // toggling robust OFF — the sentinel value change re-scans the frame
+  // classically. Skipped entirely for image sources (their own effect
+  // handles it) and before the first video frame (`recapture` no-ops).
+  const videoPlayingNow = videoState.playing;
+  useEffect(() => {
+    if (mode === "media" && isVideoMode && !videoPlayingNow) {
+      videoRecaptureRef.current();
+    }
+    // Deliberately NOT keyed on `videoPlayingNow`/`isVideoMode` value
+    // changes re-triggering a scan — pause transitions are the previous
+    // effect's job; this one fires on scan-input changes only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [robustDepsKey, robustEnabled]);
 
   // Image mode: (re-)scan whenever the decoded source or the resolution
   // changes. `runScan`'s identity already changes with `resolution` (and
@@ -370,16 +629,32 @@ export function App() {
 
   const handleSourceChange = (next: SourceDescriptor) => {
     sourceGenerationRef.current += 1;
+    // A new scene: drop the session's cross-frame candidate pool so stale
+    // candidates from the previous source can't seed the new one (Plan 6).
+    // No-op in the worker if no session exists; the configure effect
+    // rebuilds it when the new source is a video and session mode is on.
+    clientRef.current?.resetSession();
     setSource(next);
     setScanState(null);
     setScanError(null);
     setSourceDims(null);
+    setLastSnapshots(null);
     setCursorPos(null);
     displayFrameRef.current = null;
     displayBitmapRef.current?.close();
     displayBitmapRef.current = null;
     setDisplayBitmap(null);
   };
+
+  // Scrubber grab (Plan 6): a click-to-jump or drag on the timeline is a
+  // large temporal jump that invalidates the session's cross-frame pool —
+  // reset it so the landed frames rebuild fresh. Fires once per grab (the
+  // range input's pointerdown covers both click and drag); small ±1-frame
+  // steps (the frame buttons / arrow keys) are near-duplicates and left
+  // alone. No-op in the worker outside session mode.
+  const handleScrubStart = useCallback(() => {
+    clientRef.current?.resetSession();
+  }, []);
 
   const handleRescan = () => {
     if (imageSourceState.rgba) {
@@ -414,6 +689,7 @@ export function App() {
         groundTruth,
         imageSize: scanState ? [scanState.scanWidth, scanState.scanHeight] : [0, 0],
         workingScale,
+        robust: scanState?.robust ?? null,
       };
       overlayRegistry.drawAll(o);
     },
@@ -426,13 +702,26 @@ export function App() {
     [scanState, groundTruth, workingScale, layerVersion],
   );
 
-  const timingsSample: TimingsSample | null = scanState
-    ? {
-        timings: scanState.result.detections.timings,
-        wallMs: scanState.wallMs,
-        roundTripMs: scanState.roundTripMs,
-      }
+  // Robust mode feeds the timings panel `variants[0]` — the baseline
+  // pass's per-stage timings, keeping the sparkline alive; the LADDER's
+  // whole-frame cost (`robust.total_ns`, all rungs) belongs to LadderPanel
+  // instead. Classic mode is unchanged.
+  const timingsForSample = scanState
+    ? scanState.robust
+      ? (scanState.robust.variants[0]?.timings ?? null)
+      : (scanState.result?.detections.timings ?? null)
     : null;
+  const timingsSample: TimingsSample | null =
+    scanState && timingsForSample
+      ? {
+          timings: timingsForSample,
+          wallMs: scanState.wallMs,
+          roundTripMs: scanState.roundTripMs,
+          // Whole-ladder wall time (all rungs incl. baseline) — 0/absent in
+          // classic mode, where the row reads "n/a".
+          ladderTotalNs: scanState.robust?.total_ns ?? null,
+        }
+      : null;
 
   const cursorLuma = useMemo(() => {
     const frame = displayFrameRef.current;
@@ -450,43 +739,84 @@ export function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <div className="mode-tabs">
-          <button
-            type="button"
-            className={mode === "media" ? "mode-tab mode-tab-active" : "mode-tab"}
-            onClick={() => setMode("media")}
-          >
-            Media
-          </button>
-          <button
-            type="button"
-            className={mode === "scene3d" ? "mode-tab mode-tab-active" : "mode-tab"}
-            onClick={() => setMode("scene3d")}
-          >
-            3D Scene
-          </button>
+        <div className="brand">
+          <span className="brand-mark" aria-hidden />
+          <span className="brand-title">QRK</span>
+          <span className="brand-sub">SCAN · DEBUG</span>
         </div>
+        <div className="sidebar-body">
+          <div className="mode-tabs">
+            <button
+              type="button"
+              className={mode === "media" ? "mode-tab mode-tab-active" : "mode-tab"}
+              onClick={() => setMode("media")}
+            >
+              Media
+            </button>
+            <button
+              type="button"
+              className={mode === "scene3d" ? "mode-tab mode-tab-active" : "mode-tab"}
+              onClick={() => setMode("scene3d")}
+            >
+              3D Scene
+            </button>
+          </div>
 
-        {mode === "media" && (
-          <SourcePanel
-            source={source}
-            onSourceChange={handleSourceChange}
-            resolution={resolution}
-            onResolutionChange={handleResolutionChange}
-            onRescan={handleRescan}
-            rescanDisabled={rescanDisabled}
-          />
-        )}
-        <section className="panel-section">
-          <h2 className="panel-title">Layers</h2>
-          <LayerPanel registry={overlayRegistry} onToggle={handleLayerToggle} />
-        </section>
-        {mode === "media" && (
+          {mode === "media" && (
+            <SourcePanel
+              source={source}
+              onSourceChange={handleSourceChange}
+              resolution={resolution}
+              onResolutionChange={handleResolutionChange}
+              onRescan={handleRescan}
+              rescanDisabled={rescanDisabled}
+            />
+          )}
+          {mode === "media" && (
+            <section className="panel-section">
+              <h2 className="panel-title">Robust</h2>
+              <RobustPanel
+                enabled={robustEnabled}
+                onEnabledChange={setRobustEnabled}
+                config={robustConfig}
+                onConfigChange={setRobustConfig}
+                captureMode={robustCaptureMode}
+                onCaptureModeChange={setRobustCaptureMode}
+                presets={robustPresets}
+                sessionEnabled={robustSession}
+                onSessionEnabledChange={setRobustSession}
+                sessionRotationPeriod={sessionRotationPeriod}
+                onSessionRotationPeriodChange={setSessionRotationPeriod}
+                sessionPoolTtl={sessionPoolTtl}
+                onSessionPoolTtlChange={setSessionPoolTtl}
+              />
+            </section>
+          )}
           <section className="panel-section">
-            <h2 className="panel-title">Timings</h2>
-            <TimingsPanel sample={timingsSample} sampleId={sampleId} />
+            <h2 className="panel-title">Layers</h2>
+            <LayerPanel
+              registry={overlayRegistry}
+              onToggle={handleLayerToggle}
+              disabled={
+                mode === "media" && robustEnabled
+                  ? { tiles: "no tile trace in robust mode (the robust envelope carries no trace)" }
+                  : undefined
+              }
+            />
           </section>
-        )}
+          {mode === "media" && (
+            <section className="panel-section">
+              <h2 className="panel-title">Timings</h2>
+              <TimingsPanel sample={timingsSample} sampleId={sampleId} />
+            </section>
+          )}
+          {mode === "media" && robustEnabled && (
+            <section className="panel-section">
+              <h2 className="panel-title">Ladder</h2>
+              <LadderPanel robust={scanState?.robust ?? null} />
+            </section>
+          )}
+        </div>
       </aside>
 
       {mode === "media" ? (
@@ -507,7 +837,15 @@ export function App() {
             {!scannerReady && !initError && <div className="loading-overlay">Loading scanner…</div>}
           </div>
 
-          {isVideoMode && <VideoControls videoState={videoState} />}
+          {isVideoMode && <VideoControls videoState={videoState} onScrubStart={handleScrubStart} />}
+
+          {robustEnabled && (sessionActive || robustCaptureMode !== "off") && (
+            <FilmstripPanel
+              snapshots={sessionActive ? null : (scanState?.snapshots ?? lastSnapshots)}
+              stale={!sessionActive && !scanState?.snapshots && lastSnapshots !== null}
+              sessionMode={sessionActive}
+            />
+          )}
 
           <div className="status-bar">
             <span>

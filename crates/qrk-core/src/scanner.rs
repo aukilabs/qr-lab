@@ -16,7 +16,7 @@ use std::time::Instant;
 use crate::decode::{decode_candidates, DecodedCode};
 use crate::finder::{find_finders, FinderCandidate};
 use crate::sample::SourceView;
-use crate::tiles::TileGrid;
+use crate::tiles::{BinarizeSpec, TileGrid};
 use crate::trace::Trace;
 use crate::triplet::{group_triplets, TripletCandidate};
 use crate::LumaView;
@@ -163,7 +163,7 @@ impl StageClock {
 /// caller is unaffected by the source-resolution sampling or subpixel
 /// refinement plumbing.
 pub fn detect_with(view: &LumaView, trace: Option<&mut Trace>) -> Detections {
-    detect_with_source(view, None, trace, false)
+    detect_with_source(view, None, trace, false, BinarizeSpec::default())
 }
 
 /// [`detect_with`]'s real body, additionally threading an optional SOURCE
@@ -184,14 +184,19 @@ pub fn detect_with(view: &LumaView, trace: Option<&mut Trace>) -> Detections {
 /// `source` is `Some`, else against `view` itself (source == working, no
 /// downscale happened — refinement still runs; see `decode::attempt_candidate`'s
 /// doc).
+/// `spec` (Plan 6) parameterizes the tile binarization for the robustness
+/// ladder's threshold-variant rungs; every pre-existing caller passes
+/// `BinarizeSpec::default()`, which keeps `TileGrid::build_with` bit-identical
+/// to the historical `TileGrid::build`.
 pub(crate) fn detect_with_source(
     view: &LumaView,
     source: Option<SourceView>,
     mut trace: Option<&mut Trace>,
     refine: bool,
+    spec: BinarizeSpec,
 ) -> Detections {
     let tiles_clock = StageClock::start();
-    let grid = TileGrid::build(view);
+    let grid = TileGrid::build_with(view, spec);
     let tiles_ns = tiles_clock.elapsed_ns();
     if let Some(t) = &mut trace {
         t.record_tiles(&grid);
@@ -217,8 +222,15 @@ pub(crate) fn detect_with_source(
     // trace data (`decode_trace`) are recorded the same way
     // `record_finders`/`record_triplets` are above — a copy only when a
     // trace was actually requested.
-    let (codes, attempts, decode_timings, decode_trace) =
-        decode_candidates(view, &grid, &finders, &triplets, trace.is_some(), source, refine);
+    let (codes, attempts, decode_timings, decode_trace) = decode_candidates(
+        view,
+        &grid,
+        &finders,
+        &triplets,
+        trace.is_some(),
+        source,
+        refine,
+    );
     if let Some(t) = &mut trace {
         t.record_attempts(&attempts);
         // Plan 5C: `codes` carries one entry per decoded code this frame

@@ -3,13 +3,7 @@
 //! cross-sections in either polarity. Task 5 builds `find_finders` on top
 //! of `match_row` in this same file.
 
-// PLAN 5 (recorded): segment-level skip-tile scanning (skip only the
-// non-content *segments* of a row per TileGrid, not the whole row) must
-// land BEFORE NEON vectorization — today `find_finders` only implements
-// the coarser whole-row skip (`grid.row_all_skip(y)` below); the spec's
-// stage-2 per-segment skipping is not yet implemented.
-
-use crate::consts::ROW_STEP;
+use crate::consts::{ROW_STEP, TILE};
 use crate::tiles::TileGrid;
 use crate::LumaView;
 
@@ -62,13 +56,27 @@ pub(crate) fn pattern_fits(runs: &[f64; 5]) -> bool {
 /// this call and otherwise reused, so a caller scanning many rows (e.g.
 /// `find_finders`' row loop) can pass the same `Vec` every call instead
 /// of paying a fresh heap allocation per row.
+#[cfg(test)]
 pub(crate) fn match_row(
     bits: impl Iterator<Item = bool>,
     scratch: &mut Vec<(bool, usize, usize)>,
     out: &mut Vec<RunHit>,
 ) {
+    match_row_at(bits, 0, scratch, out);
+}
+
+/// [`match_row`] for a horizontal sub-span whose first pixel is at
+/// `x_offset` in the source row. Keeping the offset in the matcher avoids
+/// materializing skipped tile spans merely to preserve source coordinates.
+fn match_row_at(
+    bits: impl Iterator<Item = bool>,
+    x_offset: usize,
+    scratch: &mut Vec<(bool, usize, usize)>,
+    out: &mut Vec<RunHit>,
+) {
     scratch.clear();
     for (x, v) in bits.enumerate() {
+        let x = x + x_offset;
         match scratch.last_mut() {
             Some(last) if last.0 == v => last.2 += 1,
             _ => scratch.push((v, x, 1)),
@@ -136,7 +144,15 @@ impl Scan<'_, '_> {
     /// Walk from `(x, y)` in unit steps `(dx, dy)`, counting consecutive
     /// pixels whose polarity equals `target`, up to `cap` steps. Stops (the
     /// run "ends there") on a polarity change or the image border.
-    fn walk_while(&self, mut x: isize, mut y: isize, dx: isize, dy: isize, target: bool, cap: isize) -> isize {
+    fn walk_while(
+        &self,
+        mut x: isize,
+        mut y: isize,
+        dx: isize,
+        dy: isize,
+        target: bool,
+        cap: isize,
+    ) -> isize {
         let mut n = 0isize;
         while n < cap {
             match self.sample(x, y) {
@@ -159,7 +175,14 @@ impl Scan<'_, '_> {
     /// the middle run's pixel-center, using the same `start + len/2 - 0.5`
     /// convention as [`match_row`]'s `RunHit::center`. `None` only if
     /// `(x0, y0)` itself is off-image.
-    fn axis_cross_check(&self, x0: isize, y0: isize, dx: isize, dy: isize, cap: isize) -> Option<([f64; 5], f64)> {
+    fn axis_cross_check(
+        &self,
+        x0: isize,
+        y0: isize,
+        dx: isize,
+        dy: isize,
+        cap: isize,
+    ) -> Option<([f64; 5], f64)> {
         let center_color = self.sample(x0, y0)?;
 
         // Middle run: half extending outward in +direction, half in
@@ -181,7 +204,13 @@ impl Scan<'_, '_> {
         let run0 = self.walk_while(n0x, n0y, -dx, -dy, center_color, cap);
 
         let mid_total = (mid_pos + mid_neg + 1) as f64;
-        let runs = [run0 as f64, run1 as f64, mid_total, run3 as f64, run4 as f64];
+        let runs = [
+            run0 as f64,
+            run1 as f64,
+            mid_total,
+            run3 as f64,
+            run4 as f64,
+        ];
         let t_center = -(mid_neg as f64) + mid_total / 2.0 - 0.5;
         Some((runs, t_center))
     }
@@ -242,7 +271,11 @@ fn merge_candidate(merged: &mut Vec<FinderCandidate>, new: FinderCandidate) {
         // two observations of the SAME finder, so they differ only by
         // run-quantization jitter, not perspective foreshortening — a
         // tighter bound is safe, and 1.3 sits between the two.
-        let ratio = if c.module > new.module { c.module / new.module } else { new.module / c.module };
+        let ratio = if c.module > new.module {
+            c.module / new.module
+        } else {
+            new.module / c.module
+        };
         if ratio > 1.3 {
             continue;
         }
@@ -261,6 +294,16 @@ fn merge_candidate(merged: &mut Vec<FinderCandidate>, new: FinderCandidate) {
 /// [`ROW_STEP`] rows, each hit verified by a vertical then diagonal
 /// cross-check, merged across rows, and finally filtered to `hits >= 2`
 /// (seen on at least two independent scan rows).
+///
+/// Hot path: visit only contiguous spans of non-skip tiles, binarize each
+/// active span tile-by-tile (constant threshold per 16px tile; aarch64 uses
+/// NEON compares), then RLE-match the span in source coordinates. A tile is
+/// marked active from a 3×3 neighborhood of tile statistics, so every
+/// contrast-bearing tile has one full tile of active padding. Consequently
+/// a 1:1:3:1:1 window cannot be cut by a skipped span: any window containing
+/// both polarities makes its own tile or a neighbor active. Resetting the RLE
+/// at skipped spans also prevents low-contrast texture from manufacturing
+/// cross-span finder candidates.
 pub fn find_finders(view: &LumaView, grid: &TileGrid) -> Vec<FinderCandidate> {
     let (w, h) = (view.width(), view.height());
     let scan = Scan { view, grid, w, h };
@@ -271,13 +314,51 @@ pub fn find_finders(view: &LumaView, grid: &TileGrid) -> Vec<FinderCandidate> {
     // otherwise `match_row` would allocate a fresh `Vec` per row (~360
     // times per 720p frame at ROW_STEP=2).
     let mut runs_scratch: Vec<(bool, usize, usize)> = Vec::new();
+    // Active-span dark mask; sized to width once and reused. Only the prefix
+    // matching the current span is written or read.
+    let mut dark = vec![false; w];
     for y in (0..h).step_by(ROW_STEP) {
-        if grid.row_all_skip(y) {
+        row_hits.clear();
+        let row = view.row(y);
+        let skipped = (0..grid.tiles_x)
+            .filter(|&tx| grid.is_skip(tx * TILE, y))
+            .count();
+        if skipped == grid.tiles_x {
             continue;
         }
-        row_hits.clear();
-        let bits = (0..w).map(|x| view.get(x, y) < grid.threshold_at(x, y));
-        match_row(bits, &mut runs_scratch, &mut row_hits);
+        // On highly textured rows, enumerating several short active spans
+        // costs more than the pixels it avoids. Keep the dense SIMD-friendly
+        // path until at least one quarter of the row is provably flat; the
+        // sparse path then skips >=4 pixels of RLE+binarization work per tile
+        // lookup even before SIMD width is considered.
+        if skipped * 4 < grid.tiles_x {
+            binarize_row_span(row, grid, y, 0, w, &mut dark);
+            match_row_at(dark.iter().copied(), 0, &mut runs_scratch, &mut row_hits);
+        } else {
+            let mut tx = 0;
+            while tx < grid.tiles_x {
+                while tx < grid.tiles_x && grid.is_skip(tx * TILE, y) {
+                    tx += 1;
+                }
+                let start_tx = tx;
+                while tx < grid.tiles_x && !grid.is_skip(tx * TILE, y) {
+                    tx += 1;
+                }
+                let x0 = start_tx * TILE;
+                let x1 = (tx * TILE).min(w);
+                if x1.saturating_sub(x0) < 7 {
+                    continue;
+                }
+                let len = x1 - x0;
+                binarize_row_span(row, grid, y, x0, x1, &mut dark[..len]);
+                match_row_at(
+                    dark[..len].iter().copied(),
+                    x0,
+                    &mut runs_scratch,
+                    &mut row_hits,
+                );
+            }
+        }
         for hit in &row_hits {
             if let Some(cand) = scan.verify_hit(hit, y) {
                 merge_candidate(&mut merged, cand);
@@ -288,12 +369,49 @@ pub fn find_finders(view: &LumaView, grid: &TileGrid) -> Vec<FinderCandidate> {
     merged
 }
 
+/// Fill `dark` for source-row span `x0..x1` with
+/// `row[x] < threshold_at(x, y)`. The span is tile-aligned except for the
+/// image's ragged right edge. One threshold lookup per tile; full tiles use
+/// NEON lane compares on aarch64.
+fn binarize_row_span(
+    row: &[u8],
+    grid: &TileGrid,
+    y: usize,
+    span_x0: usize,
+    span_x1: usize,
+    dark: &mut [bool],
+) {
+    debug_assert!(span_x0 <= span_x1 && span_x1 <= row.len());
+    debug_assert_eq!(dark.len(), span_x1 - span_x0);
+    for tx in (span_x0 / TILE)..span_x1.div_ceil(TILE) {
+        let tile_x0 = tx * TILE;
+        let tile_x1 = (tile_x0 + TILE).min(span_x1);
+        let out0 = tile_x0 - span_x0;
+        let thr = grid.threshold_at(tile_x0, y);
+        let seg = &row[tile_x0..tile_x1];
+        #[cfg(target_arch = "aarch64")]
+        {
+            if seg.len() == TILE {
+                let arr: &[u8; TILE] = seg.try_into().expect("TILE bytes");
+                let mask = crate::neon::dark_mask_u8x16(arr, thr);
+                dark[out0..out0 + TILE].copy_from_slice(&mask);
+                continue;
+            }
+        }
+        for (i, &p) in seg.iter().enumerate() {
+            dark[out0 + i] = p < thr;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn bits(spec: &[(bool, usize)]) -> Vec<bool> {
-        spec.iter().flat_map(|&(v, n)| std::iter::repeat_n(v, n)).collect()
+        spec.iter()
+            .flat_map(|&(v, n)| std::iter::repeat_n(v, n))
+            .collect()
     }
 
     #[test]
@@ -344,6 +462,18 @@ mod tests {
         match_row(row.iter().copied(), &mut scratch, &mut hits);
         assert_eq!(hits.len(), 1);
         assert!(hits[0].inverted);
+    }
+
+    #[test]
+    fn match_row_at_preserves_source_coordinates() {
+        let finder = bits(&[(false, 4), (true, 4), (false, 12), (true, 4), (false, 4)]);
+        let mut scratch = Vec::new();
+        let mut hits = Vec::new();
+        match_row_at(finder.iter().copied(), 32, &mut scratch, &mut hits);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].start, 32);
+        assert_eq!(hits[0].end, 60);
+        assert!((hits[0].center - 45.5).abs() < f64::EPSILON);
     }
 
     #[test]

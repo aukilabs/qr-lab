@@ -100,18 +100,31 @@ full design.
 - `tools/fixtures/` — the Python fixture generator (pinhole-camera
   rendering with exact ground-truth corners) and its tests. See
   `tools/fixtures/README.md`.
-- `expo-ark-scanner/` — the existing Expo native module this scanner is
-  eventually integrated into (predates this project; unrelated to the
-  Rust rewrite's own build).
-- `scripts/` — repo-wide build scripts (`build-wasm.sh`, `check-wasm.sh`).
+- `crates/qrk-ffi/` — C ABI + Android JNI (`libqrk_ffi`), built into the
+  Expo package via `just expo-android` / `just expo-ios`.
+- `expo-cpu-scanner/` — Expo module shipping prebuilt Android `.so` and
+  iOS `Qrk.xcframework` (consumers do not need Rust). See its README.
+- `expo-ark-scanner/` — legacy GPU/WebGPU Expo module kept only as a
+  structural reference; not part of the CPU scanner product path.
+- `scripts/` — repo-wide build scripts (`build-wasm.sh`, `build-native-*.sh`).
+- `justfile` — developer recipes (`just ui`, `just expo-native`, …).
 - `docs/superpowers/` — design spec and implementation plans for this
   project, executed plan-by-plan via the superpowers SDD workflow.
 
 ## Building
 
 ```bash
-cargo build --workspace       # crates/qrk-core, crates/qrk-wasm
+cargo build --workspace       # crates/qrk-core, qrk-wasm, qrk-ffi, qrk-bench
 cargo test --workspace
+
+just ui                       # WASM + debug UI
+just expo-android             # libqrk_ffi.so → expo-cpu-scanner jniLibs (16 KB)
+just expo-ios                 # Qrk.xcframework → expo-cpu-scanner/ios
+just expo-native              # both platforms
+just expo-example-ios         # example app (dev client) on iOS
+just expo-example-android     # example app on Android
 ```
 
-For the debug UI, see `debug-ui/README.md`.
+For the debug UI, see `debug-ui/README.md`. For the Expo module and its
+example app, see `expo-cpu-scanner/README.md` and
+`expo-cpu-scanner/example/README.md`.

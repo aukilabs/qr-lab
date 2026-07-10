@@ -1,13 +1,22 @@
-#![forbid(unsafe_code)]
+// `deny` (not `forbid`) so the aarch64 NEON hot-path module can
+// `#![allow(unsafe_code)]` for `std::arch::aarch64` intrinsics. Every
+// other module stays safe; the NEON paths are bit-identical to their
+// scalar fallbacks and covered by the existing gate suite.
+#![deny(unsafe_code)]
 
 mod alignment;
 mod bitmatrix;
 mod consts;
 mod decode;
 mod downscale;
+mod enhance;
 mod finder;
 mod homography;
+mod ladder;
 mod luma;
+#[cfg(target_arch = "aarch64")]
+#[allow(unsafe_code)]
+mod neon;
 mod refine;
 mod sample;
 mod scan;
@@ -24,11 +33,17 @@ pub use decode::DecodedCode;
 pub use downscale::{downscale_luma, downscaled_dims};
 pub use finder::{find_finders, FinderCandidate};
 pub use homography::PerspectiveTransform;
+pub use ladder::{
+    scan_robust, scan_robust_debug, RobustCode, RobustDebug, RobustDetections, ScanConfig,
+    ScanSession, SessionConfig, VariantKind, VariantRecord, VariantSnapshot,
+};
+#[doc(hidden)]
+pub use ladder::{scan_robust_with_kernel, UpscaleKernel};
 pub use luma::{luma_from_rgba, LumaError, LumaView};
 pub use scan::{scan, scan_traced, ScanOptions};
 pub use scanner::{detect, detect_traced, detect_with, Detections, StageClock, StageTimings};
-pub use tiles::TileGrid;
-pub use trace::Trace;
+pub use tiles::{BinarizeSpec, TileGrid};
 #[cfg(feature = "debug-trace")]
 pub use trace::TileTrace;
+pub use trace::Trace;
 pub use triplet::{group_triplets, TripletCandidate};

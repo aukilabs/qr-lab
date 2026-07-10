@@ -93,9 +93,14 @@ fn scan_with(source: &LumaView, opts: &ScanOptions, trace: Option<&mut Trace>) -
             // see `source` at all.
             let mut detections = detect_with_source(
                 &working,
-                Some(SourceView { view: source, sx, sy }),
+                Some(SourceView {
+                    view: source,
+                    sx,
+                    sy,
+                }),
                 trace,
                 opts.refine,
+                crate::tiles::BinarizeSpec::default(),
             );
             // The PUBLIC scalar stays width-pinned per the plan (see
             // `Detections::source_scale`'s doc) even though the internal
@@ -114,7 +119,13 @@ fn scan_with(source: &LumaView, opts: &ScanOptions, trace: Option<&mut Trace>) -
         // None, trace, false)` — the `refine: false` case — is exactly
         // what `detect_with` itself calls, so behavior is byte-identical
         // to pre-Task-3 `scan` whenever refinement is off.
-        None => detect_with_source(source, None, trace, opts.refine),
+        None => detect_with_source(
+            source,
+            None,
+            trace,
+            opts.refine,
+            crate::tiles::BinarizeSpec::default(),
+        ),
     }
 }
 
@@ -130,7 +141,10 @@ mod tests {
     fn no_downscale_needed_borrows_source_and_reports_scale_1() {
         let data = vec![128u8; 64 * 32];
         let view = flat_view(&data, 64, 32);
-        let opts = ScanOptions { max_working_dim: 64, refine: false };
+        let opts = ScanOptions {
+            max_working_dim: 64,
+            refine: false,
+        };
         let det = scan(&view, &opts);
         assert_eq!(det.source_scale, 1.0);
     }
@@ -139,7 +153,10 @@ mod tests {
     fn max_working_dim_zero_disables_downscaling_like_detect() {
         let data = vec![128u8; 64 * 32];
         let view = flat_view(&data, 64, 32);
-        let opts = ScanOptions { max_working_dim: 0, refine: false };
+        let opts = ScanOptions {
+            max_working_dim: 0,
+            refine: false,
+        };
         let det = scan(&view, &opts);
         assert_eq!(det.source_scale, 1.0);
     }
@@ -148,7 +165,10 @@ mod tests {
     fn downscale_needed_reports_the_width_ratio_and_still_detects() {
         let data = vec![128u8; 100 * 50];
         let view = flat_view(&data, 100, 50);
-        let opts = ScanOptions { max_working_dim: 50, refine: false };
+        let opts = ScanOptions {
+            max_working_dim: 50,
+            refine: false,
+        };
         let det = scan(&view, &opts);
         // longest=100, max_dim=50 -> dst_w=round(100*50/100)=50 -> ratio 0.5
         assert_eq!(det.source_scale, 0.5);
@@ -158,7 +178,13 @@ mod tests {
     fn scan_and_detect_agree_when_no_downscale_happens() {
         let data = vec![128u8; 32 * 32];
         let view = flat_view(&data, 32, 32);
-        let scanned = scan(&view, &ScanOptions { max_working_dim: 0, refine: false });
+        let scanned = scan(
+            &view,
+            &ScanOptions {
+                max_working_dim: 0,
+                refine: false,
+            },
+        );
         let detected = crate::scanner::detect(&view);
         assert_eq!(scanned.finders.len(), detected.finders.len());
         assert_eq!(scanned.triplets.len(), detected.triplets.len());
@@ -170,7 +196,14 @@ mod tests {
         let data = vec![128u8; 64 * 64];
         let view = flat_view(&data, 64, 64);
         let mut trace = Trace::new();
-        let det = scan_traced(&view, &ScanOptions { max_working_dim: 0, refine: false }, &mut trace);
+        let det = scan_traced(
+            &view,
+            &ScanOptions {
+                max_working_dim: 0,
+                refine: false,
+            },
+            &mut trace,
+        );
         assert_eq!(det.source_scale, 1.0);
         #[cfg(feature = "debug-trace")]
         assert!(trace.tiles.is_some());
@@ -189,10 +222,26 @@ mod tests {
         // test's pre-Task-3 name implied.
         let data = vec![128u8; 64 * 32];
         let view = flat_view(&data, 64, 32);
-        let without = scan(&view, &ScanOptions { max_working_dim: 0, refine: false });
-        let with = scan(&view, &ScanOptions { max_working_dim: 0, refine: true });
+        let without = scan(
+            &view,
+            &ScanOptions {
+                max_working_dim: 0,
+                refine: false,
+            },
+        );
+        let with = scan(
+            &view,
+            &ScanOptions {
+                max_working_dim: 0,
+                refine: true,
+            },
+        );
         assert_eq!(without.codes.len(), with.codes.len());
-        assert_eq!(without.codes.len(), 0, "test setup: a flat image must not decode anything");
+        assert_eq!(
+            without.codes.len(),
+            0,
+            "test setup: a flat image must not decode anything"
+        );
         assert_eq!(without.source_scale, with.source_scale);
     }
 }

@@ -84,7 +84,7 @@ required to pick up new Rust code while `npm run dev` keeps running.
                 tilesLayer, findersLayer, tripletsLayer,
                 groundtruthLayer, alignmentLayer,
                 samplegridLayer, bitsLayer, decodedLayer,
-                refinedLayer
+                refinedLayer, robustCodesLayer, evidenceLayer
                 (overlays/layers/*.ts)
                        ▲
                 LayerPanel (checkboxes mirror
@@ -194,6 +194,143 @@ styled full-width, one row below the buttons.
   separate click-to-jump, paused-after-release, and a focused-scrubber
   `ArrowRight` key press landing exactly one `1/30s` step (not a native
   range step) with no double-fire.
+
+## Robust mode (Plan 6)
+
+Media mode's sidebar gains a "Robust" panel whose master **Robust mode**
+checkbox (off by default — when off the scan path is byte-identical to the
+classic behavior) routes `App.runScan` through
+`ScannerClient.scanRobust` → `scan_rgba_robust`, the adaptive escalation
+ladder (`qrk_core::scan_robust`), instead of the plain `scan_rgba`. Works
+in both image and video mode (the shared latest-wins queue covers video —
+a robust request and a plain request occupy the SAME slot, so a newer
+request of either kind supersedes a queued one of either kind); the 3D
+Scene mode ignores robust mode entirely (its scan loop still calls
+`client.scan` directly).
+
+- **Config panel** (`panels/RobustPanel.tsx`): a preset select
+  (Baseline / Robust fast / Robust full benchmark) populated from
+  `robust_presets()` — the authoritative Rust `ScanConfig` constants,
+  fetched once through the worker and cached client-side
+  (`ScannerClient.robustPresets()`), never hardcoded in JS; selecting a
+  preset sets all fields, and any manual edit flips the select to a
+  derived (read-only) "custom" entry. Below it: the seven ladder flag
+  checkboxes, `max variants/frame` (0 = unlimited), `early exit`, and
+  **Capture ladder buffers** — a three-mode select, because capture
+  (baseline-detections clone + per-variant thumbnails) is pure
+  VISUALIZATION payload whose worker↔main serialization was measured at
+  >200ms round trips per VIDEO frame, while the ladder itself runs
+  identically in every mode: `off` (never), `paused frames only` (the
+  default — still images and paused/stepped/scrubbed video frames
+  capture; PLAYING frames scan at pure ladder cost, and pausing
+  auto-recaptures the frame you stopped on via
+  `useVideoSource.recapture()`, a re-deliver of the current frame with no
+  seek and no play-state change, keyed on the play→pause transition), and
+  `every frame (slow)` (per-frame filmstrips during playback, when you
+  actually want that). The capture decision is made per frame inside
+  `runScan` (it reads the live playing flag through a ref), not baked
+  into the callback's identity. The master toggle stays disabled until
+  the presets fetch lands (the initial config is seeded from
+  `robustFast`).
+- **Ladder panel** (`panels/LadderPanel.tsx`, sidebar, below Timings):
+  one row per `robust.variants` entry in execution order — stage-colored
+  dot (`stageColor`), `variantKindLabel`, a time bar proportional to the
+  slowest rung's `total_ns`, F/T/C (finders/triplets/codes) counts, and a
+  "+N" badge (row subtly highlighted) on rungs whose `new_codes > 0` —
+  the rungs that earned their cost. Footer: whole-ladder ms
+  (`robust.total_ns`), variants run, and "early exit ✓" / "budget hit"
+  badges. The Timings panel itself is fed `variants[0].timings` (the
+  baseline pass) in robust mode, keeping its sparkline alive, plus a
+  **`ladder total` row** (`TimingsSample.ladderTotalNs` =
+  `robust.total_ns`, all rungs) — without it the recovery rungs' cost is
+  invisible there ("n/a" in classic mode, like any stage that didn't
+  run).
+- **Filmstrip** (`panels/FilmstripPanel.tsx`, main area, robust mode +
+  capture not `off`): one grayscale `<canvas>` thumbnail per `snapshots`
+  entry — the exact (≤320px) buffer the scanner saw at that rung, labeled
+  with `variantKindLabel`; click to enlarge (max 480px, stage-color
+  border). Under the `paused frames only` policy, playback keeps the LAST
+  captured frame's strip visible — dimmed, with a "capture is paused
+  during playback" badge — instead of flashing empty (`stale` prop; the
+  retained strip lives in `App`'s `lastSnapshots`, reset on source
+  change). No snapshots at all renders an "enable capture" hint.
+- **Overlay layers** (`overlays/layers/robust-codes.ts` /
+  `evidence.ts`, registered after `refinedLayer`): `robust-codes` strokes
+  each `robust.codes` quad in its finding stage's color with a variant
+  label chip at TL plus refined-corner dots; `evidence` draws a cyan
+  crosshair per `robust.triplet_evidence` point. Both consume SOURCE-px
+  geometry (`corners_source`/`refined_corners_source`/
+  `triplet_evidence`) multiplied by `workingScale` — the same convention
+  as `groundtruth.ts`; `robust.codes[i].code.corners` is that code's own
+  VARIANT working px and is never drawn. In robust mode the CLASSIC
+  layers (finders/triplets/decoded/refined) draw from the `baseline`
+  detections when capture is on (wrapped as a trace-less `ScanResult`);
+  capture off leaves them dataless (they draw nothing, by design), and
+  the `tiles` layer — trace-only, and the robust envelope carries no
+  trace — is disabled in the Layers panel with a tooltip while robust
+  mode is on.
+- **Contract** (`scanner/robust-types.ts`): mirrors
+  `scanner/__snapshots__/envelope.robust.shadow_04.json`, the SECOND
+  Rust-generated snapshot (`envelope_snapshot.rs`) alongside
+  `envelope.near_00.json` — regenerate with the same `UPDATE_SNAPSHOT=1`
+  command when `WasmRobustResult` changes; `parseRobustScanResult` is
+  throw-on-drift like `parseScanResult` and shares its exported helper
+  parsers. The same **null/undefined rule** applies (see the Key modules
+  gotcha above): the snapshot renders `Option::None` as `null`, the live
+  binding as `undefined` — `baseline`, `snapshots`, and
+  `refined_corners_source` accept both, with tests covering both shapes.
+  One extra both-shapes case here: `snapshots[i].luma` is a `Uint8Array`
+  over the live boundary (serde_bytes) but a `number[]` in JSON — the
+  parser accepts both and normalizes to `Uint8Array`.
+
+### Session mode (temporal, video)
+
+The Robust panel's **Session (temporal video)** checkbox (off by default)
+routes robust VIDEO scanning through a STATEFUL `WasmScanSession` instead of
+the per-frame `scan_rgba_robust`. On real handheld footage the per-frame
+ladder re-runs the full detect batch every frame (~32ms); the session
+amortizes it across near-duplicate frames — **rung rotation** (each frame
+runs a rotating subset of the ladder) plus a **cross-frame candidate pool**
+(finders/triplets pooled over a few frames so a code that no single frame
+found alone can still decode). Measured on handheld video: **32→22ms/frame
+mean (−30%), +13% triplet-evidence frames, zero payload loss.**
+
+- **Two knobs** (both min 1): `rotation period` (default 3) — how many
+  frames a full ladder rotation spans; `pool TTL frames` (default 4) — how
+  long a pooled candidate survives before it's evicted. They map to
+  `qrk_core::SessionConfig`'s defaults.
+- **Video + robust only.** The toggle and inputs render always but App gates
+  their USE to `source.mediaKind === "video"` with robust mode on; still
+  images and the classic (non-robust) path are byte-identical to before —
+  a still frame in session mode is scanned the plain robust way
+  (`scanRobust`), never through the session.
+- **Envelope is identical** to `scan_rgba_robust`'s (`WasmRobustResult`,
+  parsed by the same `parseRobustScanResult`), so the timings panel, ladder
+  panel, and every overlay work unchanged. `snapshots` is always `null` —
+  the session path never captures ladder buffers, so the **filmstrip is
+  unavailable in session mode** (it shows an explicit hint instead of the
+  strip).
+- **The session is stateful and must be reset on a scene change.** It is
+  reset (cross-frame pool dropped) on: a source change (`handleSourceChange`
+  → `client.resetSession()`), a scrubber grab / seek (`VideoControls`'
+  `onScrubStart` → reset — a large temporal jump would otherwise seed the
+  new scene with stale candidates), and any config/param/toggle change
+  (the configure effect rebuilds the worker session, an implicit reset).
+  Small ±1-frame steps (frame buttons / arrow keys) are near-duplicates and
+  do NOT reset. Because the session is stateful, re-scanning the SAME
+  displayed frame twice (e.g. paused, then a param toggle) advances the
+  session's frame counter — expected, not idempotent.
+- **Wire protocol** (`scanner/worker.ts` / `client.ts`): three new messages
+  alongside the stateless ones. `session-config`
+  `{ config, rotationPeriod, poolTtlFrames }` and `session-reset` are
+  fire-and-forget (`client.configureSession` / `client.resetSession`);
+  `scan-session-frame` `{ id, rgba, width, height, maxDim, refine }`
+  (`client.scanSessionFrame`) shares the SAME latest-wins slot as
+  `scan`/`scan-robust` (a newer request of any kind supersedes) and answers
+  with the SAME `scan-result` envelope. The worker holds one module-scoped
+  `WasmScanSession`, rebuilt (old one `.free()`d) on each `session-config`;
+  a `scan-session-frame` with no session configured returns an `ok:false`
+  error rather than crashing the worker.
 
 ## Mode 1: 3D orbit scene (Plan 5 Task 5)
 
@@ -497,7 +634,8 @@ this list).
 
 3. **Register it** in `App.tsx`'s module-scope `createRegistry([...])` call
    (currently `[tilesLayer, findersLayer, tripletsLayer, groundtruthLayer,
-   alignmentLayer, samplegridLayer, bitsLayer, decodedLayer, refinedLayer]`).
+   alignmentLayer, samplegridLayer, bitsLayer, decodedLayer, refinedLayer,
+   robustCodesLayer, evidenceLayer]`).
    Registration order is draw order (later entries draw on top) and
    `LayerPanel`'s checkbox order.
 

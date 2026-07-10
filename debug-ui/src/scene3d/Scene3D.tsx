@@ -659,7 +659,7 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
         <section className="panel-section">
           <h2 className="panel-title">Scene</h2>
           <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
-            <span style={{ color: "#9ca3af" }}>payload</span>
+            <span style={{ color: "var(--text-muted)" }}>payload</span>
             <input
               type="text"
               value={payloadInput}
@@ -673,7 +673,7 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
           </label>
           <div style={{ display: "flex", gap: 8 }}>
             <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12, flex: 1 }}>
-              <span style={{ color: "#9ca3af" }}>version (0=auto)</span>
+              <span style={{ color: "var(--text-muted)" }}>version (0=auto)</span>
               <input
                 type="number"
                 min={0}
@@ -683,7 +683,7 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12, flex: 1 }}>
-              <span style={{ color: "#9ca3af" }}>ecc</span>
+              <span style={{ color: "var(--text-muted)" }}>ecc</span>
               <select value={ecc} onChange={(e) => setEcc(Number(e.target.value))}>
                 <option value={0}>L</option>
                 <option value={1}>M</option>
@@ -693,7 +693,7 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
             </label>
           </div>
           <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 12 }}>
-            <span style={{ color: "#9ca3af" }}>physical size (m)</span>
+            <span style={{ color: "var(--text-muted)" }}>physical size (m)</span>
             <input
               type="range"
               min={0.05}

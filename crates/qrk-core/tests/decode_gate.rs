@@ -43,7 +43,8 @@ fn fixture_prefix(name: &str) -> String {
     let mut s = name;
     if let Some(pos) = s.rfind('_') {
         let tail = &s[pos + 1..];
-        if tail.len() > 1 && tail.starts_with('v') && tail[1..].bytes().all(|b| b.is_ascii_digit()) {
+        if tail.len() > 1 && tail.starts_with('v') && tail[1..].bytes().all(|b| b.is_ascii_digit())
+        {
             s = &s[..pos];
         }
     }
@@ -65,8 +66,16 @@ struct PrefixStats {
 
 #[test]
 fn gate_1_all_golden_fixtures_decode_exactly() {
-    let fixtures = common::load_all();
-    assert_eq!(fixtures.len(), 81, "expected exactly 81 golden fixtures in fixtures/");
+    // Golden (non-degraded) fixtures only — the 100%-exact contract is
+    // defined on nominal imaging conditions. Plan 6 degraded fixtures
+    // (expect_decode may be false by design) are gated by robust_gate.rs
+    // and measured by the benchmark harness.
+    let fixtures = common::load_golden();
+    assert_eq!(
+        fixtures.len(),
+        81,
+        "expected exactly 81 golden fixtures in fixtures/"
+    );
 
     let mut failures: Vec<String> = Vec::new();
     let mut stats: BTreeMap<String, PrefixStats> = BTreeMap::new();
@@ -117,7 +126,10 @@ fn gate_1_all_golden_fixtures_decode_exactly() {
             fx.codes.iter().map(|c| c.payload.as_str()).collect();
         for c in &det.codes {
             if !truth_payloads.contains(c.payload.as_str()) {
-                failures.push(format!("{}: spurious decode {:?} (not in ground truth)", fx.name, c.payload));
+                failures.push(format!(
+                    "{}: spurious decode {:?} (not in ground truth)",
+                    fx.name, c.payload
+                ));
             }
         }
 
@@ -132,9 +144,15 @@ fn gate_1_all_golden_fixtures_decode_exactly() {
     }
 
     println!("\n=== Gate 1: per-prefix decode stats ===");
-    println!("{:<12} {:>9} {:>14} {:>14}", "prefix", "fixtures", "codes_total", "codes_matched");
+    println!(
+        "{:<12} {:>9} {:>14} {:>14}",
+        "prefix", "fixtures", "codes_total", "codes_matched"
+    );
     for (prefix, s) in &stats {
-        println!("{:<12} {:>9} {:>14} {:>14}", prefix, s.fixtures, s.codes_expected, s.codes_matched);
+        println!(
+            "{:<12} {:>9} {:>14} {:>14}",
+            prefix, s.fixtures, s.codes_expected, s.codes_matched
+        );
     }
 
     assert!(
@@ -191,12 +209,15 @@ fn load_real_capture_source(name: &str) -> (Vec<u8>, usize, usize) {
     let path = fixtures_real_dir().join(format!("{name}.png"));
     let file = File::open(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let decoder = png::Decoder::new(BufReader::new(file));
-    let mut reader = decoder.read_info().unwrap_or_else(|e| panic!("{}: read_info: {e}", path.display()));
+    let mut reader = decoder
+        .read_info()
+        .unwrap_or_else(|e| panic!("{}: read_info: {e}", path.display()));
     let mut buf = vec![
         0u8;
-        reader
-            .output_buffer_size()
-            .unwrap_or_else(|| panic!("{}: could not determine output buffer size", path.display()))
+        reader.output_buffer_size().unwrap_or_else(|| panic!(
+            "{}: could not determine output buffer size",
+            path.display()
+        ))
     ];
     let info = reader
         .next_frame(&mut buf)
@@ -216,7 +237,10 @@ fn load_real_capture_source(name: &str) -> (Vec<u8>, usize, usize) {
         }
         png::ColorType::Rgba => luma_from_rgba(bytes, w, h),
         png::ColorType::Indexed => {
-            panic!("{}: indexed PNGs are not handled by this gate's loader", path.display())
+            panic!(
+                "{}: indexed PNGs are not handled by this gate's loader",
+                path.display()
+            )
         }
     };
 
@@ -241,7 +265,10 @@ fn gate_2_real_captures_decode_pinned_payloads() {
     let view1 = LumaView::new(&luma1, w1, h1, w1).unwrap();
     let det1 = detect(&view1);
     let payloads1: Vec<&str> = det1.codes.iter().map(|c| c.payload.as_str()).collect();
-    println!("real_1 @{w1}x{h1}: decoded {} code(s): {payloads1:?}", det1.codes.len());
+    println!(
+        "real_1 @{w1}x{h1}: decoded {} code(s): {payloads1:?}",
+        det1.codes.len()
+    );
     assert!(
         det1.codes.len() >= 2,
         "real_1: expected >=2 decoded codes, got {}: {payloads1:?}",
@@ -258,7 +285,10 @@ fn gate_2_real_captures_decode_pinned_payloads() {
     let view2 = LumaView::new(&luma2, w2, h2, w2).unwrap();
     let det2 = detect(&view2);
     let payloads2: Vec<&str> = det2.codes.iter().map(|c| c.payload.as_str()).collect();
-    println!("real_2 @{w2}x{h2}: decoded {} code(s): {payloads2:?}", det2.codes.len());
+    println!(
+        "real_2 @{w2}x{h2}: decoded {} code(s): {payloads2:?}",
+        det2.codes.len()
+    );
     assert_eq!(
         payloads2,
         vec![YLXFAP],
@@ -285,7 +315,10 @@ fn gate_2b_video_frame167_decodes_at_working_resolution() {
     let view = LumaView::new(&luma, w, h, w).unwrap();
     let det = detect(&view);
     let payloads: Vec<&str> = det.codes.iter().map(|c| c.payload.as_str()).collect();
-    println!("video_f167 @{w}x{h}: decoded {} code(s): {payloads:?}", det.codes.len());
+    println!(
+        "video_f167 @{w}x{h}: decoded {} code(s): {payloads:?}",
+        det.codes.len()
+    );
     // Exact (same pattern as `real_2` above): the frame decodes exactly
     // this one code today — pin that, so a future spurious extra decode
     // fails loudly instead of slipping past a mere `contains` check.
@@ -304,7 +337,7 @@ fn gate_3_arbitration_on_multi_fixtures() {
     let mut stats: BTreeMap<String, PrefixStats> = BTreeMap::new();
     let mut checked = 0usize;
 
-    for fx in common::load_all() {
+    for fx in common::load_golden() {
         if !fx.name.starts_with("multi_") {
             continue;
         }
@@ -322,11 +355,15 @@ fn gate_3_arbitration_on_multi_fixtures() {
                 fx.name,
                 det.codes.len(),
                 fx.codes.len(),
-                det.codes.iter().map(|c| c.payload.as_str()).collect::<Vec<_>>(),
+                det.codes
+                    .iter()
+                    .map(|c| c.payload.as_str())
+                    .collect::<Vec<_>>(),
             ));
         }
 
-        let mut seen_finders: std::collections::HashMap<usize, Vec<&str>> = std::collections::HashMap::new();
+        let mut seen_finders: std::collections::HashMap<usize, Vec<&str>> =
+            std::collections::HashMap::new();
         for c in &det.codes {
             for &fi in &c.finder_indices {
                 seen_finders.entry(fi).or_default().push(&c.payload);
@@ -343,12 +380,21 @@ fn gate_3_arbitration_on_multi_fixtures() {
         }
     }
 
-    assert!(checked > 0, "no multi_* fixtures found — gate 3 would vacuously pass");
+    assert!(
+        checked > 0,
+        "no multi_* fixtures found — gate 3 would vacuously pass"
+    );
 
     println!("\n=== Gate 3: per-prefix arbitration stats ===");
-    println!("{:<12} {:>9} {:>14} {:>14}", "prefix", "fixtures", "codes_total", "codes_matched");
+    println!(
+        "{:<12} {:>9} {:>14} {:>14}",
+        "prefix", "fixtures", "codes_total", "codes_matched"
+    );
     for (prefix, s) in &stats {
-        println!("{:<12} {:>9} {:>14} {:>14}", prefix, s.fixtures, s.codes_expected, s.codes_matched);
+        println!(
+            "{:<12} {:>9} {:>14} {:>14}",
+            prefix, s.fixtures, s.codes_expected, s.codes_matched
+        );
     }
 
     assert!(
@@ -386,13 +432,31 @@ fn plan5_regression_pin_scan_matches_detect_on_near_res_fixtures() {
     for name in ["near_00", "inv_00", "multi_07"] {
         let fx = common::load(name);
         let view = fx.view();
-        let scanned = scan(&view, &ScanOptions { max_working_dim: 0, refine: false });
+        let scanned = scan(
+            &view,
+            &ScanOptions {
+                max_working_dim: 0,
+                refine: false,
+            },
+        );
         let detected = detect(&view);
 
         assert_eq!(scanned.source_scale, 1.0, "{name}: source_scale");
-        assert_eq!(scanned.finders.len(), detected.finders.len(), "{name}: finders count");
-        assert_eq!(scanned.triplets.len(), detected.triplets.len(), "{name}: triplets count");
-        assert_eq!(scanned.codes.len(), detected.codes.len(), "{name}: codes count");
+        assert_eq!(
+            scanned.finders.len(),
+            detected.finders.len(),
+            "{name}: finders count"
+        );
+        assert_eq!(
+            scanned.triplets.len(),
+            detected.triplets.len(),
+            "{name}: triplets count"
+        );
+        assert_eq!(
+            scanned.codes.len(),
+            detected.codes.len(),
+            "{name}: codes count"
+        );
         // All three fixtures carry ground-truth codes gate 1 decodes, so
         // an empty `codes` here would mean the field-comparison loop below
         // is comparing nothing at all — fail loudly instead of passing
@@ -404,13 +468,22 @@ fn plan5_regression_pin_scan_matches_detect_on_near_res_fixtures() {
         );
         for (i, (a, b)) in scanned.codes.iter().zip(detected.codes.iter()).enumerate() {
             assert_eq!(a.payload, b.payload, "{name}: code {i} payload");
-            assert_eq!(a.payload_bytes, b.payload_bytes, "{name}: code {i} payload_bytes");
+            assert_eq!(
+                a.payload_bytes, b.payload_bytes,
+                "{name}: code {i} payload_bytes"
+            );
             assert_eq!(a.version, b.version, "{name}: code {i} version");
             assert_eq!(a.dimension, b.dimension, "{name}: code {i} dimension");
             assert_eq!(a.mirrored, b.mirrored, "{name}: code {i} mirrored");
             assert_eq!(a.inverted, b.inverted, "{name}: code {i} inverted");
-            assert_eq!(a.finder_indices, b.finder_indices, "{name}: code {i} finder_indices");
-            assert_eq!(a.corners, b.corners, "{name}: code {i} corners (bit-identical)");
+            assert_eq!(
+                a.finder_indices, b.finder_indices,
+                "{name}: code {i} finder_indices"
+            );
+            assert_eq!(
+                a.corners, b.corners,
+                "{name}: code {i} corners (bit-identical)"
+            );
         }
     }
 }
@@ -444,8 +517,18 @@ fn plan5_scan_refine_populates_refined_corners_on_real_fixtures() {
     for name in ["near_00", "inv_00"] {
         let fx = common::load(name);
         let view = fx.view();
-        let det = scan(&view, &ScanOptions { max_working_dim: 0, refine: true });
-        assert_eq!(det.codes.len(), 1, "{name}: expected exactly one decoded code");
+        let det = scan(
+            &view,
+            &ScanOptions {
+                max_working_dim: 0,
+                refine: true,
+            },
+        );
+        assert_eq!(
+            det.codes.len(),
+            1,
+            "{name}: expected exactly one decoded code"
+        );
         let refined = det.codes[0]
             .refined_corners
             .expect("refine: true must populate refined_corners on a clean synthetic fixture");
@@ -479,7 +562,13 @@ fn plan5_scan_refine_populates_refined_corners_on_real_fixtures() {
         // `refine: false` (the default) must still leave it `None` — the
         // two fields are independently gated, not just "whichever ran
         // last".
-        let det_off = scan(&view, &ScanOptions { max_working_dim: 0, refine: false });
+        let det_off = scan(
+            &view,
+            &ScanOptions {
+                max_working_dim: 0,
+                refine: false,
+            },
+        );
         assert!(det_off.codes[0].refined_corners.is_none());
     }
 }
@@ -504,7 +593,13 @@ fn plan5_gate3_img4832_decodes_at_source_resolution() {
 
     let (luma, w, h) = load_real_capture_source("IMG_4832");
     let view = LumaView::new(&luma, w, h, w).unwrap();
-    let det = scan(&view, &ScanOptions { max_working_dim: 1280, refine: false });
+    let det = scan(
+        &view,
+        &ScanOptions {
+            max_working_dim: 1280,
+            refine: false,
+        },
+    );
     let payloads: Vec<&str> = det.codes.iter().map(|c| c.payload.as_str()).collect();
     println!(
         "IMG_4832 @{w}x{h} -> working max-dim 1280 (source_scale={:.6}, {} triplet(s)): \
@@ -556,7 +651,13 @@ fn plan5_gate3_img4832_decodes_at_source_resolution() {
 fn plan5_refine_downscale_active_sanity_on_img4832() {
     let (luma, w, h) = load_real_capture_source("IMG_4832");
     let view = LumaView::new(&luma, w, h, w).unwrap();
-    let det = scan(&view, &ScanOptions { max_working_dim: 1280, refine: true });
+    let det = scan(
+        &view,
+        &ScanOptions {
+            max_working_dim: 1280,
+            refine: true,
+        },
+    );
     assert!(
         det.source_scale < 1.0,
         "IMG_4832 must actually downscale for this test to exercise anything \
@@ -564,28 +665,35 @@ fn plan5_refine_downscale_active_sanity_on_img4832() {
         det.source_scale
     );
 
-    let refined_codes: Vec<_> = det.codes.iter().filter(|c| c.refined_corners.is_some()).collect();
+    let refined_codes: Vec<_> = det
+        .codes
+        .iter()
+        .filter(|c| c.refined_corners.is_some())
+        .collect();
     assert!(
         !refined_codes.is_empty(),
         "IMG_4832 @ working 1280 + refine: expected >=1 decoded code with refined_corners Some, \
          got {} decoded code(s), none refined: {:?}",
         det.codes.len(),
-        det.codes.iter().map(|c| c.payload.as_str()).collect::<Vec<_>>()
+        det.codes
+            .iter()
+            .map(|c| c.payload.as_str())
+            .collect::<Vec<_>>()
     );
 
     for code in &refined_codes {
         let refined = code.refined_corners.unwrap();
         // Coarse corners lifted working -> source px (see the doc comment
         // on the width-pinned approximation).
-        let coarse_source: [[f64; 2]; 4] =
-            code.corners.map(|[x, y]| [x / det.source_scale, y / det.source_scale]);
+        let coarse_source: [[f64; 2]; 4] = code
+            .corners
+            .map(|[x, y]| [x / det.source_scale, y / det.source_scale]);
         // Source px per module, from the coarse quad's own top edge.
         let top = [
             coarse_source[1][0] - coarse_source[0][0],
             coarse_source[1][1] - coarse_source[0][1],
         ];
-        let module_src_px =
-            (top[0] * top[0] + top[1] * top[1]).sqrt() / code.dimension as f64;
+        let module_src_px = (top[0] * top[0] + top[1] * top[1]).sqrt() / code.dimension as f64;
         let bracket = 3.0 * module_src_px;
 
         for i in 0..4 {
@@ -595,8 +703,8 @@ fn plan5_refine_downscale_active_sanity_on_img4832() {
                 "{:?} corner {i}: refined [{rx:.2}, {ry:.2}] outside source bounds {w}x{h}",
                 code.payload
             );
-            let d = ((rx - coarse_source[i][0]).powi(2) + (ry - coarse_source[i][1]).powi(2))
-                .sqrt();
+            let d =
+                ((rx - coarse_source[i][0]).powi(2) + (ry - coarse_source[i][1]).powi(2)).sqrt();
             println!(
                 "IMG_4832 refine sanity: {:?} corner {i}: |refined - coarse_source| = {d:.3}px \
                  (bracket {bracket:.3}px = 3 modules @ {module_src_px:.3}px/module)",

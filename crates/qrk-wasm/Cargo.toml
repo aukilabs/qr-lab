@@ -13,6 +13,9 @@ qrk-core = { path = "../qrk-core", features = ["debug-trace", "serde"] }
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 serde = { version = "1", features = ["derive"] }
+# Marks `WasmSnapshot::luma` as a byte buffer so serde-wasm-bindgen sends it
+# to JS as a single Uint8Array instead of a per-pixel JS number array.
+serde_bytes = "0.11"
 # Optional: only pulled in by the "qr-gen" feature (Plan 5 Task 5), which
 # powers the debug UI's 3D-scene mode (needs to generate a QR bit matrix
 # in-browser to texture a plane with). Same version/no-default-features as

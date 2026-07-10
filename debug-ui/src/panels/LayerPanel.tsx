@@ -11,6 +11,11 @@ export interface LayerPanelProps {
    * without this hook a toggle wouldn't visibly repaint the canvas until
    * some unrelated interaction did. */
   onToggle?: (id: string) => void;
+  /** Layer ids whose checkbox should be disabled, mapped to the tooltip
+   * explaining why (Plan 6: `tiles` has no data in robust mode — the
+   * robust envelope carries no trace). The layer's `registry.enabled`
+   * state is left untouched; it just can't be changed while disabled. */
+  disabled?: Record<string, string> | undefined;
 }
 
 /**
@@ -22,7 +27,7 @@ export interface LayerPanelProps {
  * dumb: this is the only place layers get toggled from, so there's no
  * need for a prop-driven "version" to sync against external toggles.
  */
-export function LayerPanel({ registry, onToggle }: LayerPanelProps) {
+export function LayerPanel({ registry, onToggle, disabled }: LayerPanelProps) {
   const [, forceRender] = useState(0);
 
   const handleToggle = (id: string) => {
@@ -32,19 +37,34 @@ export function LayerPanel({ registry, onToggle }: LayerPanelProps) {
   };
 
   return (
-    <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-      {registry.layers.map((layer) => (
-        <li key={layer.id}>
-          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <input
-              type="checkbox"
-              checked={registry.enabled.has(layer.id)}
-              onChange={() => handleToggle(layer.id)}
-            />
-            {layer.label}
-          </label>
-        </li>
-      ))}
+    <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+      {registry.layers.map((layer) => {
+        const disabledHint = disabled?.[layer.id];
+        return (
+          <li key={layer.id}>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 7,
+                fontSize: 12,
+                color: disabledHint ? "var(--text-dim)" : "var(--text-secondary)",
+                opacity: disabledHint ? 0.55 : 1,
+                cursor: disabledHint ? "default" : "pointer",
+              }}
+              title={disabledHint}
+            >
+              <input
+                type="checkbox"
+                checked={registry.enabled.has(layer.id)}
+                disabled={disabledHint !== undefined}
+                onChange={() => handleToggle(layer.id)}
+              />
+              {layer.label}
+            </label>
+          </li>
+        );
+      })}
     </ul>
   );
 }

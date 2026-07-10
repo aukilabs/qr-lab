@@ -5,6 +5,7 @@
 // prop for how a `drawAll` call gets wired to an actual canvas.
 import type { ViewTransform } from "../viewport/transform";
 import type { GroundTruthCode } from "./groundtruth-types";
+import type { RobustDetections } from "../scanner/robust-types";
 import type { ScanResult } from "../scanner/types";
 
 export interface OverlayContext {
@@ -34,6 +35,13 @@ export interface OverlayContext {
    * multiplies by this factor before projecting through `imageToScreen`;
    * every other layer consumes working px directly. */
   workingScale: number;
+  /** Plan 6 robust-mode ladder result, or `null`/absent outside robust
+   * mode (optional so pre-Plan-6 context constructors — including Scene3D
+   * and the layer tests — keep compiling unchanged; absent means `null`).
+   * Its geometry (`codes[i].corners_source`/`refined_corners_source`,
+   * `triplet_evidence`) is SOURCE px — the robust layers multiply by
+   * `workingScale` before projecting, same convention as `groundTruth`. */
+  robust?: RobustDetections | null;
 }
 
 export interface OverlayLayer {

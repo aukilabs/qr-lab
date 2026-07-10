@@ -78,13 +78,28 @@ export function Viewport({ image, overlays, onCursorImagePos }: ViewportProps) {
     // dpr * view, so `drawImage(img, 0, 0)` places it correctly at any
     // zoom/pan. Nearest-neighbor (no smoothing) keeps QR modules crisp
     // when zoomed in instead of blurring into a smear.
+    //
+    // Clear policy (video flicker fix): only wipe the base canvas when we
+    // are about to paint a valid bitmap, or when the image is intentionally
+    // null (source cleared). If the previous ImageBitmap was already
+    // closed (width 0 — common under robust-mode video where frames land
+    // faster than React commits + rAF), leave the last painted pixels in
+    // place. Clearing-then-skipping produced the intermittent black flash
+    // on the feed during robust playback.
     baseCtx.setTransform(1, 0, 0, 1, 0, 0);
-    baseCtx.clearRect(0, 0, base.width, base.height);
     const img = imageRef.current;
-    if (img) {
+    // `img.width > 0` guards a close race: a re-scan of the same source
+    // (resolution change, robust-panel edit) closes the previous
+    // ImageBitmap before React commits the new one, and a draw already
+    // queued via rAF would then throw InvalidStateError ("image source is
+    // detached") on the closed bitmap — which reports width 0.
+    if (img && img.width > 0) {
+      baseCtx.clearRect(0, 0, base.width, base.height);
       baseCtx.setTransform(view.scale * dpr, 0, 0, view.scale * dpr, view.tx * dpr, view.ty * dpr);
       baseCtx.imageSmoothingEnabled = false;
       baseCtx.drawImage(img, 0, 0);
+    } else if (!img) {
+      baseCtx.clearRect(0, 0, base.width, base.height);
     }
 
     // Overlay canvas: only dpr-scaled, *not* by view — layers draw in

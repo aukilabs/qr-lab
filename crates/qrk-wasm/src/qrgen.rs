@@ -54,18 +54,33 @@ pub(crate) fn generate_qr_bits(payload: &str, version: u32, ecc: u8) -> Result<B
         1 => qrcode::EcLevel::M,
         2 => qrcode::EcLevel::Q,
         3 => qrcode::EcLevel::H,
-        other => return Err(format!("generate_qr: ecc must be 0..=3 (L/M/Q/H), got {other}")),
+        other => {
+            return Err(format!(
+                "generate_qr: ecc must be 0..=3 (L/M/Q/H), got {other}"
+            ))
+        }
     };
 
     let code = if version == 0 {
         qrcode::QrCode::with_error_correction_level(payload.as_bytes(), ec_level)
     } else {
         if version > 40 {
-            return Err(format!("generate_qr: version must be 0 (auto) or 1..=40, got {version}"));
+            return Err(format!(
+                "generate_qr: version must be 0 (auto) or 1..=40, got {version}"
+            ));
         }
-        qrcode::QrCode::with_version(payload.as_bytes(), qrcode::Version::Normal(version as i16), ec_level)
+        qrcode::QrCode::with_version(
+            payload.as_bytes(),
+            qrcode::Version::Normal(version as i16),
+            ec_level,
+        )
     }
-    .map_err(|e| format!("generate_qr: {e:?} (payload {} bytes, version {version}, ecc {ecc})", payload.len()))?;
+    .map_err(|e| {
+        format!(
+            "generate_qr: {e:?} (payload {} bytes, version {version}, ecc {ecc})",
+            payload.len()
+        )
+    })?;
 
     let dim = code.width();
     let mut m = BitMatrix::new(dim);
@@ -84,8 +99,11 @@ pub(crate) fn generate_qr_bits(payload: &str, version: u32, ecc: u8) -> Result<B
 #[wasm_bindgen]
 pub fn generate_qr(payload: &str, version: u32, ecc: u8) -> Result<JsValue, JsValue> {
     let m = generate_qr_bits(payload, version, ecc).map_err(|e| JsValue::from_str(&e))?;
-    serde_wasm_bindgen::to_value(&GeneratedQr { dim: m.dim as u32, words: m.words().to_vec() })
-        .map_err(JsValue::from)
+    serde_wasm_bindgen::to_value(&GeneratedQr {
+        dim: m.dim as u32,
+        words: m.words().to_vec(),
+    })
+    .map_err(JsValue::from)
 }
 
 #[cfg(test)]
@@ -132,13 +150,19 @@ mod tests {
     #[test]
     fn generate_qr_bits_rejects_out_of_range_ecc() {
         let err = generate_qr_bits("X", 0, 4).err().unwrap();
-        assert!(err.contains("ecc must be 0..=3"), "unexpected message: {err}");
+        assert!(
+            err.contains("ecc must be 0..=3"),
+            "unexpected message: {err}"
+        );
     }
 
     #[test]
     fn generate_qr_bits_rejects_out_of_range_version() {
         let err = generate_qr_bits("X", 41, 0).err().unwrap();
-        assert!(err.contains("version must be 0"), "unexpected message: {err}");
+        assert!(
+            err.contains("version must be 0"),
+            "unexpected message: {err}"
+        );
     }
 
     #[test]
