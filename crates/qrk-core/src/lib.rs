@@ -1,49 +1,48 @@
-// `deny` (not `forbid`) so the aarch64 NEON hot-path module can
-// `#![allow(unsafe_code)]` for `std::arch::aarch64` intrinsics. Every
-// other module stays safe; the NEON paths are bit-identical to their
-// scalar fallbacks and covered by the existing gate suite.
-#![deny(unsafe_code)]
+//! Backward-compatible facade for the original `qrk-core` package.
+//!
+//! New applications should depend on `qrkit` for the umbrella API or on a
+//! focused `qrkit-*` crate. Existing source code can continue importing the
+//! complete scanner from `qrk_core` during the compatibility cycle.
 
-mod alignment;
-mod bitmatrix;
-mod consts;
-mod decode;
-mod downscale;
-mod enhance;
-mod finder;
-mod homography;
-mod ladder;
-mod luma;
-#[cfg(target_arch = "aarch64")]
-#[allow(unsafe_code)]
-mod neon;
-mod refine;
-mod sample;
-mod scan;
-mod scanner;
-#[cfg(test)]
-mod testpaint;
-mod tiles;
-mod trace;
-mod triplet;
-mod version;
+#![forbid(unsafe_code)]
 
-pub use bitmatrix::{decode_bits, BitMatrix, DecodeFailure, DecodedPayload};
-pub use decode::DecodedCode;
-pub use downscale::{downscale_luma, downscaled_dims};
-pub use finder::{find_finders, FinderCandidate};
-pub use homography::PerspectiveTransform;
-pub use ladder::{
+pub use qrkit_geometry as geometry;
+pub use qrkit_image as image;
+pub use qrkit_imgproc as imgproc;
+pub use qrkit_qr as qr;
+#[doc(inline)]
+pub use qrkit_qr::DecodedCode;
+#[doc(inline)]
+pub use qrkit_qr::PerspectiveTransform;
+#[cfg(feature = "debug-trace")]
+#[doc(inline)]
+pub use qrkit_qr::TileTrace;
+#[doc(inline)]
+pub use qrkit_qr::Trace;
+#[doc(inline)]
+pub use qrkit_qr::{decode_bits, BitMatrix, DecodeFailure, DecodedPayload};
+#[doc(inline)]
+pub use qrkit_qr::{detect, detect_traced, detect_with, Detections, StageClock, StageTimings};
+#[doc(inline)]
+pub use qrkit_qr::{downscale_luma, downscaled_dims};
+#[doc(inline)]
+pub use qrkit_qr::{find_finders, FinderCandidate};
+#[doc(inline)]
+pub use qrkit_qr::{group_triplets, TripletCandidate};
+#[doc(inline)]
+pub use qrkit_qr::{luma_from_rgba, LumaError, LumaView};
+#[doc(inline)]
+pub use qrkit_qr::{scan, scan_traced, ScanOptions};
+#[doc(inline)]
+pub use qrkit_qr::{
     scan_robust, scan_robust_debug, RobustCode, RobustDebug, RobustDetections, ScanConfig,
     ScanSession, SessionConfig, VariantKind, VariantRecord, VariantSnapshot,
 };
 #[doc(hidden)]
-pub use ladder::{scan_robust_with_kernel, UpscaleKernel};
-pub use luma::{luma_from_rgba, LumaError, LumaView};
-pub use scan::{scan, scan_traced, ScanOptions};
-pub use scanner::{detect, detect_traced, detect_with, Detections, StageClock, StageTimings};
-pub use tiles::{BinarizeSpec, TileGrid};
-#[cfg(feature = "debug-trace")]
-pub use trace::TileTrace;
-pub use trace::Trace;
-pub use triplet::{group_triplets, TripletCandidate};
+pub use qrkit_qr::{scan_robust_with_kernel, UpscaleKernel};
+#[doc(inline)]
+pub use qrkit_qr::{BinarizeSpec, TileGrid};
+
+// New facade types are additive to the compatibility surface.
+#[doc(inline)]
+pub use qrkit_qr::{Scanner, ScannerConfig};

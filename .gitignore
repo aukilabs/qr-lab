@@ -21,6 +21,8 @@ target/
 # Python
 __pycache__/
 .venv/
+.pytest_cache/
+.mypy_cache/
 
 # Misc
 .DS_Store

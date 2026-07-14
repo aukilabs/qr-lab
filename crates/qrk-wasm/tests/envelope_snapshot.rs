@@ -16,8 +16,8 @@
 //! freshly generated JSON matches it byte-for-byte (modulo a trailing
 //! newline) — silent drift between Rust and TS fails this test.
 
-use qrk_core::{scan_traced, LumaView, ScanOptions, StageTimings, Trace};
 use qrk_wasm::WasmResult;
+use qrkit::{scan_traced, LumaView, ScanOptions, StageTimings, Trace};
 use std::path::PathBuf;
 
 const WIDTH: usize = 1280;
@@ -76,7 +76,7 @@ fn envelope_matches_committed_snapshot() {
     // `StageTimings` is nondeterministic on every target this test could
     // run on: here (host, not wasm32) it's `Instant::now()` deltas, a
     // different number every run; on the real wasm32 target `StageClock`
-    // reads `js_sys::Date::now()` instead (see `qrk_core::StageClock` and
+    // reads `js_sys::Date::now()` instead (see `qrkit::StageClock` and
     // `scan_rgba`'s doc comment) — real elapsed time, but still a
     // different number every call, and only ms-resolution at that.
     // Either way, comparing timings byte-for-byte would make the drift
@@ -84,7 +84,7 @@ fn envelope_matches_committed_snapshot() {
     // so this test zeroes them before serializing — deterministic, and
     // still representative of the envelope's *shape*, which is the only
     // thing this snapshot is meant to gate.
-    let detections = qrk_core::Detections {
+    let detections = qrkit::Detections {
         timings: StageTimings::default(),
         ..detections
     };
@@ -169,8 +169,7 @@ fn robust_envelope_matches_committed_snapshot() {
         max_working_dim: MAX_WORKING_DIM,
         refine: REFINE,
     };
-    let mut robust =
-        qrk_core::scan_robust(&view, &opts, &qrk_core::ScanConfig::ROBUST_FULL_BENCHMARK);
+    let mut robust = qrkit::scan_robust(&view, &opts, &qrkit::ScanConfig::ROBUST_FULL_BENCHMARK);
     // Zero every wall-clock field for the same determinism reason the
     // classic snapshot zeroes StageTimings (see that test's comment).
     robust.total_ns = 0;

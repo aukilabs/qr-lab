@@ -13,7 +13,7 @@
 //!
 //! Usage:
 //!   # Pre-extract frames once (ffmpeg 1-indexed f00001.png = frame 0):
-//!   #   ffmpeg -i recording.mp4 -vsync 0 -q:v 3 /tmp/domain_gold/<scan>/all_frames/f%05d.png
+//!   #   ffmpeg -i recording.mp4 -vsync 0 -q:v 3 /tmp/domain_gold/SCAN/all_frames/f%05d.png
 //!   cargo run --release -p qrk-bench --bin domain_eval -- \
 //!     [--domain DIR] [--frames-root DIR] [--config baseline|robust-fast|robust-full] \
 //!     [--max-dim N] [--session[=PERIOD]] [--obs-only] [--out FILE.json] [--quiet]
@@ -27,7 +27,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use qrk_core::{
+use qrkit::{
     luma_from_rgba, scan_robust, LumaView, ScanConfig, ScanOptions, ScanSession, SessionConfig,
 };
 use serde::Serialize;
@@ -190,11 +190,7 @@ fn parse_gold(scan_dir: &Path) -> Option<ScanGold> {
             .push(GoldObs { short_id, corners });
     }
     Some(ScanGold {
-        name: scan_dir
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned(),
+        name: scan_dir.file_name().unwrap().to_string_lossy().into_owned(),
         n_frames: frames.len(),
         by_frame,
     })
@@ -212,7 +208,9 @@ fn config_by_name(name: &str) -> ScanConfig {
 fn payload_matches_short_id(payload: &str, short_id: &str) -> bool {
     // GPU shortIds are the portal id suffix; payloads are typically
     // HTTPS://R8.HR/<shortId> (case varies).
-    payload.to_ascii_uppercase().contains(&short_id.to_ascii_uppercase())
+    payload
+        .to_ascii_uppercase()
+        .contains(&short_id.to_ascii_uppercase())
 }
 
 /// Mean corner-to-corner distance after choosing the best cyclic rotation
@@ -246,13 +244,13 @@ fn mean_corner_err(
         for rev in [false, true] {
             for rot in 0..4 {
                 let mut sum = 0.0;
-                for i in 0..4 {
+                for (i, gpu_point) in gpu.iter().enumerate() {
                     let j = if rev {
                         (rot + 4 - i) % 4
                     } else {
                         (rot + i) % 4
                     };
-                    let (dx, dy) = (gpu[i][0] - cand[j][0], gpu[i][1] - cand[j][1]);
+                    let (dx, dy) = (gpu_point[0] - cand[j][0], gpu_point[1] - cand[j][1]);
                     sum += (dx * dx + dy * dy).sqrt();
                 }
                 best = best.min(sum / 4.0);
@@ -396,12 +394,7 @@ fn evaluate_scan(
                 // Prefer source-mapped coarse corners; refined when present.
                 let fw = Some(w as f64);
                 let fh = Some(h as f64);
-                corner_errs.push(mean_corner_err(
-                    &o.corners,
-                    &code.corners_source,
-                    fw,
-                    fh,
-                ));
+                corner_errs.push(mean_corner_err(&o.corners, &code.corners_source, fw, fh));
                 if let Some(ref rc) = code.refined_corners_source {
                     refined_errs.push(mean_corner_err(&o.corners, rc, fw, fh));
                 }
@@ -527,8 +520,8 @@ fn evaluate_scan(
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let mut domain = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/real/full-domain-data");
+    let mut domain =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/real/full-domain-data");
     let mut frames_root = PathBuf::from("/tmp/domain_gold");
     let mut configs: Vec<String> = Vec::new();
     let mut max_dim: u32 = 1280;
@@ -611,7 +604,11 @@ fn main() {
             golds.push(g);
         }
     }
-    assert!(!golds.is_empty(), "no scans found under {}", domain.display());
+    assert!(
+        !golds.is_empty(),
+        "no scans found under {}",
+        domain.display()
+    );
 
     let mut reports = Vec::new();
     for cfg_name in &configs {

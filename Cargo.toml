@@ -1,11 +1,24 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/qrkit-image",
+  "crates/qrkit-geometry",
+  "crates/qrkit-imgproc",
+  "crates/qrkit-qr",
+  "crates/qrkit",
   "crates/qrk-core",
   "crates/qrk-wasm",
   "crates/qrk-bench",
   "crates/qrk-ffi",
+  "crates/qrkit-python",
 ]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/aukilabs/cpuscanner2"
 
 # Mobile / size-sensitive release for qrk-ffi (cdylib + staticlib).
 # Host benches/tests keep the default release profile.

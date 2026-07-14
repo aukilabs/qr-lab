@@ -24,7 +24,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use qrk_core::{
+use qrkit::{
     scan_robust_with_kernel, LumaView, RobustDetections, ScanConfig, ScanOptions, UpscaleKernel,
 };
 use serde::{Deserialize, Serialize};
@@ -311,7 +311,7 @@ fn load_luma_png(path: &Path) -> (Vec<u8>, usize, usize) {
     let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
     let info = reader.next_frame(&mut buf).unwrap();
     let (w, h) = (info.width as usize, info.height as usize);
-    // The +128 rounding matches `qrk_core::luma_from_rgba` EXACTLY — the
+    // The +128 rounding matches `qrkit::luma_from_rgba` EXACTLY — the
     // production wasm/FFI ingest path. Diagnosis D4 measured the truncating
     // variant flipping 3 real video frames from decoded to not-decoded (a
     // half-LSB darker luma), silently understating baseline recall and
@@ -481,9 +481,9 @@ fn main() {
         for cfg_name in &configs {
             let cfg = config_by_name(cfg_name);
             let mut session = session_period.map(|p| {
-                qrk_core::ScanSession::new(
+                qrkit::ScanSession::new(
                     cfg,
-                    qrk_core::SessionConfig {
+                    qrkit::SessionConfig {
                         rotation_period: p,
                         ..Default::default()
                     },

@@ -1,10 +1,36 @@
-# cpuscanner2
+# QRKit
 
-A pure-CPU, Rust QR code scanner (standard QR, versions 1–40, multiple
-codes per frame, mirrored codes included) targeting subpixel-accurate
-corner output for AR pose estimation, with WASM as a first-class target.
+A modular, pure-CPU Rust computer-vision toolkit built around a complete QR
+scanner. The scanner supports standard QR versions 1–40, multiple and mirrored
+codes, robust low-resolution/blur recovery, temporal video scanning, and
+subpixel corners for AR pose estimation. Rust, Python/NumPy, C, WASM, Android,
+iOS, and Expo are supported scanner targets.
+
+Reusable image, geometry, thresholding, morphology, illumination, sharpening,
+blur-estimation, and deblurring APIs are available independently of QR decoding.
+For example, a barcode pipeline can depend on `qrkit-imgproc` without pulling in
+`rqrr` or any scanner binding.
+
 See `docs/superpowers/specs/2026-07-03-rust-qr-scanner-design.md` for the
 full design.
+
+## Crate architecture
+
+```text
+qrkit                    umbrella facade and complete scanner
+└── qrkit-qr             QR detection, decoding, robust ladder, sessions
+    ├── qrkit-imgproc    reusable enhancement and restoration
+    ├── qrkit-geometry   transforms, sampling, and line fitting
+    └── qrkit-image      grayscale views, ROIs, and owned buffers
+
+qrk-core                 compatibility facade for existing consumers
+qrk-ffi / qrk-wasm      native/mobile and WebAssembly bindings
+qrkit-python            NumPy scanner and reusable-operator bindings
+```
+
+Start with `qrkit` for scanning or use a focused crate for a non-QR pipeline.
+See [`docs/qrkit/`](docs/qrkit/) for architecture decisions, API stability, and
+migration guidance.
 
 ## Pipeline status
 
@@ -78,12 +104,22 @@ full design.
 
 ## Layout
 
-- `crates/qrk-core` — the scanner core: tiling/binarization, finder-pattern
-  and triplet detection, homography, and decoding (version cross-checks,
-  alignment location, grid sampling, rqrr bit-matrix decode, arbitration).
-  `rqrr` (plus its small transitive tail) is a required dependency for the
-  bit-matrix decode step; `serde` is optional (only pulled in behind the
-  `serde` feature) and `js-sys` is only pulled in on the `wasm32` target.
+- `crates/qrkit-image` — checked strided grayscale views, mutable views, owned
+  images, zero-copy ROIs, and RGB/RGBA-to-luma conversion.
+- `crates/qrkit-geometry` — homographies, bilinear sampling with explicit
+  borders, points/lines, weighted TLS fitting, and intersections.
+- `crates/qrkit-imgproc` — resize, tile/Sauvola thresholding, fast morphology,
+  illumination normalization, sharpening, blur estimation, and deblurring.
+- `crates/qrkit-qr` — QR-specific finder/triplet/version/alignment/sampling/
+  decoding logic, robust recovery ladder, and temporal sessions. This is the
+  only library crate that depends on `rqrr`.
+- `crates/qrkit` — umbrella facade re-exporting the complete scanner and the
+  focused reusable modules.
+- `crates/qrkit-python` — Maturin/PyO3 package published as
+  `aukilabs-qrkit` and imported as `auki_qrkit`; exposes NumPy scanning,
+  temporal sessions, illumination normalization, blur estimation, and
+  deblurring.
+- `crates/qrk-core` — source-compatible facade retained for existing imports.
 - `crates/qrk-wasm` — `wasm-pack`-built bindings exposing `scan_rgba` to
   the debug UI's Web Worker; built via `scripts/build-wasm.sh` /
   `npm run build:wasm` (from `debug-ui/`).
@@ -114,9 +150,11 @@ full design.
 ## Building
 
 ```bash
-cargo build --workspace       # crates/qrk-core, qrk-wasm, qrk-ffi, qrk-bench
+cargo build --workspace       # QRKit modules, scanner, bindings, and benchmarks
 cargo test --workspace
 
+just python-build             # aukilabs-qrkit wheel → target/wheels
+just python-test              # isolated wheel + NumPy integration tests
 just ui                       # WASM + debug UI
 just expo-android             # libqrk_ffi.so → expo-cpu-scanner jniLibs (16 KB)
 just expo-ios                 # Qrk.xcframework → expo-cpu-scanner/ios

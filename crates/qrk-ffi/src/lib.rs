@@ -1,4 +1,4 @@
-//! C ABI (+ Android JNI) surface for `qrk-core`.
+//! C ABI (+ Android JNI) surface for QRKit.
 //!
 //! Mobile consumers never call `qrk-core` directly: they load `libqrk_ffi`
 //! (Android `.so` / iOS staticlib in an xcframework) and use the C entry
@@ -9,13 +9,20 @@
 //! and must be freed with [`qrk_free_string`].
 
 use std::ffi::CString;
+use std::mem::size_of;
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 use std::slice;
 
-use qrk_core::{
-    downscaled_dims, scan, DecodedCode, Detections, LumaView, ScanOptions, StageTimings,
+use qrkit::image::{Gray8View, Gray8ViewMut};
+use qrkit::imgproc::blur::estimate_line_direction;
+use qrkit::imgproc::deblur::{
+    van_cittert_line_into, DeblurWorkspace, LineBorderMode, VanCittertConfig,
 };
+use qrkit::imgproc::illumination::{
+    background_divide_into, BackgroundDivideConfig, IlluminationWorkspace,
+};
+use qrkit::{downscaled_dims, scan, DecodedCode, Detections, LumaView, ScanOptions, StageTimings};
 use serde::Serialize;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -110,7 +117,7 @@ fn envelope(dets: &Detections, source_w: usize, source_h: usize, max_dim: u32) -
 /// don't pull an extra crate for a single field.
 fn base64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
@@ -144,7 +151,9 @@ fn scan_luma_to_json(
     let h = height as usize;
     let stride = stride as usize;
     if w == 0 || h == 0 {
-        return Err(format!("qrk_scan_luma: width/height must be non-zero (got {w}x{h})"));
+        return Err(format!(
+            "qrk_scan_luma: width/height must be non-zero (got {w}x{h})"
+        ));
     }
     if stride < w {
         return Err(format!("qrk_scan_luma: stride ({stride}) < width ({w})"));
@@ -245,6 +254,353 @@ pub unsafe extern "C" fn qrk_free_string(ptr: *mut c_char) {
 }
 
 // ---------------------------------------------------------------------------
+// Reusable image-operator C ABI (version 1)
+// ---------------------------------------------------------------------------
+
+#[repr(i32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QrkStatus {
+    Ok = 0,
+    NullPointer = 1,
+    InvalidArgument = 2,
+    BufferTooSmall = 3,
+    ProcessingFailed = 4,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct QrkBackgroundDivideConfigV1 {
+    pub struct_size: u32,
+    pub structuring_element: u32,
+    pub target_luma: u8,
+    pub denominator_floor: u8,
+    pub reserved: [u8; 2],
+}
+
+impl Default for QrkBackgroundDivideConfigV1 {
+    fn default() -> Self {
+        let config = BackgroundDivideConfig::default();
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            structuring_element: config.structuring_element as u32,
+            target_luma: config.target_luma,
+            denominator_floor: config.denominator_floor,
+            reserved: [0; 2],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct QrkVanCittertConfigV1 {
+    pub struct_size: u32,
+    pub blur_length: u32,
+    pub iterations: u32,
+    pub border_mode: u32,
+    pub theta_radians: f64,
+    pub relaxation: f64,
+    pub border_value: u8,
+    pub reserved: [u8; 7],
+}
+
+impl Default for QrkVanCittertConfigV1 {
+    fn default() -> Self {
+        let config = VanCittertConfig::default();
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            blur_length: config.blur_length as u32,
+            iterations: config.iterations as u32,
+            border_mode: 0,
+            theta_radians: config.theta_radians,
+            relaxation: config.relaxation,
+            border_value: 0,
+            reserved: [0; 7],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct QrkLineBlurEstimateV1 {
+    pub struct_size: u32,
+    pub has_length: u32,
+    pub theta_radians: f64,
+    pub confidence: f64,
+    pub length_px: f64,
+    pub raster_dx: i32,
+    pub raster_dy: i32,
+}
+
+/// Opaque reusable scratch state for native image-operator calls.
+#[derive(Default)]
+pub struct QrkOperatorContext {
+    illumination: IlluminationWorkspace,
+    deblur: DeblurWorkspace,
+    last_error: CString,
+}
+
+impl QrkOperatorContext {
+    fn fail(&mut self, status: QrkStatus, message: impl AsRef<str>) -> c_int {
+        self.last_error = CString::new(message.as_ref()).unwrap_or_default();
+        status as c_int
+    }
+
+    fn succeed(&mut self) -> c_int {
+        self.last_error = CString::default();
+        QrkStatus::Ok as c_int
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn qrk_operator_context_create() -> *mut QrkOperatorContext {
+    Box::into_raw(Box::new(QrkOperatorContext::default()))
+}
+
+/// # Safety
+/// `context` must be null or a pointer returned by
+/// [`qrk_operator_context_create`] that has not already been destroyed.
+#[no_mangle]
+pub unsafe extern "C" fn qrk_operator_context_destroy(context: *mut QrkOperatorContext) {
+    if !context.is_null() {
+        drop(Box::from_raw(context));
+    }
+}
+
+/// Return the last operator error for this context. The pointer remains valid
+/// until the next call using the context or until the context is destroyed.
+///
+/// # Safety
+/// `context` must point to a live operator context.
+#[no_mangle]
+pub unsafe extern "C" fn qrk_operator_last_error(
+    context: *const QrkOperatorContext,
+) -> *const c_char {
+    if context.is_null() {
+        return ptr::null();
+    }
+    (*context).last_error.as_ptr()
+}
+
+/// Initialize a version-1 background-division configuration.
+///
+/// # Safety
+/// `out_config` must point to writable storage for the configuration.
+#[no_mangle]
+pub unsafe extern "C" fn qrk_background_divide_config_v1_default(
+    out_config: *mut QrkBackgroundDivideConfigV1,
+) -> c_int {
+    if out_config.is_null() {
+        return QrkStatus::NullPointer as c_int;
+    }
+    *out_config = QrkBackgroundDivideConfigV1::default();
+    QrkStatus::Ok as c_int
+}
+
+/// Initialize a version-1 Van Cittert configuration.
+///
+/// # Safety
+/// `out_config` must point to writable storage for the configuration.
+#[no_mangle]
+pub unsafe extern "C" fn qrk_van_cittert_config_v1_default(
+    out_config: *mut QrkVanCittertConfigV1,
+) -> c_int {
+    if out_config.is_null() {
+        return QrkStatus::NullPointer as c_int;
+    }
+    *out_config = QrkVanCittertConfigV1::default();
+    QrkStatus::Ok as c_int
+}
+
+unsafe fn input_view<'a>(
+    data: *const u8,
+    width: u32,
+    height: u32,
+    stride: u32,
+) -> Result<Gray8View<'a>, QrkStatus> {
+    if data.is_null() {
+        return Err(QrkStatus::NullPointer);
+    }
+    let len = ffi_buffer_len(width, height, stride)?;
+    Gray8View::new(
+        slice::from_raw_parts(data, len),
+        width as usize,
+        height as usize,
+        stride as usize,
+    )
+    .map_err(|_| QrkStatus::InvalidArgument)
+}
+
+unsafe fn output_view<'a>(
+    data: *mut u8,
+    width: u32,
+    height: u32,
+    stride: u32,
+) -> Result<Gray8ViewMut<'a>, QrkStatus> {
+    if data.is_null() {
+        return Err(QrkStatus::NullPointer);
+    }
+    let len = ffi_buffer_len(width, height, stride)?;
+    Gray8ViewMut::new(
+        slice::from_raw_parts_mut(data, len),
+        width as usize,
+        height as usize,
+        stride as usize,
+    )
+    .map_err(|_| QrkStatus::InvalidArgument)
+}
+
+fn ffi_buffer_len(width: u32, height: u32, stride: u32) -> Result<usize, QrkStatus> {
+    if width == 0 || height == 0 || stride < width {
+        return Err(QrkStatus::InvalidArgument);
+    }
+    (stride as usize)
+        .checked_mul(height as usize - 1)
+        .and_then(|value| value.checked_add(width as usize))
+        .ok_or(QrkStatus::BufferTooSmall)
+}
+
+/// Normalize uneven illumination into a caller-owned grayscale buffer.
+///
+/// # Safety
+/// All pointers must be valid for their documented lengths for the duration of
+/// the call. `src` and `dst` must not overlap.
+#[no_mangle]
+pub unsafe extern "C" fn qrk_background_divide_luma_v1(
+    context: *mut QrkOperatorContext,
+    src: *const u8,
+    width: u32,
+    height: u32,
+    src_stride: u32,
+    dst: *mut u8,
+    dst_stride: u32,
+    config: *const QrkBackgroundDivideConfigV1,
+) -> c_int {
+    if context.is_null() || config.is_null() {
+        return QrkStatus::NullPointer as c_int;
+    }
+    let context = &mut *context;
+    if (*config).struct_size < size_of::<QrkBackgroundDivideConfigV1>() as u32 {
+        return context.fail(
+            QrkStatus::InvalidArgument,
+            "background config struct_size is too small",
+        );
+    }
+    let source = match input_view(src, width, height, src_stride) {
+        Ok(view) => view,
+        Err(status) => return context.fail(status, "invalid source image layout"),
+    };
+    let destination = match output_view(dst, width, height, dst_stride) {
+        Ok(view) => view,
+        Err(status) => return context.fail(status, "invalid destination image layout"),
+    };
+    let config = BackgroundDivideConfig {
+        structuring_element: (*config).structuring_element as usize,
+        target_luma: (*config).target_luma,
+        denominator_floor: (*config).denominator_floor,
+    };
+    match background_divide_into(source, destination, &config, &mut context.illumination) {
+        Ok(()) => context.succeed(),
+        Err(error) => context.fail(QrkStatus::ProcessingFailed, error.to_string()),
+    }
+}
+
+/// Apply configurable line-PSF Van Cittert restoration into caller-owned
+/// grayscale storage.
+///
+/// # Safety
+/// All pointers must be valid for their documented lengths for the duration of
+/// the call. `src` and `dst` must not overlap.
+#[no_mangle]
+pub unsafe extern "C" fn qrk_van_cittert_luma_v1(
+    context: *mut QrkOperatorContext,
+    src: *const u8,
+    width: u32,
+    height: u32,
+    src_stride: u32,
+    dst: *mut u8,
+    dst_stride: u32,
+    config: *const QrkVanCittertConfigV1,
+) -> c_int {
+    if context.is_null() || config.is_null() {
+        return QrkStatus::NullPointer as c_int;
+    }
+    let context = &mut *context;
+    if (*config).struct_size < size_of::<QrkVanCittertConfigV1>() as u32 {
+        return context.fail(
+            QrkStatus::InvalidArgument,
+            "deblur config struct_size is too small",
+        );
+    }
+    let source = match input_view(src, width, height, src_stride) {
+        Ok(view) => view,
+        Err(status) => return context.fail(status, "invalid source image layout"),
+    };
+    let destination = match output_view(dst, width, height, dst_stride) {
+        Ok(view) => view,
+        Err(status) => return context.fail(status, "invalid destination image layout"),
+    };
+    let config = VanCittertConfig {
+        theta_radians: (*config).theta_radians,
+        blur_length: (*config).blur_length as usize,
+        iterations: (*config).iterations as usize,
+        relaxation: (*config).relaxation,
+        border: match (*config).border_mode {
+            0 => LineBorderMode::Replicate,
+            1 => LineBorderMode::Reflect,
+            2 => LineBorderMode::Constant((*config).border_value),
+            _ => return context.fail(QrkStatus::InvalidArgument, "unknown deblur border_mode"),
+        },
+    };
+    match van_cittert_line_into(source, destination, &config, &mut context.deblur) {
+        Ok(_) => context.succeed(),
+        Err(error) => context.fail(QrkStatus::ProcessingFailed, error.to_string()),
+    }
+}
+
+/// Estimate directional blur without modifying the image.
+///
+/// # Safety
+/// `src` must describe readable image storage and `out_estimate` must point to
+/// writable version-1 estimate storage with `struct_size` initialized.
+#[no_mangle]
+pub unsafe extern "C" fn qrk_estimate_line_blur_luma_v1(
+    context: *mut QrkOperatorContext,
+    src: *const u8,
+    width: u32,
+    height: u32,
+    src_stride: u32,
+    out_estimate: *mut QrkLineBlurEstimateV1,
+) -> c_int {
+    if context.is_null() || out_estimate.is_null() {
+        return QrkStatus::NullPointer as c_int;
+    }
+    let context = &mut *context;
+    if (*out_estimate).struct_size < size_of::<QrkLineBlurEstimateV1>() as u32 {
+        return context.fail(
+            QrkStatus::InvalidArgument,
+            "estimate struct_size is too small",
+        );
+    }
+    let source = match input_view(src, width, height, src_stride) {
+        Ok(view) => view,
+        Err(status) => return context.fail(status, "invalid source image layout"),
+    };
+    let direction = estimate_line_direction(source);
+    let length = qrkit::imgproc::blur::estimate_line_length(source, direction.theta_radians);
+    let (raster_dx, raster_dy) = direction.raster_direction.step();
+    *out_estimate = QrkLineBlurEstimateV1 {
+        struct_size: size_of::<QrkLineBlurEstimateV1>() as u32,
+        has_length: u32::from(length.is_some()),
+        theta_radians: direction.theta_radians,
+        confidence: direction.confidence,
+        length_px: length.unwrap_or(0.0),
+        raster_dx: raster_dx as i32,
+        raster_dy: raster_dy as i32,
+    };
+    context.succeed()
+}
+
+// ---------------------------------------------------------------------------
 // Android JNI
 // ---------------------------------------------------------------------------
 
@@ -304,7 +660,7 @@ mod android {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qrk_core::luma_from_rgba;
+    use qrkit::luma_from_rgba;
 
     #[test]
     fn base64_roundtrip_empty_and_hello() {
@@ -327,5 +683,38 @@ mod tests {
         assert_eq!(v["scanWidth"], w);
         assert_eq!(v["scanHeight"], h);
         assert!(v["codes"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn operator_abi_uses_caller_owned_buffers_and_reusable_context() {
+        let context = qrk_operator_context_create();
+        assert!(!context.is_null());
+        let src = vec![120u8; 7 * 5];
+        let mut dst = vec![0u8; src.len()];
+        let config = QrkVanCittertConfigV1::default();
+        let status = unsafe {
+            qrk_van_cittert_luma_v1(context, src.as_ptr(), 7, 5, 7, dst.as_mut_ptr(), 7, &config)
+        };
+        assert_eq!(status, QrkStatus::Ok as c_int);
+        assert_eq!(src, dst);
+        unsafe { qrk_operator_context_destroy(context) };
+    }
+
+    #[test]
+    fn operator_abi_reports_versioned_config_errors() {
+        let context = qrk_operator_context_create();
+        let src = [0u8; 9];
+        let mut dst = vec![0u8; 9];
+        let config = QrkVanCittertConfigV1 {
+            struct_size: 0,
+            ..QrkVanCittertConfigV1::default()
+        };
+        let status = unsafe {
+            qrk_van_cittert_luma_v1(context, src.as_ptr(), 3, 3, 3, dst.as_mut_ptr(), 3, &config)
+        };
+        assert_eq!(status, QrkStatus::InvalidArgument as c_int);
+        let message = unsafe { std::ffi::CStr::from_ptr(qrk_operator_last_error(context)) };
+        assert!(message.to_string_lossy().contains("struct_size"));
+        unsafe { qrk_operator_context_destroy(context) };
     }
 }

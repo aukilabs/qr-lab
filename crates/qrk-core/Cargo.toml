@@ -1,16 +1,17 @@
 [package]
 name = "qrk-core"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.87"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Compatibility facade for the QRKit QR scanner"
 
 [dependencies]
-rqrr = { version = "0.10", default-features = false }
-serde = { version = "1", features = ["derive"], optional = true }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-js-sys = "0.3"
+qrkit-image = { path = "../qrkit-image" }
+qrkit-geometry = { path = "../qrkit-geometry" }
+qrkit-imgproc = { path = "../qrkit-imgproc" }
+qrkit-qr = { path = "../qrkit-qr" }
 
 [dev-dependencies]
 png = "0.18.1"
@@ -19,5 +20,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [features]
-debug-trace = []
-serde = ["dep:serde"]
+debug-trace = ["qrkit-qr/debug-trace"]
+serde = ["qrkit-qr/serde"]

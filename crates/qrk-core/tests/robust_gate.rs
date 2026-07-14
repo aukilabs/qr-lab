@@ -29,9 +29,8 @@ const OPTS: ScanOptions = ScanOptions {
 /// the pack locally); ordinary checkouts retain all synthetic/unit gates.
 fn optional_fixture(name: &str) -> Option<common::Fixture> {
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
-    (root.join(format!("{name}.json")).exists()
-        && root.join(format!("{name}.luma")).exists())
-    .then(|| common::load(name))
+    (root.join(format!("{name}.json")).exists() && root.join(format!("{name}.luma")).exists())
+        .then(|| common::load(name))
 }
 
 #[test]

@@ -75,6 +75,26 @@ expo-native: expo-android expo-ios
 ffi-test:
     cargo test -p qrk-ffi --release
 
+# Check reusable-crate dependency boundaries and supported feature combinations.
+qrkit-deps:
+    ./scripts/check-qrkit-deps.sh
+
+# Check legacy scanner and reusable operator C ABI exports.
+qrkit-abi:
+    ./scripts/check-qrkit-abi.sh
+
+# Run the standalone 1280x720 restoration microbenchmark.
+qrkit-operator-bench:
+    cargo run -p qrkit-imgproc --release --example operator_bench
+
+# Build the aukilabs-qrkit Python wheel into target/wheels/.
+python-build:
+    ./scripts/build-python.sh
+
+# Build an isolated wheel and run the Python/NumPy integration suite.
+python-test:
+    ./scripts/check-python.sh
+
 # ── Example Expo app (expo-cpu-scanner/example) ──────────────────────
 # Needs natives first (`just expo-native`) and a dev build (not Expo Go).
 

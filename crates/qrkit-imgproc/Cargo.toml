@@ -1,0 +1,12 @@
+[package]
+name = "qrkit-imgproc"
+description = "Reusable grayscale image processing and restoration for QRKit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+qrkit-image = { path = "../qrkit-image" }
+qrkit-geometry = { path = "../qrkit-geometry" }

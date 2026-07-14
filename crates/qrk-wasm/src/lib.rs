@@ -4,7 +4,7 @@
 //! trace) as a plain JS object.
 //!
 //! Plan 5 Task 1: `scan_rgba` gained `max_dim`/`refine` and now owns the
-//! source→working downscale in Rust via `qrk_core::scan`/`scan_traced`,
+//! source→working downscale in Rust via `qrkit::scan`/`scan_traced`,
 //! rather than `detect`/`detect_traced` directly on an already-downscaled
 //! view — the debug UI's TS worker used to downscale before calling this
 //! function; it now hands over the full SOURCE frame instead (see
@@ -17,7 +17,15 @@
 //! default) adds `generate_qr` — the debug UI's 3D-scene mode uses it to
 //! texture a plane with a real, decodable QR — see that module's doc.
 
-use qrk_core::{
+use qrkit::image::Gray8Image;
+use qrkit::imgproc::blur::estimate_line_direction;
+use qrkit::imgproc::deblur::{
+    van_cittert_line_into, DeblurWorkspace, LineBorderMode, VanCittertConfig,
+};
+use qrkit::imgproc::illumination::{
+    background_divide_into, BackgroundDivideConfig, IlluminationWorkspace,
+};
+use qrkit::{
     downscaled_dims, luma_from_rgba, scan, scan_robust, scan_robust_debug, scan_traced, Detections,
     LumaView, RobustDetections, ScanConfig, ScanOptions, Trace, VariantKind,
 };
@@ -50,7 +58,7 @@ pub struct WasmResult {
     /// working-px geometry (and the displayed overlay coordinates) is
     /// relative to. Equal to `width`/`height` (the SOURCE frame passed in)
     /// whenever `detections.source_scale == 1.0`; otherwise the downscaled
-    /// dimensions `qrk_core::downscale_luma` computed for `max_dim`.
+    /// dimensions `qrkit::downscale_luma` computed for `max_dim`.
     pub scan_width: u32,
     pub scan_height: u32,
 }
@@ -63,8 +71,8 @@ pub struct WasmResult {
 /// bytes, tightly packed (row stride == width).
 ///
 /// `max_dim` caps the WORKING view's longest side (`0` = no cap — detect
-/// directly on the full source, like `qrk_core::detect`); the downscale
-/// (when one is needed) happens here, in Rust, via `qrk_core::scan` — see
+/// directly on the full source, like `qrkit::detect`); the downscale
+/// (when one is needed) happens here, in Rust, via `qrkit::scan` — see
 /// that function's and `ScanOptions`'s doc comments for the exact NN
 /// formula and the `source_scale` conversion it produces. `refine` enables
 /// subpixel corner refinement (Plan 5 Task 3, see `ScanOptions::refine`'s
@@ -75,7 +83,7 @@ pub struct WasmResult {
 /// When `with_trace` is set, the result carries the full per-stage `Trace`
 /// (tiles/finders/triplets); otherwise `trace` is `None` and the
 /// trace-recording cost is skipped entirely. Stage timings are real
-/// elapsed time on wasm too — `qrk_core::StageClock` backs them with
+/// elapsed time on wasm too — `qrkit::StageClock` backs them with
 /// `js_sys::Date::now()`, millisecond-resolution rather than the
 /// nanosecond resolution `Instant` gives on native targets, so a fast
 /// stage can still read as 0ns. JS-side wall time (e.g. `performance.now()`
@@ -125,7 +133,7 @@ pub fn scan_rgba(
 
     // Branch on `with_trace` (rather than always calling `scan_traced` with
     // a throwaway `Trace`) so the no-trace path stays exactly as cheap as
-    // `scan`'s own doc comment promises: `qrk_core`'s internals never call
+    // `scan`'s own doc comment promises: `qrkit`'s internals never call
     // any `record_*` (with its `to_vec()` clones) unless a trace was
     // actually asked for.
     let mut trace = with_trace.then(Trace::new);
@@ -146,7 +154,7 @@ pub fn scan_rgba(
 }
 
 /// JS-side robustness config (Plan 6): the camelCase mirror of
-/// `qrk_core::ScanConfig`, deserialized from the plain object the debug UI
+/// `qrkit::ScanConfig`, deserialized from the plain object the debug UI
 /// sends (`serde_wasm_bindgen::from_value` — the first JS→wasm struct in
 /// this crate; everything before Plan 6 crossed as flat scalars).
 /// `#[serde(default)]` on the container means every omitted field is the
@@ -202,7 +210,7 @@ impl RobustConfig {
 }
 
 /// The named `ScanConfig` presets, exposed so the debug UI's preset picker
-/// reads the authoritative Rust values (`qrk_core::ScanConfig::{BASELINE,
+/// reads the authoritative Rust values (`qrkit::ScanConfig::{BASELINE,
 /// ROBUST_FAST, ROBUST_FULL_BENCHMARK}`) instead of hard-coding copies that
 /// would silently drift.
 #[derive(Serialize)]
@@ -227,7 +235,7 @@ pub fn robust_presets() -> Result<JsValue, JsValue> {
 
 /// One ladder variant's buffer thumbnail (Plan 6 debug capture): what the
 /// scanner actually saw at that rung, box-averaged to ≤320 px on the longest
-/// side by `qrk_core::scan_robust_debug`. `luma` crosses to JS as a single
+/// side by `qrkit::scan_robust_debug`. `luma` crosses to JS as a single
 /// `Uint8Array` (`serde_bytes`), tightly packed, `width * height` bytes.
 #[derive(Serialize)]
 #[doc(hidden)]
@@ -291,7 +299,7 @@ pub fn unified_detections(robust: &RobustDetections, sx: f64, sy: f64) -> Detect
         finders: robust
             .finders
             .iter()
-            .map(|f| qrk_core::FinderCandidate {
+            .map(|f| qrkit::FinderCandidate {
                 x: f.x * sx,
                 y: f.y * sy,
                 module: f.module * sx,
@@ -302,7 +310,7 @@ pub fn unified_detections(robust: &RobustDetections, sx: f64, sy: f64) -> Detect
         triplets: robust
             .triplets
             .iter()
-            .map(|t| qrk_core::TripletCandidate {
+            .map(|t| qrkit::TripletCandidate {
                 tl: [t.tl[0] * sx, t.tl[1] * sy],
                 tr: [t.tr[0] * sx, t.tr[1] * sy],
                 bl: [t.bl[0] * sx, t.bl[1] * sy],
@@ -316,7 +324,7 @@ pub fn unified_detections(robust: &RobustDetections, sx: f64, sy: f64) -> Detect
         codes: robust
             .codes
             .iter()
-            .map(|c| qrk_core::DecodedCode {
+            .map(|c| qrkit::DecodedCode {
                 corners: c.corners_source.map(|p| [p[0] * sx, p[1] * sy]),
                 refined_corners: c.refined_corners_source,
                 ..c.code.clone()
@@ -332,7 +340,7 @@ pub fn unified_detections(robust: &RobustDetections, sx: f64, sy: f64) -> Detect
 }
 
 /// Scan one SOURCE-resolution RGBA frame through the Plan 6 adaptive
-/// escalation ladder (`qrk_core::scan_robust`) and return a
+/// escalation ladder (`qrkit::scan_robust`) and return a
 /// [`WasmRobustResult`]. `rgba`/`width`/`height`/`max_dim`/`refine` behave
 /// exactly as in [`scan_rgba`] (same validation, same panic-free error
 /// path). `config` is a plain JS object matching [`RobustConfig`]
@@ -340,7 +348,7 @@ pub fn unified_detections(robust: &RobustDetections, sx: f64, sy: f64) -> Detect
 /// `robust_presets().robustFast` etc. for a preset); `undefined`/`null` is
 /// accepted as "all defaults".
 ///
-/// `capture: true` switches to `qrk_core::scan_robust_debug` — identical
+/// `capture: true` switches to `qrkit::scan_robust_debug` — identical
 /// detection results, plus the per-variant `snapshots` filmstrip (one
 /// box-downscale chain + ~58 KB pixel payload per variant; leave it off
 /// for video-rate scanning — everything else, including the unified
@@ -454,7 +462,9 @@ fn prepare_luma(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, JsV
     let expected_len = width
         .checked_mul(height)
         .and_then(|n| n.checked_mul(4))
-        .ok_or_else(|| JsValue::from_str(&format!("width * height * 4 overflows ({width}x{height})")))?;
+        .ok_or_else(|| {
+            JsValue::from_str(&format!("width * height * 4 overflows ({width}x{height})"))
+        })?;
     if rgba.len() != expected_len {
         return Err(JsValue::from_str(&format!(
             "rgba buffer is {} bytes, expected width * height * 4 = {expected_len} ({width}x{height})",
@@ -464,8 +474,136 @@ fn prepare_luma(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, JsV
     Ok(luma_from_rgba(rgba, width, height))
 }
 
+fn prepare_luma_view(
+    luma: &[u8],
+    width: u32,
+    height: u32,
+    stride: u32,
+) -> Result<LumaView<'_>, JsValue> {
+    LumaView::new(luma, width as usize, height as usize, stride as usize)
+        .map_err(|error| JsValue::from_str(&format!("invalid grayscale image: {error}")))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WasmLineBlurEstimate {
+    theta_radians: f64,
+    confidence: f64,
+    length_px: Option<f64>,
+    raster_dx: i32,
+    raster_dy: i32,
+}
+
+/// Reusable image-processing workspace for non-QR pipelines in WebAssembly.
+#[wasm_bindgen]
+pub struct WasmImageProcessor {
+    illumination: IlluminationWorkspace,
+    deblur: DeblurWorkspace,
+}
+
+#[wasm_bindgen]
+impl WasmImageProcessor {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            illumination: IlluminationWorkspace::default(),
+            deblur: DeblurWorkspace::default(),
+        }
+    }
+
+    /// Estimate directional blur from a grayscale, optionally strided frame.
+    pub fn estimate_line_blur_luma(
+        &self,
+        luma: &[u8],
+        width: u32,
+        height: u32,
+        stride: u32,
+    ) -> Result<JsValue, JsValue> {
+        let view = prepare_luma_view(luma, width, height, stride)?;
+        let direction = estimate_line_direction(view);
+        let length_px = qrkit::imgproc::blur::estimate_line_length(view, direction.theta_radians);
+        let (raster_dx, raster_dy) = direction.raster_direction.step();
+        serde_wasm_bindgen::to_value(&WasmLineBlurEstimate {
+            theta_radians: direction.theta_radians,
+            confidence: direction.confidence,
+            length_px,
+            raster_dx: raster_dx as i32,
+            raster_dy: raster_dy as i32,
+        })
+        .map_err(JsValue::from)
+    }
+
+    /// Normalize uneven illumination and return a tightly packed luma buffer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn background_divide_luma(
+        &mut self,
+        luma: &[u8],
+        width: u32,
+        height: u32,
+        stride: u32,
+        structuring_element: u32,
+        target_luma: u8,
+        denominator_floor: u8,
+    ) -> Result<Vec<u8>, JsValue> {
+        let view = prepare_luma_view(luma, width, height, stride)?;
+        let mut output =
+            Gray8Image::new(view.size()).map_err(|error| JsValue::from_str(&error.to_string()))?;
+        background_divide_into(
+            view,
+            output.view_mut(),
+            &BackgroundDivideConfig {
+                structuring_element: structuring_element as usize,
+                target_luma,
+                denominator_floor,
+            },
+            &mut self.illumination,
+        )
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        Ok(output.into_vec())
+    }
+
+    /// Apply configurable line-PSF Van Cittert restoration and return a
+    /// tightly packed luma buffer.
+    #[allow(clippy::too_many_arguments)]
+    pub fn van_cittert_luma(
+        &mut self,
+        luma: &[u8],
+        width: u32,
+        height: u32,
+        stride: u32,
+        theta_radians: f64,
+        blur_length: u32,
+        iterations: u32,
+        relaxation: f64,
+    ) -> Result<Vec<u8>, JsValue> {
+        let view = prepare_luma_view(luma, width, height, stride)?;
+        let mut output =
+            Gray8Image::new(view.size()).map_err(|error| JsValue::from_str(&error.to_string()))?;
+        van_cittert_line_into(
+            view,
+            output.view_mut(),
+            &VanCittertConfig {
+                theta_radians,
+                blur_length: blur_length as usize,
+                iterations: iterations as usize,
+                relaxation,
+                border: LineBorderMode::Replicate,
+            },
+            &mut self.deblur,
+        )
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        Ok(output.into_vec())
+    }
+}
+
+impl Default for WasmImageProcessor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A stateful multi-frame scanner for VIDEO, wrapping
-/// [`qrk_core::ScanSession`]: hold one across a camera stream and feed it
+/// [`qrkit::ScanSession`]: hold one across a camera stream and feed it
 /// frames via [`scan_frame_rgba`](WasmScanSession::scan_frame_rgba). It
 /// amortizes the robustness ladder across near-duplicate frames (rung
 /// rotation + cross-frame candidate pooling), so per-frame cost stays near
@@ -476,7 +614,7 @@ fn prepare_luma(rgba: &[u8], width: usize, height: usize) -> Result<Vec<u8>, JsV
 /// or seek so stale candidates from another scene cannot seed the new one.
 #[wasm_bindgen]
 pub struct WasmScanSession {
-    inner: qrk_core::ScanSession,
+    inner: qrkit::ScanSession,
 }
 
 #[wasm_bindgen]
@@ -485,7 +623,7 @@ impl WasmScanSession {
     /// object [`scan_rgba_robust`] takes (`undefined`/`null` ⇒ all-off
     /// default); `rotation_period` (frames) and `pool_ttl_frames` tune the
     /// temporal amortization (`0`/omitted ⇒ the `SessionConfig` defaults 3
-    /// and 4). See [`qrk_core::SessionConfig`].
+    /// and 4). See [`qrkit::SessionConfig`].
     #[wasm_bindgen(constructor)]
     pub fn new(
         config: JsValue,
@@ -499,8 +637,8 @@ impl WasmScanSession {
                 .map_err(|e| JsValue::from_str(&format!("WasmScanSession: invalid config: {e}")))?
         }
         .to_core();
-        let defaults = qrk_core::SessionConfig::default();
-        let session = qrk_core::SessionConfig {
+        let defaults = qrkit::SessionConfig::default();
+        let session = qrkit::SessionConfig {
             rotation_period: if rotation_period == 0 {
                 defaults.rotation_period
             } else {
@@ -513,7 +651,7 @@ impl WasmScanSession {
             },
         };
         Ok(WasmScanSession {
-            inner: qrk_core::ScanSession::new(cfg, session),
+            inner: qrkit::ScanSession::new(cfg, session),
         })
     }
 
@@ -531,10 +669,14 @@ impl WasmScanSession {
     ) -> Result<JsValue, JsValue> {
         let (w, h) = (width as usize, height as usize);
         let luma = prepare_luma(rgba, w, h).map_err(|e| {
-            JsValue::from_str(&format!("scan_frame_rgba: {}", e.as_string().unwrap_or_default()))
+            JsValue::from_str(&format!(
+                "scan_frame_rgba: {}",
+                e.as_string().unwrap_or_default()
+            ))
         })?;
-        let view = LumaView::new(&luma, w, h, w)
-            .map_err(|e| JsValue::from_str(&format!("scan_frame_rgba: invalid luma view: {e:?}")))?;
+        let view = LumaView::new(&luma, w, h, w).map_err(|e| {
+            JsValue::from_str(&format!("scan_frame_rgba: invalid luma view: {e:?}"))
+        })?;
         let opts = ScanOptions {
             max_working_dim: max_dim,
             refine,
@@ -565,24 +707,24 @@ mod tests {
 
     fn flat_luma() -> Vec<u8> {
         let rgba = vec![128u8; SIDE * SIDE * 4];
-        qrk_core::luma_from_rgba(&rgba, SIDE, SIDE)
+        qrkit::luma_from_rgba(&rgba, SIDE, SIDE)
     }
 
     #[test]
     fn scan_result_shape_is_serializable() {
         // Round-trip the result struct through serde_json natively to pin
-        // the field names the debug UI will consume — via `qrk_core::scan`
+        // the field names the debug UI will consume — via `qrkit::scan`
         // (Plan 5 Task 1's entry point, what `scan_rgba` now calls), not
         // the older `detect`, so this test exercises the same shape
         // `source_scale` included.
         let d = vec![128u8; 32 * 32 * 4];
-        let luma = qrk_core::luma_from_rgba(&d, 32, 32);
-        let view = qrk_core::LumaView::new(&luma, 32, 32, 32).unwrap();
-        let opts = qrk_core::ScanOptions {
+        let luma = qrkit::luma_from_rgba(&d, 32, 32);
+        let view = qrkit::LumaView::new(&luma, 32, 32, 32).unwrap();
+        let opts = qrkit::ScanOptions {
             max_working_dim: 0,
             refine: false,
         };
-        let det = qrk_core::scan(&view, &opts);
+        let det = qrkit::scan(&view, &opts);
         let json = serde_json::to_value(&det).unwrap();
         assert!(json.get("finders").is_some());
         assert!(json.get("triplets").is_some());
@@ -593,14 +735,14 @@ mod tests {
     #[test]
     fn wasm_result_envelope_without_trace_pins_field_names() {
         let luma = flat_luma();
-        let view = qrk_core::LumaView::new(&luma, SIDE, SIDE, SIDE).unwrap();
+        let view = qrkit::LumaView::new(&luma, SIDE, SIDE, SIDE).unwrap();
 
-        let opts = qrk_core::ScanOptions {
+        let opts = qrkit::ScanOptions {
             max_working_dim: 0,
             refine: false,
         };
         let result = WasmResult {
-            detections: qrk_core::scan(&view, &opts),
+            detections: qrkit::scan(&view, &opts),
             trace: None,
             scan_width: SIDE as u32,
             scan_height: SIDE as u32,
@@ -626,14 +768,14 @@ mod tests {
     #[test]
     fn wasm_result_envelope_with_trace_pins_field_names() {
         let luma = flat_luma();
-        let view = qrk_core::LumaView::new(&luma, SIDE, SIDE, SIDE).unwrap();
+        let view = qrkit::LumaView::new(&luma, SIDE, SIDE, SIDE).unwrap();
 
-        let mut trace = qrk_core::Trace::new();
-        let opts = qrk_core::ScanOptions {
+        let mut trace = qrkit::Trace::new();
+        let opts = qrkit::ScanOptions {
             max_working_dim: 0,
             refine: false,
         };
-        let detections = qrk_core::scan_traced(&view, &opts, &mut trace);
+        let detections = qrkit::scan_traced(&view, &opts, &mut trace);
         let result = WasmResult {
             detections,
             trace: Some(trace),
@@ -672,15 +814,15 @@ mod tests {
         let luma = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let (width, height) = (1280usize, 720usize);
         assert_eq!(luma.len(), width * height, "near_00.luma: unexpected size");
-        let view = qrk_core::LumaView::new(&luma, width, height, width).unwrap();
+        let view = qrkit::LumaView::new(&luma, width, height, width).unwrap();
 
-        let opts = qrk_core::ScanOptions {
+        let opts = qrkit::ScanOptions {
             max_working_dim: 1280,
             refine: false,
         };
-        let a = qrk_core::scan(&view, &opts);
-        let mut trace = qrk_core::Trace::new();
-        let b = qrk_core::scan_traced(&view, &opts, &mut trace);
+        let a = qrkit::scan(&view, &opts);
+        let mut trace = qrkit::Trace::new();
+        let b = qrkit::scan_traced(&view, &opts, &mut trace);
 
         assert_eq!(a.finders.len(), b.finders.len());
         assert_eq!(a.triplets.len(), b.triplets.len());
@@ -701,13 +843,13 @@ mod tests {
         // with a tiny in-memory frame so no multi-hundred-KB pixel dump
         // needs committing.
         let luma = flat_luma();
-        let view = qrk_core::LumaView::new(&luma, SIDE, SIDE, SIDE).unwrap();
-        let opts = qrk_core::ScanOptions {
+        let view = qrkit::LumaView::new(&luma, SIDE, SIDE, SIDE).unwrap();
+        let opts = qrkit::ScanOptions {
             max_working_dim: 0,
             refine: false,
         };
-        let cfg = qrk_core::ScanConfig::ROBUST_FULL_BENCHMARK;
-        let debug = qrk_core::scan_robust_debug(&view, &opts, &cfg);
+        let cfg = qrkit::ScanConfig::ROBUST_FULL_BENCHMARK;
+        let debug = qrkit::scan_robust_debug(&view, &opts, &cfg);
         let snapshots: Vec<super::WasmSnapshot> = debug
             .snapshots
             .into_iter()
@@ -786,7 +928,7 @@ mod tests {
     fn robust_config_roundtrip_and_presets_are_camel_case() {
         // {} deserializes to the all-off default...
         let cfg: super::RobustConfig = serde_json::from_value(serde_json::json!({})).unwrap();
-        assert_eq!(cfg.to_core(), qrk_core::ScanConfig::default());
+        assert_eq!(cfg.to_core(), qrkit::ScanConfig::default());
         // ...and camelCase keys land on the right fields.
         let cfg: super::RobustConfig = serde_json::from_value(serde_json::json!({
             "enableMultiScale": true,
@@ -801,10 +943,10 @@ mod tests {
         assert!(!core.enable_deblur);
         // Presets round-trip through the same camelCase shape.
         let presets = super::RobustPresets {
-            baseline: super::RobustConfig::from_core(qrk_core::ScanConfig::BASELINE),
-            robust_fast: super::RobustConfig::from_core(qrk_core::ScanConfig::ROBUST_FAST),
+            baseline: super::RobustConfig::from_core(qrkit::ScanConfig::BASELINE),
+            robust_fast: super::RobustConfig::from_core(qrkit::ScanConfig::ROBUST_FAST),
             robust_full_benchmark: super::RobustConfig::from_core(
-                qrk_core::ScanConfig::ROBUST_FULL_BENCHMARK,
+                qrkit::ScanConfig::ROBUST_FULL_BENCHMARK,
             ),
         };
         let json = serde_json::to_value(&presets).unwrap();
@@ -812,10 +954,10 @@ mod tests {
         assert_eq!(
             json.pointer("/robustFast/maxVariantsPerFrame")
                 .and_then(|v| v.as_u64()),
-            Some(qrk_core::ScanConfig::ROBUST_FAST.max_variants_per_frame as u64)
+            Some(qrkit::ScanConfig::ROBUST_FAST.max_variants_per_frame as u64)
         );
         let back: super::RobustConfig =
             serde_json::from_value(json.get("robustFullBenchmark").unwrap().clone()).unwrap();
-        assert_eq!(back.to_core(), qrk_core::ScanConfig::ROBUST_FULL_BENCHMARK);
+        assert_eq!(back.to_core(), qrkit::ScanConfig::ROBUST_FULL_BENCHMARK);
     }
 }

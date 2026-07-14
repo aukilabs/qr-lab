@@ -1,7 +1,7 @@
 //! In-browser QR *generation* (Plan 5 Task 5) — the mirror image of the
 //! rest of this crate, which only ever *decodes*. The debug UI's 3D-scene
 //! mode needs a real, decodable QR bit matrix to texture a plane with, so
-//! it can compare `qrk_core::scan`'s live `refined_corners` against an
+//! it can compare `qrkit::scan`'s live `refined_corners` against an
 //! analytically known ground truth as the camera orbits.
 //!
 //! Gated behind the `qr-gen` cargo feature (see this crate's `Cargo.toml`):
@@ -18,16 +18,16 @@
 //! `JsValue`) so it's natively unit-testable with a plain `cargo test`;
 //! `generate_qr` is the thin `#[wasm_bindgen]` wrapper the debug UI calls,
 //! converting the matrix to the same packed `{dim, words}` shape
-//! `BitsTrace` already uses on the wire (see `qrk_core::trace::BitsTrace`),
+//! `BitsTrace` already uses on the wire (see `qrkit::trace::BitsTrace`),
 //! so the debug UI's existing bit-matrix-unpacking code (`overlays/layers/
 //! bits.ts`) can be reused as-is for rendering the generated QR's texture.
 
-use qrk_core::BitMatrix;
+use qrkit::BitMatrix;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 /// Serializable envelope for `generate_qr`'s return value — same packed
-/// shape as `qrk_core::trace::BitsTrace` (row-major `u32` words, `dim`
+/// shape as `qrkit::trace::BitsTrace` (row-major `u32` words, `dim`
 /// wide) so the debug UI can reuse its existing bit-matrix TS helpers.
 #[derive(Serialize)]
 #[doc(hidden)]
@@ -39,13 +39,13 @@ pub struct GeneratedQr {
 /// Generate a QR bit matrix for `payload` and pack it into a `BitMatrix`.
 /// Plain Rust — no `wasm_bindgen`/`JsValue` — so it's directly unit
 /// testable (see the `tests` module below, which round-trips the result
-/// through `qrk_core::decode_bits`) without needing a wasm runtime.
+/// through `qrkit::decode_bits`) without needing a wasm runtime.
 ///
 /// `version`: `0` means auto-select the smallest version that fits
 /// `payload` at the requested `ecc` (via `qrcode::QrCode::
 /// with_error_correction_level`); `1..=40` requests that exact version
 /// (via `qrcode::QrCode::with_version`), erroring if `payload` doesn't
-/// fit. `ecc`: `0..=3` for L/M/Q/H (the same order `qrk_core::bitmatrix`'s
+/// fit. `ecc`: `0..=3` for L/M/Q/H (the same order `qrkit::bitmatrix`'s
 /// `ecc_char` reports them in) — chosen over a `char` param purely for a
 /// simpler JS call site (a plain number, no string marshaling).
 pub(crate) fn generate_qr_bits(payload: &str, version: u32, ecc: u8) -> Result<BitMatrix, String> {
@@ -111,15 +111,15 @@ mod tests {
     use super::*;
 
     /// The core round-trip gate: whatever `generate_qr_bits` produces must
-    /// decode back through our OWN decoder (`qrk_core::decode_bits`, the
-    /// same one `qrk_core::decode`'s sample+decode stage calls) to exactly
+    /// decode back through our OWN decoder (`qrkit::decode_bits`, the
+    /// same one `qrkit::decode`'s sample+decode stage calls) to exactly
     /// the payload that went in. This is the one test that matters for
     /// "is the generated matrix actually a valid QR" — everything else
     /// (dim, version auto-selection) is secondary.
     #[test]
     fn generate_qr_bits_round_trips_through_decode_bits() {
         let m = generate_qr_bits("HELLO WORLD", 0, 1 /* M */).unwrap();
-        let decoded = qrk_core::decode_bits(&m).expect("generated matrix should decode");
+        let decoded = qrkit::decode_bits(&m).expect("generated matrix should decode");
         assert_eq!(decoded.payload, "HELLO WORLD");
         assert_eq!(decoded.ecc, 'M');
     }
@@ -131,7 +131,7 @@ mod tests {
         // smaller one.
         let m = generate_qr_bits("subpixel refinement plan 5 task 5", 5, 3 /* H */).unwrap();
         assert_eq!(m.dim, 4 * 5 + 17); // QR dimension formula: 4*version + 17
-        let decoded = qrk_core::decode_bits(&m).expect("generated matrix should decode");
+        let decoded = qrkit::decode_bits(&m).expect("generated matrix should decode");
         assert_eq!(decoded.payload, "subpixel refinement plan 5 task 5");
         assert_eq!(decoded.version, 5);
         assert_eq!(decoded.ecc, 'H');
@@ -141,7 +141,7 @@ mod tests {
     fn generate_qr_bits_round_trips_across_all_ecc_levels() {
         for (ecc, want) in [(0u8, 'L'), (1, 'M'), (2, 'Q'), (3, 'H')] {
             let m = generate_qr_bits("ECC SWEEP", 0, ecc).unwrap();
-            let decoded = qrk_core::decode_bits(&m).expect("generated matrix should decode");
+            let decoded = qrkit::decode_bits(&m).expect("generated matrix should decode");
             assert_eq!(decoded.payload, "ECC SWEEP");
             assert_eq!(decoded.ecc, want, "ecc index {ecc}");
         }

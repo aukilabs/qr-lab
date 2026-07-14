@@ -1,0 +1,22 @@
+[package]
+name = "qrkit-python"
+description = "Python and NumPy bindings for QRKit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib", "rlib"]
+test = false
+doctest = false
+
+[dependencies]
+numpy = "0.29.0"
+pyo3 = "0.29.0"
+pythonize = "0.29.0"
+qrkit = { path = "../qrkit", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
