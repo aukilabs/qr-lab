@@ -9,7 +9,7 @@ import pytest
 import auki_qrkit
 
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_robust_scanner_decodes_committed_fixture() -> None:
@@ -70,4 +70,3 @@ def test_invalid_images_and_configuration_raise_python_exceptions() -> None:
         auki_qrkit.scan(np.zeros((3, 4), dtype=np.uint8), preset="unknown")
     with pytest.raises(RuntimeError, match="configuration"):
         auki_qrkit.van_cittert(np.zeros((3, 4), dtype=np.uint8), 0.0, 4)
-

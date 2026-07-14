@@ -18,5 +18,5 @@ doctest = false
 numpy = "0.29.0"
 pyo3 = "0.29.0"
 pythonize = "0.29.0"
-qrkit = { path = "../qrkit", features = ["serde"] }
+qrkit = { path = "../crates/qrkit", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

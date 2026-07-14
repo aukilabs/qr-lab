@@ -5,6 +5,9 @@ reusable computer-vision operators. The distribution is named
 `aukilabs-qrkit` and imports as `auki_qrkit` because the unrelated `qrkit`
 name is already occupied on PyPI.
 
+> The package is not yet published to PyPI. After its first release, it will
+> be installable with:
+
 ```bash
 pip install aukilabs-qrkit
 ```
@@ -38,3 +41,12 @@ Python thread cannot race the NumPy storage.
 Build a local wheel from the repository root with `just python-build`, or run
 the Python integration suite with `just python-test`.
 
+To inspect the artifacts intended for PyPI, run the following from this
+directory:
+
+```bash
+maturin build --release
+maturin sdist
+```
+
+The Python distribution is licensed under the [MIT License](LICENSE).

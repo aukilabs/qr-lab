@@ -17,7 +17,7 @@ fi
 
 mkdir -p target/wheels
 "${MATURIN[@]}" build \
-  --manifest-path crates/qrkit-python/Cargo.toml \
+  --manifest-path python/Cargo.toml \
   --release \
   --out target/wheels \
   "$@"

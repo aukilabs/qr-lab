@@ -1,168 +1,145 @@
 # QRKit
 
-A modular, pure-CPU Rust computer-vision toolkit built around a complete QR
-scanner. The scanner supports standard QR versions 1–40, multiple and mirrored
-codes, robust low-resolution/blur recovery, temporal video scanning, and
-subpixel corners for AR pose estimation. Rust, Python/NumPy, C, WASM, Android,
-iOS, and Expo are supported scanner targets.
+QRKit is a modular, CPU-only computer-vision toolkit centered on a complete QR
+scanner. It supports QR versions 1–40, multiple and mirrored codes, robust
+recovery for difficult frames, temporal video scanning, and subpixel corner
+refinement for pose-estimation workflows.
 
-Reusable image, geometry, thresholding, morphology, illumination, sharpening,
-blur-estimation, and deblurring APIs are available independently of QR decoding.
-For example, a barcode pipeline can depend on `qrkit-imgproc` without pulling in
-`rqrr` or any scanner binding.
+The core is written in Rust and is exposed through Rust, Python/NumPy, C,
+WebAssembly, Android, iOS, and Expo integrations. The image, geometry, and
+image-processing crates can also be used independently of QR decoding.
 
-See `docs/superpowers/specs/2026-07-03-rust-qr-scanner-design.md` for the
-full design.
+> QRKit is currently pre-1.0 software. Read the
+> [API stability policy](docs/qrkit/stability.md) before depending on it in a
+> public library.
 
-## Crate architecture
+## Features
+
+- Pure-CPU detection and decoding with no GPU or platform vision dependency.
+- Standard QR versions 1–40, multi-code frames, mirrored codes, and inverted
+  polarity.
+- Robust recovery ladder for blur, low resolution, uneven illumination, and
+  difficult thresholds.
+- Stateful temporal scanning for video streams.
+- Source-resolution, subpixel-refined corners in TL/TR/BR/BL order.
+- Reusable grayscale image views, projective geometry, thresholding,
+  morphology, illumination correction, blur estimation, and restoration.
+- Native, Python, WebAssembly, and mobile bindings built from the same scanner.
+
+## Quick start
+
+The Rust workspace requires Rust 1.87 or newer. The checked-in toolchain file
+selects the current stable toolchain. [`just`](https://just.systems/) is
+optional but provides the shortest commands for multi-target workflows.
+
+```bash
+git clone https://github.com/aukilabs/qrkit.git
+cd qrkit
+cargo test --workspace --release
+cargo run --release -p qrkit --example full_scanner
+```
+
+The Rust scanner accepts a borrowed 8-bit grayscale image, including a camera
+Y plane with a padded row stride:
+
+```rust
+use qrkit::image::Gray8View;
+use qrkit::{Scanner, ScannerConfig};
+
+fn scan_frame(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    stride: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let frame = Gray8View::new(pixels, width, height, stride)?;
+    let mut scanner = Scanner::new(ScannerConfig::robust_fast());
+    let result = scanner.scan(&frame);
+
+    for detected in result.codes {
+        println!("{}", detected.code.payload);
+        println!("source corners: {:?}", detected.corners_source);
+    }
+
+    Ok(())
+}
+```
+
+Use the `qrkit` umbrella crate for complete scanning, or depend on a focused
+crate when only part of the pipeline is needed:
 
 ```text
 qrkit                    umbrella facade and complete scanner
-└── qrkit-qr             QR detection, decoding, robust ladder, sessions
+└── qrkit-qr             QR detection, decoding, robust recovery, sessions
     ├── qrkit-imgproc    reusable enhancement and restoration
     ├── qrkit-geometry   transforms, sampling, and line fitting
     └── qrkit-image      grayscale views, ROIs, and owned buffers
 
 qrk-core                 compatibility facade for existing consumers
 qrk-ffi / qrk-wasm      native/mobile and WebAssembly bindings
-qrkit-python            NumPy scanner and reusable-operator bindings
+python                  PyPI/Maturin project with NumPy bindings
 ```
 
-Start with `qrkit` for scanning or use a focused crate for a non-QR pipeline.
-See [`docs/qrkit/`](docs/qrkit/) for architecture decisions, API stability, and
-migration guidance.
+## Bindings and developer tools
 
-## Pipeline status
+| Target | Location | Documentation |
+|---|---|---|
+| Rust | `crates/qrkit*` | [QRKit developer docs](docs/qrkit/README.md) |
+| Python/NumPy | `python` | [Python guide](python/README.md) |
+| C, Android JNI, iOS | `crates/qrk-ffi` | [C and native guide](crates/qrk-ffi/README.md) |
+| WebAssembly | `crates/qrk-wasm` | Used by the debug UI |
+| Expo | `expo-cpu-scanner` | [Expo module guide](expo-cpu-scanner/README.md) |
+| Browser debug UI | `debug-ui` | [Debug UI guide](debug-ui/README.md) |
 
-- **Detection (Plans 1–3): complete.** Tiling/binarization, finder-pattern
-  and triplet detection, homography, and the debug UI (image/video sources,
-  per-stage overlays, timings panel) all land and gate on the fixture suite
-  + real captures.
-- **Decode (Plan 4): complete.** Version cross-checks (timing pattern +
-  BCH version-info bits, both orientations), Annex E alignment-pattern
-  location, piecewise perspective sampling with a single-transform
-  fallback, rqrr-based bit-matrix decoding (mirrored-orientation retry
-  included), and per-triplet arbitration (dimension/version cross-checks,
-  candidate cap) are all wired into `detect()`'s output (`codes`) and
-  traced end-to-end in the debug UI (8 overlay layers; timings panel with
-  6 stage rows: tiles/finders/triplets/version/alignment/sample+decode).
-  Gate: 81/81 synthetic fixtures + 93/93 codes decode correctly, plus both
-  real-photo captures' payloads (OpenCV-confirmed).
-- **Corner refinement / subpixel accuracy (Plan 5): complete.** Each
-  decoded code's four module-region corners are refined against
-  full-SOURCE-resolution luma (Devernay edge localization + gradient-
-  weighted TLS line fit + intersection) and exposed as
-  `DecodedCode::refined_corners` (source px) alongside `source_scale`.
-  The pipeline is restructured around `scan()`: detection still runs at a
-  capped working resolution, but sampling and refinement read the source
-  view through a scale-composed transform, so far/small codes that
-  couldn't be sampled at working resolution now decode (`IMG_4832.png`
-  @1280 working: 3 triplets detect but 0 decode without this; 1 decodes
-  with it). Gates: fixture accuracy gate (`tests/refine_gate.rs`) locked
-  at **≤0.10px mean corner error, uniformly across every fixture prefix**
-  (near/rot/ver/far/tilt45/combo/trans/inv/invtrans/mirror/multi — the
-  controller extended the nominal-prefix bar to all of them once the
-  first green run measured every prefix at 0.008-0.039px, well inside
-  it); e.g. the `near_00` fixture (a rendered, blurred/noised image, not a
-  literal camera photo) goes from a 1.445px coarse mean to a **0.028px**
-  refined mean (98% error reduction). A debug-UI "3D Scene" mode (an
-  orbitable react-three-fiber scene with a live per-corner error panel)
-  is the plan's headline dev-tool feature — see `debug-ui/README.md`'s
-  "Mode 1" section for its architecture and QA-measured behavior.
+The legacy `expo-ark-scanner` directory is retained as a structural reference;
+it is not part of the CPU scanner product path.
 
-  **Perf** (release build, M-series host; `scan()` incl. refinement —
-  see `.superpowers/sdd/task-6-report.md` for the full re-baseline):
+## Development
 
-  | Target | codes | tiles | finders | sample+decode | refine |
-  |---|---|---|---|---|---|
-  | `near_00` | 1 | 3.2ms | 6.9ms | 253us | 227us |
-  | `multi_07` | 4 | 3.2ms | 6.6ms | 775us | 369us |
-  | `ver_12_v40` (v40, worst case) | 1 | 3.1ms | 7.0ms | 19.6ms | 158us |
-  | `real_1.png` @1280 | 2 | 1.5ms | 1.7ms | 456us | 153us |
-  | `IMG_4832.png` @1280 | 1 | 1.5ms | 2.0ms | 1.2ms | 74us |
-
-  Refinement itself is consistently sub-millisecond (74-370us) even on
-  the largest legal QR (v40); `sample+decode` dominates, with v40's dense
-  177×177-module grid the clear outlier (19.6ms) — flagged as the
-  biggest target for the device/NEON plan, not addressed here.
-
-- **3D-scene controls (Plan 5d): complete, debug-UI only, no Rust
-  changes.** The "3D Scene" mode gained a scene-background image (a real
-  scene plane, visible in the readback — not a CSS background), QR
-  ink/background colors + a background-alpha slider (transparent QR paper
-  showing the scene through it, the `trans_`-fixture look), an
-  emergent "reads as: normal/inverted" + low-contrast indicator, an
-  on-canvas HUD (camSim knobs + live camera distance/incidence/roll,
-  overlay-canvas-only — never touches the scanner's own readback buffer),
-  and a "Save as fixture" button producing a real `.json`/`.png`/`.luma`
-  triple in the `tools/fixtures/generate.py` schema. Verified end-to-end
-  in headless Chrome: a captured scene frame's saved `.png` decodes
-  correctly via `cargo run --example decode_photo` (correct payload/
-  version/ecc, refined corners within ~1px of the exported ground truth),
-  and the `.luma` byte-matches a Python-derived luma plane of the same PNG
-  pixel-for-pixel. See `debug-ui/README.md`'s "Scene controls" section.
-
-## Layout
-
-- `crates/qrkit-image` — checked strided grayscale views, mutable views, owned
-  images, zero-copy ROIs, and RGB/RGBA-to-luma conversion.
-- `crates/qrkit-geometry` — homographies, bilinear sampling with explicit
-  borders, points/lines, weighted TLS fitting, and intersections.
-- `crates/qrkit-imgproc` — resize, tile/Sauvola thresholding, fast morphology,
-  illumination normalization, sharpening, blur estimation, and deblurring.
-- `crates/qrkit-qr` — QR-specific finder/triplet/version/alignment/sampling/
-  decoding logic, robust recovery ladder, and temporal sessions. This is the
-  only library crate that depends on `rqrr`.
-- `crates/qrkit` — umbrella facade re-exporting the complete scanner and the
-  focused reusable modules.
-- `crates/qrkit-python` — Maturin/PyO3 package published as
-  `aukilabs-qrkit` and imported as `auki_qrkit`; exposes NumPy scanning,
-  temporal sessions, illumination normalization, blur estimation, and
-  deblurring.
-- `crates/qrk-core` — source-compatible facade retained for existing imports.
-- `crates/qrk-wasm` — `wasm-pack`-built bindings exposing `scan_rgba` to
-  the debug UI's Web Worker; built via `scripts/build-wasm.sh` /
-  `npm run build:wasm` (from `debug-ui/`).
-- `debug-ui/` — a React + Vite web app for visually driving the scanner
-  against fixtures, real photos, and dropped images/video, with
-  per-stage overlays and a timings panel. See `debug-ui/README.md` for
-  setup, architecture, and how to add an overlay layer for a new
-  detection stage.
-- `fixtures/` — golden QR fixtures (rendered PNG/`.luma` + ground-truth
-  JSON triples) plus `fixtures/real/` real-photo captures. Generated by
-  `tools/fixtures/generate.py`; regeneration is deterministic (same seed →
-  byte-identical output) with the pinned versions in
-  `tools/fixtures/requirements.txt`.
-- `tools/fixtures/` — the Python fixture generator (pinhole-camera
-  rendering with exact ground-truth corners) and its tests. See
-  `tools/fixtures/README.md`.
-- `crates/qrk-ffi/` — C ABI + Android JNI (`libqrk_ffi`), built into the
-  Expo package via `just expo-android` / `just expo-ios`.
-- `expo-cpu-scanner/` — Expo module shipping prebuilt Android `.so` and
-  iOS `Qrk.xcframework` (consumers do not need Rust). See its README.
-- `expo-ark-scanner/` — legacy GPU/WebGPU Expo module kept only as a
-  structural reference; not part of the CPU scanner product path.
-- `scripts/` — repo-wide build scripts (`build-wasm.sh`, `build-native-*.sh`).
-- `justfile` — developer recipes (`just ui`, `just expo-native`, …).
-- `docs/superpowers/` — design spec and implementation plans for this
-  project, executed plan-by-plan via the superpowers SDD workflow.
-
-## Building
+Common repository commands are available through the root `justfile`:
 
 ```bash
-cargo build --workspace       # QRKit modules, scanner, bindings, and benchmarks
-cargo test --workspace
-
-just python-build             # aukilabs-qrkit wheel → target/wheels
-just python-test              # isolated wheel + NumPy integration tests
-just ui                       # WASM + debug UI
-just expo-android             # libqrk_ffi.so → expo-cpu-scanner jniLibs (16 KB)
-just expo-ios                 # Qrk.xcframework → expo-cpu-scanner/ios
-just expo-native              # both platforms
-just expo-example-ios         # example app (dev client) on iOS
-just expo-example-android     # example app on Android
+just test                 # Rust workspace tests in release mode
+just ui                   # build WASM and start the Vite debug UI
+just ui-test              # debug UI unit tests
+just ui-build             # type-check and build the debug UI
+just python-build         # build a wheel into target/wheels
+just python-test          # isolated Python/NumPy integration tests
+just qrkit-deps           # dependency-boundary and feature checks
+just qrkit-abi            # build and verify the exported C ABI
+just expo-native          # build Android and iOS native artifacts
 ```
 
-For the debug UI, see `debug-ui/README.md`. For the Expo module and its
-example app, see `expo-cpu-scanner/README.md` and
-`expo-cpu-scanner/example/README.md`.
+Additional platform requirements:
+
+- The debug UI requires Node.js 22.12 or newer, npm, and `wasm-pack`.
+- Python bindings require Python 3.9 or newer plus Maturin or `uv`/`uvx`.
+- Android builds require the Android NDK and `cargo-ndk`.
+- iOS builds require macOS with Xcode and the relevant Rust targets.
+
+Golden fixtures live in `fixtures/` and are generated by
+`tools/fixtures/generate.py`. See the [fixture guide](tools/fixtures/README.md)
+before adding or regenerating them. Benchmark methodology and current reference
+results are documented in [docs/qrkit/benchmarks.md](docs/qrkit/benchmarks.md).
+
+## Repository layout
+
+```text
+crates/                 Rust libraries, native/WASM bindings, and benchmarks
+debug-ui/               React/Vite scanner inspection tool
+docs/                   architecture, stability, migration, and design notes
+expo-cpu-scanner/       Expo module and example app
+fixtures/               generated golden fixtures and real-capture anchors
+python/                 PyPI package, Maturin crate, type hints, and tests
+scripts/                cross-target build and verification scripts
+tools/fixtures/         deterministic fixture generator and tests
+```
+
+## Contributing
+
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for
+setup, testing, fixture, and pull-request guidance.
+
+## License
+
+QRKit is licensed under the [MIT License](LICENSE).

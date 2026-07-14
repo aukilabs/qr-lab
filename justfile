@@ -1,4 +1,4 @@
-# qrk / cpuscanner2 — developer recipes
+# QRKit — developer recipes
 #
 # Common:
 #   just ui          # build WASM (release) + install deps + start Vite
