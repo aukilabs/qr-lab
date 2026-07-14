@@ -23,6 +23,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .mypy_cache/
+bindings/python/dist/
 
 # Misc
 .DS_Store

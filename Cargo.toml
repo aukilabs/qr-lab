@@ -10,7 +10,7 @@ members = [
   "crates/qrk-wasm",
   "crates/qrk-bench",
   "crates/qrk-ffi",
-  "python",
+  "bindings/python",
 ]
 
 [workspace.package]

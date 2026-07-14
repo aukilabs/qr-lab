@@ -45,8 +45,8 @@ To inspect the artifacts intended for PyPI, run the following from this
 directory:
 
 ```bash
-maturin build --release
-maturin sdist
+maturin build --release --out dist
+maturin sdist --out dist
 ```
 
 The Python distribution is licensed under the [MIT License](LICENSE).

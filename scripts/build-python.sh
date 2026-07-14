@@ -15,9 +15,10 @@ else
   exit 1
 fi
 
-mkdir -p target/wheels
+OUT_DIR="$ROOT/bindings/python/dist"
+mkdir -p "$OUT_DIR"
 "${MATURIN[@]}" build \
-  --manifest-path python/Cargo.toml \
+  --manifest-path bindings/python/Cargo.toml \
   --release \
-  --out target/wheels \
+  --out "$OUT_DIR" \
   "$@"

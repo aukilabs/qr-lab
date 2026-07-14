@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build libqrk_ffi.a for device + simulator and package Qrk.xcframework
-# into expo-cpu-scanner/ios/.
+# into bindings/expo-cpu-scanner/ios/.
 #
 # Requires: Xcode (xcodebuild), Rust targets:
 #   aarch64-apple-ios
@@ -14,7 +14,7 @@ cd "$ROOT"
 # Workspace profile: LTO + strip (see root Cargo.toml [profile.release-mobile]).
 PROFILE="${QRK_MOBILE_PROFILE:-release-mobile}"
 HEADER="$ROOT/crates/qrk-ffi/include/qrk.h"
-OUT_XCFW="$ROOT/expo-cpu-scanner/ios/Qrk.xcframework"
+OUT_XCFW="$ROOT/bindings/expo-cpu-scanner/ios/Qrk.xcframework"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/qrk-ios.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 
@@ -96,4 +96,4 @@ xcodebuild -create-xcframework \
   -library "$DEVICE_STAGED" -headers "$DEVICE_HEADERS" \
   -library "$SIM_STAGED" -headers "$SIM_HEADERS" \
   -output "$OUT_XCFW"
-echo "OK: iOS xcframework ready at expo-cpu-scanner/ios/Qrk.xcframework"
+echo "OK: iOS xcframework ready at bindings/expo-cpu-scanner/ios/Qrk.xcframework"

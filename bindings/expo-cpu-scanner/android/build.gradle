@@ -1,0 +1,24 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.aukilabs.cpuscanner'
+version = '0.1.0'
+
+android {
+  namespace "com.aukilabs.cpuscanner"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+  // Prebuilt libqrk_ffi.so from `just expo-android` (cargo-ndk + 16 KB page flags).
+  sourceSets {
+    main {
+      jniLibs.srcDirs = ['src/main/jniLibs']
+    }
+  }
+}

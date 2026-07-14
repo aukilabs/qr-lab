@@ -79,7 +79,7 @@ enforced by `scripts/check-android-16kb.sh` after `just expo-android`.
 ## Build
 
 ```bash
-just expo-android   # → expo-cpu-scanner/android/src/main/jniLibs/{arm64-v8a,x86_64}/libqrk_ffi.so
-just expo-ios       # → expo-cpu-scanner/ios/Qrk.xcframework
+just expo-android   # → bindings/expo-cpu-scanner/android/src/main/jniLibs/{arm64-v8a,x86_64}/libqrk_ffi.so
+just expo-ios       # → bindings/expo-cpu-scanner/ios/Qrk.xcframework
 just expo-native    # both
 ```

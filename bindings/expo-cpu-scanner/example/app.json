@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "QRK CPU Scanner Example",
+    "slug": "expo-cpu-scanner-example",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "expo-cpu-scanner-example",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.aukilabs.cpuscannerexample",
+      "infoPlist": {
+        "NSCameraUsageDescription": "QRK example uses the camera to run the live CPU QR scanner.",
+        "UIViewControllerBasedStatusBarAppearance": false
+      },
+      "appleTeamId": "49479XX86V"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0d12",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "package": "com.aukilabs.cpuscannerexample",
+      "permissions": [
+        "android.permission.CAMERA"
+      ],
+      "edgeToEdgeEnabled": true
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-dev-client",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26
+          }
+        }
+      ]
+    ]
+  }
+}

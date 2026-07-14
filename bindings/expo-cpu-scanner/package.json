@@ -1,0 +1,32 @@
+{
+  "name": "expo-cpu-scanner",
+  "version": "0.1.0",
+  "description": "CPU QR scanner for Expo, powered by QRKit",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "lint": "echo \"no lint configured yet\"",
+    "test": "echo \"no tests configured yet\"",
+    "example": "npm --prefix example start",
+    "example:ios": "npm --prefix example run ios",
+    "example:android": "npm --prefix example run android",
+    "example:prebuild": "npm --prefix example run prebuild"
+  },
+  "keywords": [
+    "react-native",
+    "expo",
+    "expo-cpu-scanner",
+    "qr",
+    "scanner"
+  ],
+  "author": "Auki Labs",
+  "license": "MIT",
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  },
+  "devDependencies": {
+    "expo": "~57.0.4"
+  }
+}

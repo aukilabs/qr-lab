@@ -9,7 +9,7 @@ import pytest
 import auki_qrkit
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_robust_scanner_decodes_committed_fixture() -> None:

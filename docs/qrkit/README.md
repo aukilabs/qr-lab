@@ -8,7 +8,7 @@
   surfaces, and internal implementation details.
 - [`benchmarks.md`](benchmarks.md) records quality, latency, and cross-target
   validation evidence.
-- [`../../python/README.md`](../../python/README.md)
+- [`../../bindings/python/README.md`](../../bindings/python/README.md)
   documents Python/NumPy installation and usage.
 - The implementation plan is
   [`../superpowers/plans/2026-07-10-qrkit-modularization.md`](../superpowers/plans/2026-07-10-qrkit-modularization.md).

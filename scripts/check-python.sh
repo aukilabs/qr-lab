@@ -29,7 +29,7 @@ WHEEL_DIR="$TMP/wheels"
 mkdir -p "$WHEEL_DIR"
 
 "${MATURIN[@]}" build \
-  --manifest-path python/Cargo.toml \
+  --manifest-path bindings/python/Cargo.toml \
   --release \
   --interpreter "$PYTHON_BIN" \
   --out "$WHEEL_DIR"
@@ -40,4 +40,4 @@ if ! "$PYTHON_BIN" -c 'import numpy, pytest' >/dev/null 2>&1; then
   uv pip install --quiet --python "$PYTHON_BIN" 'numpy>=1.24' 'pytest>=8'
 fi
 
-"$PYTHON_BIN" -m pytest -q python/tests
+"$PYTHON_BIN" -m pytest -q bindings/python/tests

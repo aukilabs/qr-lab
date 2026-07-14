@@ -77,18 +77,21 @@ qrkit                    umbrella facade and complete scanner
 
 qrk-core                 compatibility facade for existing consumers
 qrk-ffi / qrk-wasm      native/mobile and WebAssembly bindings
-python                  PyPI/Maturin project with NumPy bindings
+bindings/python         PyPI/Maturin project with NumPy bindings
 ```
 
 ## Bindings and developer tools
 
+Publishable integrations and their artifact locations are summarized in the
+[bindings guide](bindings/README.md).
+
 | Target | Location | Documentation |
 |---|---|---|
 | Rust | `crates/qrkit*` | [QRKit developer docs](docs/qrkit/README.md) |
-| Python/NumPy | `python` | [Python guide](python/README.md) |
+| Python/NumPy | `bindings/python` | [Python guide](bindings/python/README.md) |
 | C, Android JNI, iOS | `crates/qrk-ffi` | [C and native guide](crates/qrk-ffi/README.md) |
 | WebAssembly | `crates/qrk-wasm` | Used by the debug UI |
-| Expo | `expo-cpu-scanner` | [Expo module guide](expo-cpu-scanner/README.md) |
+| Expo | `bindings/expo-cpu-scanner` | [Expo module guide](bindings/expo-cpu-scanner/README.md) |
 | Browser debug UI | `debug-ui` | [Debug UI guide](debug-ui/README.md) |
 
 The legacy `expo-ark-scanner` directory is retained as a structural reference;
@@ -103,7 +106,7 @@ just test                 # Rust workspace tests in release mode
 just ui                   # build WASM and start the Vite debug UI
 just ui-test              # debug UI unit tests
 just ui-build             # type-check and build the debug UI
-just python-build         # build a wheel into target/wheels
+just python-build         # build a wheel into bindings/python/dist
 just python-test          # isolated Python/NumPy integration tests
 just qrkit-deps           # dependency-boundary and feature checks
 just qrkit-abi            # build and verify the exported C ABI
@@ -126,11 +129,10 @@ results are documented in [docs/qrkit/benchmarks.md](docs/qrkit/benchmarks.md).
 
 ```text
 crates/                 Rust libraries, native/WASM bindings, and benchmarks
+bindings/               Publishable Python and Expo bindings
 debug-ui/               React/Vite scanner inspection tool
 docs/                   architecture, stability, migration, and design notes
-expo-cpu-scanner/       Expo module and example app
 fixtures/               generated golden fixtures and real-capture anchors
-python/                 PyPI package, Maturin crate, type hints, and tests
 scripts/                cross-target build and verification scripts
 tools/fixtures/         deterministic fixture generator and tests
 ```

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Verify every libqrk_ffi.so under expo-cpu-scanner jniLibs has ELF LOAD
+# Verify every libqrk_ffi.so under bindings/expo-cpu-scanner jniLibs has ELF LOAD
 # segment alignment ≥ 2**14 (16 KB) — Google Play page-size requirement.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-JNI="$ROOT/expo-cpu-scanner/android/src/main/jniLibs"
+JNI="$ROOT/bindings/expo-cpu-scanner/android/src/main/jniLibs"
 MIN_POWER=14
 
 if [[ ! -d "$JNI" ]]; then

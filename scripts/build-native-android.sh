@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build libqrk_ffi.so for Android (arm64-v8a + x86_64) with 16 KB page-size
-# ELF flags, and install into expo-cpu-scanner jniLibs.
+# ELF flags, and install into bindings/expo-cpu-scanner jniLibs.
 #
 # Requires: cargo, cargo-ndk, Android NDK (ANDROID_NDK_HOME or SDK ndk/).
 set -euo pipefail
@@ -8,7 +8,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-OUT_JNI="$ROOT/expo-cpu-scanner/android/src/main/jniLibs"
+OUT_JNI="$ROOT/bindings/expo-cpu-scanner/android/src/main/jniLibs"
 # cargo-ndk installs as <out>/<abi>/lib*.so
 TMP_OUT="$(mktemp -d "${TMPDIR:-/tmp}/qrk-android.XXXXXX")"
 trap 'rm -rf "$TMP_OUT"' EXIT
@@ -74,4 +74,4 @@ done
 echo "==> Verifying 16 KB ELF LOAD alignment"
 "$ROOT/scripts/check-android-16kb.sh"
 
-echo "OK: Android natives ready under expo-cpu-scanner/android/src/main/jniLibs/"
+echo "OK: Android natives ready under bindings/expo-cpu-scanner/android/src/main/jniLibs/"

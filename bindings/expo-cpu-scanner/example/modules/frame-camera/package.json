@@ -1,0 +1,14 @@
+{
+  "name": "frame-camera",
+  "version": "0.1.0",
+  "description": "Local example module: real-time camera frames (Y plane) for feeding native scanners",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "author": "Auki Labs",
+  "license": "MIT",
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  }
+}

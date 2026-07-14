@@ -55,7 +55,7 @@ bench max_dim="1280":
 # ── Expo module (expo-cpu-scanner) native binaries ───────────────────
 # Prebuilt artifacts land inside the package so app consumers need no Rust.
 
-# Build Android libqrk_ffi.so → expo-cpu-scanner/android/src/main/jniLibs/
+# Build Android libqrk_ffi.so → bindings/expo-cpu-scanner/android/src/main/jniLibs/
 # (arm64-v8a + x86_64, 16 KB page-size link flags, post-check)
 expo-android:
     ./scripts/build-native-android.sh
@@ -64,7 +64,7 @@ expo-android:
 expo-android-check:
     ./scripts/check-android-16kb.sh
 
-# Build iOS Qrk.xcframework → expo-cpu-scanner/ios/
+# Build iOS Qrk.xcframework → bindings/expo-cpu-scanner/ios/
 expo-ios:
     ./scripts/build-native-ios.sh
 
@@ -87,7 +87,7 @@ qrkit-abi:
 qrkit-operator-bench:
     cargo run -p qrkit-imgproc --release --example operator_bench
 
-# Build the aukilabs-qrkit Python wheel into target/wheels/.
+# Build the aukilabs-qrkit Python wheel into bindings/python/dist/.
 python-build:
     ./scripts/build-python.sh
 
@@ -95,23 +95,23 @@ python-build:
 python-test:
     ./scripts/check-python.sh
 
-# ── Example Expo app (expo-cpu-scanner/example) ──────────────────────
+# ── Example Expo app (bindings/expo-cpu-scanner/example) ─────────────
 # Needs natives first (`just expo-native`) and a dev build (not Expo Go).
 
 expo-example-install:
-    cd expo-cpu-scanner/example && npm install
+    cd bindings/expo-cpu-scanner/example && npm install
 
 expo-example: expo-example-install
-    cd expo-cpu-scanner/example && npm start
+    cd bindings/expo-cpu-scanner/example && npm start
 
 expo-example-ios: expo-example-install
-    cd expo-cpu-scanner/example && npx expo run:ios
+    cd bindings/expo-cpu-scanner/example && npx expo run:ios
 
 expo-example-android: expo-example-install
-    cd expo-cpu-scanner/example && npx expo run:android
+    cd bindings/expo-cpu-scanner/example && npx expo run:android
 
 expo-example-prebuild: expo-example-install
-    cd expo-cpu-scanner/example && npx expo prebuild
+    cd bindings/expo-cpu-scanner/example && npx expo prebuild
 
 # Live host webcam → iOS Simulator camera via serve-sim (macOS 14+).
 # Requires: example installed (just expo-example-ios), booted sim, Metro running.
