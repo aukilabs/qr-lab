@@ -86,8 +86,10 @@ artifacts must pass `just expo-android-check` after `just expo-android`.
 
 ### Fixtures
 
-The committed fixture set is a regression contract, not sample decoration.
-Read [tools/fixtures/README.md](tools/fixtures/README.md) before changing it.
+The fixture set is a regression contract, not sample decoration. It is not
+committed: every clone regenerates it deterministically with
+`tools/fixtures/generate.py --out ../../fixtures --seed 7` (see the
+[fixture guide](tools/fixtures/README.md) before changing the generator).
 Generator changes should pass:
 
 ```bash
@@ -97,8 +99,8 @@ python -m pip install -r tools/fixtures/requirements.txt
 python -m pytest tools/fixtures
 ```
 
-Keep generation deterministic and commit the expected `.png`, `.luma`, and
-`.json` files together where the fixture policy calls for all three.
+Keep generation deterministic — same seed must produce byte-identical
+`.png`, `.luma`, and `.json` output with the pinned requirements.
 
 ### Performance-sensitive changes
 

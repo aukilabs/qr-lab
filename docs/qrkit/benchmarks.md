@@ -3,7 +3,8 @@
 Measured 2026-07-10 on an Apple M2 Max running macOS 15.7.7 with
 `rustc 1.95.0`. All scanner measurements used release mode, one frame per
 invocation inside the existing fixture harness, 1280 maximum working dimension,
-and the committed fixture suite containing 93 expected QR payloads.
+and the generated golden fixture suite (`tools/fixtures/generate.py --seed 7`)
+containing 93 expected QR payloads.
 
 ## Scanner extraction comparison
 

@@ -29,16 +29,10 @@ bindings/python/dist/
 .DS_Store
 *.log
 
-# Real-photo captures under fixtures/real/
-# - PNGs are committed regression anchors (keep tracked).
-# - luma/json are regenerable from PNG (see tools/fixtures/README.md).
-# - Source videos / domain packs stay local only.
-fixtures/real/*.luma
-fixtures/real/*.json
-fixtures/real/**/*.mp4
-fixtures/real/**/*.mov
-fixtures/real/**/*.webm
-fixtures/real/domain-data-mp4/
-# GPU gold-standard multi-scan domain packs (large; local eval only).
-fixtures/real/full-domain-data/
+# Fixtures are not committed (large binaries).
+# - Golden fixtures are regenerated deterministically with
+#   tools/fixtures/generate.py (see tools/fixtures/README.md).
+# - Real captures under fixtures/real/ are local-only assets shared
+#   out-of-band (photos cannot be regenerated).
+/fixtures/
 .claude/worktrees/
