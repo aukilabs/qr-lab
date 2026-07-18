@@ -1,0 +1,22 @@
+[package]
+name = "qr-lab"
+description = "QR Lab umbrella crate for QR scanning and reusable computer vision"
+keywords = ["qr", "barcode", "computer-vision", "scanner", "image-processing"]
+categories = ["computer-vision", "multimedia::images"]
+authors.workspace = true
+homepage.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+qr-lab-image = { path = "../qr-lab-image" }
+qr-lab-geometry = { path = "../qr-lab-geometry" }
+qr-lab-imgproc = { path = "../qr-lab-imgproc" }
+qr-lab-qr = { path = "../qr-lab-qr" }
+
+[features]
+debug-trace = ["qr-lab-qr/debug-trace"]
+serde = ["qr-lab-qr/serde"]

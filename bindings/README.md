@@ -1,9 +1,9 @@
-# QRKit bindings
+# QR Lab bindings
 
 This directory contains the publishable language and framework integrations
-built on the QRKit Rust crates:
+built on the QR Lab Rust crates:
 
-- [`python/`](python/) — the `aukilabs-qrkit` Maturin/PyO3 project for PyPI.
+- [`python/`](python/) — the `qr-lab` Maturin/PyO3 project for PyPI.
 - [`expo-cpu-scanner/`](expo-cpu-scanner/) — the Expo module, prebuilt Android
   libraries, iOS XCFramework, and example app.
 

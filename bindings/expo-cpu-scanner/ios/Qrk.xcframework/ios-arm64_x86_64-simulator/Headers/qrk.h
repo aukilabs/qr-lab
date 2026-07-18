@@ -1,9 +1,9 @@
 /**
- * qrk-ffi — C ABI for the QRKit scanner and reusable image operators.
+ * qr-lab-ffi — C ABI for the QR Lab scanner and reusable image operators.
  *
  * All heap strings returned by this library are UTF-8, NUL-terminated, and
  * must be freed with `qrk_free_string`. Scan results are JSON objects; see
- * crates/qrk-ffi/README.md for the schema.
+ * crates/qr-lab-ffi/README.md for the schema.
  */
 #pragma once
 

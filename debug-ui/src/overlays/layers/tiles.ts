@@ -1,7 +1,7 @@
 // Tile threshold heatmap overlay: an alpha-blended gray rectangle per
 // 16px tile (working res), colored by the tile's binarization threshold,
 // plus a red hatch mark over tiles the tile stage decided to skip (see
-// `crates/qrk-core/src/tiles.rs`'s `TILE` const — 16px, mirrored here so
+// `crates/qr-lab-core/src/tiles.rs`'s `TILE` const — 16px, mirrored here so
 // this layer's rects line up with the trace data's tile indexing).
 import { imageToScreen } from "../../viewport/transform";
 import type { OverlayLayer } from "../registry";

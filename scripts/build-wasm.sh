@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds crates/qrk-wasm into a `--target web` package that the debug UI's
+# Builds crates/qr-lab-wasm into a `--target web` package that the debug UI's
 # worker imports directly (see debug-ui/src/scanner/worker.ts). Run from
 # anywhere; paths below are resolved relative to the repo root.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CRATE_DIR="$REPO_ROOT/crates/qrk-wasm"
+CRATE_DIR="$REPO_ROOT/crates/qr-lab-wasm"
 OUT_DIR="$REPO_ROOT/debug-ui/src/wasm"
 
 if ! command -v wasm-pack >/dev/null 2>&1; then
@@ -23,15 +23,15 @@ fi
 rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
 
 # IMPORTANT: wasm-pack resolves --out-dir relative to the crate directory
-# being built (crates/qrk-wasm), NOT relative to the cwd this script runs
-# from. `../../debug-ui/src/wasm` (two levels up from crates/qrk-wasm, back
+# being built (crates/qr-lab-wasm), NOT relative to the cwd this script runs
+# from. `../../debug-ui/src/wasm` (two levels up from crates/qr-lab-wasm, back
 # to the repo root) is what actually lands the package at
 # debug-ui/src/wasm — verified empirically: an absolute --out-dir also
 # works and is less fragile to crate-path changes, so we use that instead.
 #
 # --features qr-gen (Plan 5 Task 5): the debug UI's 3D-scene mode calls
 # `generate_qr` (gated behind this cargo feature so the mobile-relevant
-# default build stays free of the `qrcode` crate — see qrk-wasm/Cargo.toml
+# default build stays free of the `qrcode` crate — see qr-lab-wasm/Cargo.toml
 # and this repo's `scripts/check-wasm.sh`, which checks both feature
 # configurations). The debug tool always wants it, so this script — the
 # ONLY thing that produces the package the debug UI actually imports —

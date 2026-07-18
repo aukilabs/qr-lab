@@ -1,0 +1,20 @@
+[package]
+name = "qr-lab-ffi"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.87"
+license = "MIT"
+repository = "https://github.com/aukilabs/qr-lab"
+description = "C ABI + Android JNI bindings for QR Lab (Expo / mobile)"
+
+[lib]
+name = "qrk_ffi"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+qr-lab = { path = "../qr-lab", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"

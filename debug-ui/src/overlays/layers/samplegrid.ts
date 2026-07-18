@@ -1,5 +1,5 @@
 // Sample-region overlay (Plan 4 Task 6): the 4-corner outline of every
-// region `crates/qrk-core/src/sample.rs` tiled the module grid into for the
+// region `crates/qr-lab-core/src/sample.rs` tiled the module grid into for the
 // describing candidate(s) (see below) — region borders only, no per-module
 // lines (per the plan's trace-compactness constraint: `SampleRegionTrace`
 // carries corner quads, not per-module points, and this layer keeps draw
@@ -10,7 +10,7 @@
 //
 // WHICH CANDIDATE(S) (Plan 5C: multi-code trace): `scan.trace.codes`
 // carries one entry PER DECODED code this frame (see
-// `qrk_core::trace::Trace::codes`'s doc) — this layer draws every entry's
+// `qr_lab_core::trace::Trace::codes`'s doc) — this layer draws every entry's
 // regions, so a multi-code scene (e.g. `multi_07`'s 4 codes) shows all of
 // them, not just one. Only when NOTHING decoded this frame (`codes` empty)
 // does it fall back to the legacy singular `scan.trace.sample_regions`

@@ -1,25 +1,54 @@
-# Auki QRKit for Python
+# QR Lab for Python
 
-NumPy-first Python bindings for QRKit's complete QR scanner and selected
-reusable computer-vision operators. The distribution is named
-`aukilabs-qrkit` and imports as `auki_qrkit` because the unrelated `qrkit`
-name is already occupied on PyPI.
+NumPy-first Python bindings for [QR Lab](https://github.com/aukilabs/qr-lab)'s
+complete QR scanner and selected reusable computer-vision operators.
 
-> The package is not yet published to PyPI. After its first release, it will
-> be installable with:
+| | |
+|---|---|
+| **PyPI name** | `qr-lab` |
+| **Import** | `import qr_lab` |
+| **Python** | 3.9+ |
+| **License** | MIT |
+
+## Install
 
 ```bash
-pip install aukilabs-qrkit
+pip install qr-lab
 ```
+
+If the package is not yet published, build a wheel from the monorepo root:
+
+```bash
+just python-build   # → bindings/python/dist/
+# or, from this directory:
+maturin build --release --out dist
+```
+
+## Quick start
 
 ```python
 import numpy as np
-import auki_qrkit
+import qr_lab
 
+# uint8 grayscale, shape (H, W)
 gray = np.fromfile("frame.luma", dtype=np.uint8).reshape(720, 1280)
-result = auki_qrkit.scan(gray, preset="robust_fast", refine=True)
 
-processor = auki_qrkit.ImageProcessor()
+result = qr_lab.scan(gray, preset="robust_fast", refine=True)
+for code in result["codes"]:
+    print(code["payload"])
+    print(code["corners_source"])  # TL, TR, BR, BL in source pixels
+
+# Temporal video scanning (rung rotation + cross-frame finder pool)
+scanner = qr_lab.Scanner(preset="robust_fast", temporal=True, refine=True)
+for frame in frames:
+    detections = scanner.scan(frame)
+scanner.reset()  # after a scene cut or source change
+```
+
+### Image operators
+
+```python
+processor = qr_lab.ImageProcessor()
 estimate = processor.estimate_line_blur(gray)
 if estimate["blur_length"] is not None and estimate["confidence"] >= 0.3:
     restored = processor.van_cittert(
@@ -29,24 +58,36 @@ if estimate["blur_length"] is not None and estimate["confidence"] >= 0.3:
     )
 ```
 
-`Scanner(temporal=True)` retains QRKit's rung-rotation and cross-frame finder
-pool for a continuous video stream. Call `reset()` after a scene cut or source
-change.
+Module-level helpers `background_divide`, `estimate_line_blur`, and `van_cittert`
+are also available without a retained processor context.
 
-Inputs must be two-dimensional `uint8` grayscale arrays. Non-contiguous arrays
-are normalized to C order by the Python facade. Native work executes without
-holding Python's GIL; the binding copies the input before detaching so another
-Python thread cannot race the NumPy storage.
+## API notes
 
-Build a local wheel from the repository root with `just python-build`, or run
-the Python integration suite with `just python-test`.
+- Inputs must be two-dimensional `uint8` grayscale arrays.
+- Non-contiguous arrays are copied to C order by the Python facade.
+- Native work runs without holding the GIL; the binding copies the input before
+  detaching so another thread cannot race NumPy storage.
+- `preset` is `"robust_fast"` (default) or `"robust_full"`.
+- Type stubs ship with the wheel (`py.typed` + `*.pyi`).
 
-To inspect the artifacts intended for PyPI, run the following from this
-directory:
+## Development
+
+From the repository root:
 
 ```bash
+just python-build   # wheel into bindings/python/dist
+just python-test    # isolated install + pytest
+```
+
+Or from this directory:
+
+```bash
+maturin develop --release
+pytest
 maturin build --release --out dist
 maturin sdist --out dist
 ```
 
-The Python distribution is licensed under the [MIT License](LICENSE).
+## License
+
+MIT — see [LICENSE](LICENSE).

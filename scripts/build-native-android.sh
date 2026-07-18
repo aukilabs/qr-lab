@@ -45,7 +45,7 @@ export CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_X86_64_LINUX_
 export CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_RUSTFLAGS="${CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_RUSTFLAGS:-} $PAGE16"
 export CARGO_TARGET_I686_LINUX_ANDROID_RUSTFLAGS="${CARGO_TARGET_I686_LINUX_ANDROID_RUSTFLAGS:-} $PAGE16"
 
-echo "==> Building qrk-ffi for Android (API $API_LEVEL, profile $PROFILE)"
+echo "==> Building qr-lab-ffi for Android (API $API_LEVEL, profile $PROFILE)"
 echo "    NDK: $ANDROID_NDK_HOME"
 echo "    16 KB page flags: -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384"
 
@@ -56,7 +56,7 @@ cargo ndk \
   -o "$TMP_OUT" \
   -P "$API_LEVEL" \
   build \
-  -p qrk-ffi \
+  -p qr-lab-ffi \
   --profile "$PROFILE"
 
 for abi in arm64-v8a x86_64; do

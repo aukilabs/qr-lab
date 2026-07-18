@@ -1,21 +1,21 @@
-//! Native Python/NumPy bindings for QRKit.
+//! Native Python/NumPy bindings for QR Lab.
 
 use numpy::ndarray::Array2;
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray2, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pythonize::pythonize;
-use qrkit::image::{Gray8Image, Gray8View, Size};
-use qrkit::imgproc::blur::{
+use qr_lab::image::{Gray8Image, Gray8View, Size};
+use qr_lab::imgproc::blur::{
     estimate_line_direction, estimate_line_length_with, LineLengthConfig, RasterDirection4,
 };
-use qrkit::imgproc::deblur::{
+use qr_lab::imgproc::deblur::{
     van_cittert_line_into, DeblurWorkspace, LineBorderMode, VanCittertConfig,
 };
-use qrkit::imgproc::illumination::{
+use qr_lab::imgproc::illumination::{
     background_divide_into, BackgroundDivideConfig, IlluminationWorkspace,
 };
-use qrkit::{ScanConfig, ScanOptions, Scanner as CoreScanner, ScannerConfig, SessionConfig};
+use qr_lab::{ScanConfig, ScanOptions, Scanner as CoreScanner, ScannerConfig, SessionConfig};
 use serde::Serialize;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");

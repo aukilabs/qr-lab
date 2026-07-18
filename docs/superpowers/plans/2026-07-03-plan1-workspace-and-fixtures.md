@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Stand up the Rust workspace with the `qrk-core` crate skeleton, and build the Python golden-fixture generator producing QR renders with analytically exact ground-truth corners, committed as the test suite all later plans gate on.
+**Goal:** Stand up the Rust workspace with the `qr-lab-core` crate skeleton, and build the Python golden-fixture generator producing QR renders with analytically exact ground-truth corners, committed as the test suite all later plans gate on.
 
-**Architecture:** A Python script (`tools/fixtures/generate.py`) renders QR symbols (segno) on a physically sized plane through a pinhole camera (numpy + OpenCV `warpPerspective` at 8× supersampling → INTER_AREA downsample → blur/noise), writing PNG + raw `.luma` + ground-truth JSON per fixture. A Cargo workspace hosts `qrk-core` with a `LumaView` input type and a test-side fixture loader, proving the Rust↔fixture contract before any detector code exists.
+**Architecture:** A Python script (`tools/fixtures/generate.py`) renders QR symbols (segno) on a physically sized plane through a pinhole camera (numpy + OpenCV `warpPerspective` at 8× supersampling → INTER_AREA downsample → blur/noise), writing PNG + raw `.luma` + ground-truth JSON per fixture. A Cargo workspace hosts `qr-lab-core` with a `LumaView` input type and a test-side fixture loader, proving the Rust↔fixture contract before any detector code exists.
 
-**Tech Stack:** Rust (workspace, `qrk-core`, serde_json as dev-dependency), Python 3.11+ (segno, numpy, opencv-python-headless, pytest).
+**Tech Stack:** Rust (workspace, `qr-lab-core`, serde_json as dev-dependency), Python 3.11+ (segno, numpy, opencv-python-headless, pytest).
 
 ## Global Constraints
 
-- Rust MSRV **1.87** (`rust-version = "1.87"`); crate names `qrk-core` (later: `qrk-ffi`, `qrk-wasm`).
-- `qrk-core` starts with `#![forbid(unsafe_code)]` and **no required runtime dependencies**.
+- Rust MSRV **1.87** (`rust-version = "1.87"`); crate names `qr-lab-core` (later: `qr-lab-ffi`, `qr-lab-wasm`).
+- `qr-lab-core` starts with `#![forbid(unsafe_code)]` and **no required runtime dependencies**.
 - Fixture generation is **deterministic**: one master `--seed` (default 7) derives per-fixture seeds; regenerating produces byte-identical outputs.
 - Camera default: **1280×720, hFOV 65°** → `fx = fy = 640 / tan(32.5°) ≈ 1004.71`, `cx = 639.5`, `cy = 359.5`. Physical code size default **0.15 m** (module region, excluding quiet zone).
 - Ground-truth corners = the 4 corners of the **module region** (excluding quiet zone), order **TL, TR, BR, BL in symbol space**, subpixel image coordinates, x right / y down, pixel centers at integer coordinates.
@@ -21,17 +21,17 @@
 
 ---
 
-### Task 1: Cargo workspace + `qrk-core` skeleton with `LumaView`
+### Task 1: Cargo workspace + `qr-lab-core` skeleton with `LumaView`
 
 **Files:**
 - Create: `Cargo.toml` (workspace root)
 - Create: `rust-toolchain.toml`
-- Create: `crates/qrk-core/Cargo.toml`
-- Create: `crates/qrk-core/src/lib.rs`
-- Create: `crates/qrk-core/src/luma.rs`
+- Create: `crates/qr-lab-core/Cargo.toml`
+- Create: `crates/qr-lab-core/src/lib.rs`
+- Create: `crates/qr-lab-core/src/luma.rs`
 
 **Interfaces:**
-- Produces: `qrk_core::LumaView<'a>` — `LumaView::new(data: &'a [u8], width: usize, height: usize, stride: usize) -> Result<LumaView<'a>, LumaError>`, `fn get(&self, x: usize, y: usize) -> u8`, `fn width(&self) -> usize`, `fn height(&self) -> usize`. All later plans consume this as the scanner input type.
+- Produces: `qr_lab_core::LumaView<'a>` — `LumaView::new(data: &'a [u8], width: usize, height: usize, stride: usize) -> Result<LumaView<'a>, LumaError>`, `fn get(&self, x: usize, y: usize) -> u8`, `fn width(&self) -> usize`, `fn height(&self) -> usize`. All later plans consume this as the scanner input type.
 
 - [ ] **Step 1: Create workspace scaffolding**
 
@@ -39,7 +39,7 @@
 ```toml
 [workspace]
 resolver = "2"
-members = ["crates/qrk-core"]
+members = ["crates/qr-lab-core"]
 ```
 
 `rust-toolchain.toml`:
@@ -48,10 +48,10 @@ members = ["crates/qrk-core"]
 channel = "stable"
 ```
 
-`crates/qrk-core/Cargo.toml`:
+`crates/qr-lab-core/Cargo.toml`:
 ```toml
 [package]
-name = "qrk-core"
+name = "qr-lab-core"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.87"
@@ -66,7 +66,7 @@ serde_json = "1"
 
 - [ ] **Step 2: Write the failing tests**
 
-`crates/qrk-core/src/luma.rs` (tests only for now, at the bottom of the file; declare the module in `lib.rs` in step 4):
+`crates/qr-lab-core/src/luma.rs` (tests only for now, at the bottom of the file; declare the module in `lib.rs` in step 4):
 ```rust
 #[cfg(test)]
 mod tests {
@@ -123,12 +123,12 @@ mod tests {
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `cargo test -p qrk-core`
+Run: `cargo test -p qr-lab-core`
 Expected: compile error — `LumaView`/`LumaError` not defined.
 
 - [ ] **Step 4: Implement `LumaView`**
 
-Top of `crates/qrk-core/src/luma.rs`:
+Top of `crates/qr-lab-core/src/luma.rs`:
 ```rust
 /// Borrowed view over an 8-bit luma (grayscale) image with row stride.
 /// The scanner's only input type: zero-copy over camera Y planes.
@@ -194,7 +194,7 @@ impl<'a> LumaView<'a> {
 }
 ```
 
-`crates/qrk-core/src/lib.rs`:
+`crates/qr-lab-core/src/lib.rs`:
 ```rust
 #![forbid(unsafe_code)]
 
@@ -205,14 +205,14 @@ pub use luma::{LumaError, LumaView};
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cargo test -p qrk-core`
+Run: `cargo test -p qr-lab-core`
 Expected: 5 passed.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add Cargo.toml rust-toolchain.toml crates/
-git commit -m "feat: workspace + qrk-core LumaView input type"
+git commit -m "feat: workspace + qr-lab-core LumaView input type"
 ```
 
 ---
@@ -1157,14 +1157,14 @@ git commit -m "feat: golden fixture suite (65+ scenarios) with exact ground trut
 
 ---
 
-### Task 6: Rust fixture loader in `qrk-core` tests
+### Task 6: Rust fixture loader in `qr-lab-core` tests
 
 **Files:**
-- Create: `crates/qrk-core/tests/common/mod.rs`
-- Create: `crates/qrk-core/tests/fixtures_smoke.rs`
+- Create: `crates/qr-lab-core/tests/common/mod.rs`
+- Create: `crates/qr-lab-core/tests/fixtures_smoke.rs`
 
 **Interfaces:**
-- Consumes: `qrk_core::LumaView` (Task 1); the JSON schema + `.luma` files (Tasks 4–5).
+- Consumes: `qr_lab_core::LumaView` (Task 1); the JSON schema + `.luma` files (Tasks 4–5).
 - Produces (every later plan's Rust tests consume this):
   - `common::Fixture { name: String, width: usize, height: usize, luma: Vec<u8>, codes: Vec<CodeTruth> }`
   - `common::CodeTruth { payload: String, version: u32, ecc: String, mirrored: bool, module_size_px: f64, corners_px: [[f64; 2]; 4] }`
@@ -1173,7 +1173,7 @@ git commit -m "feat: golden fixture suite (65+ scenarios) with exact ground trut
 
 - [ ] **Step 1: Write the failing smoke test**
 
-`crates/qrk-core/tests/fixtures_smoke.rs`:
+`crates/qr-lab-core/tests/fixtures_smoke.rs`:
 ```rust
 mod common;
 
@@ -1232,19 +1232,19 @@ fn luma_pixels_match_ground_truth_ink() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p qrk-core --test fixtures_smoke`
+Run: `cargo test -p qr-lab-core --test fixtures_smoke`
 Expected: compile error — `common` module missing.
 
 - [ ] **Step 3: Implement the loader**
 
-`crates/qrk-core/tests/common/mod.rs`:
+`crates/qr-lab-core/tests/common/mod.rs`:
 ```rust
-//! Golden-fixture loader shared by qrk-core integration tests.
+//! Golden-fixture loader shared by qr-lab-core integration tests.
 //! Schema contract: tools/fixtures/generate.py (spec §6).
 use std::fs;
 use std::path::PathBuf;
 
-use qrk_core::LumaView;
+use qr_lab_core::LumaView;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -1316,13 +1316,13 @@ pub fn load_all() -> Vec<Fixture> {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p qrk-core`
+Run: `cargo test -p qr-lab-core`
 Expected: unit tests (5) + `fixtures_smoke` (2) all pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/qrk-core/tests/
+git add crates/qr-lab-core/tests/
 git commit -m "test: Rust golden-fixture loader + suite smoke tests"
 ```
 
@@ -1337,7 +1337,7 @@ git commit -m "test: Rust golden-fixture loader + suite smoke tests"
 - Modify: `tools/fixtures/scenarios.py` (CodeSpec fields + 3 new scenario blocks)
 - Modify: `tools/fixtures/generate.py` (pass flags through; record in JSON)
 - Modify: `tools/fixtures/test_render.py`, `tools/fixtures/test_scenarios.py`, `tools/fixtures/test_suite_sanity.py`
-- Modify: `crates/qrk-core/tests/common/mod.rs`, `crates/qrk-core/tests/fixtures_smoke.rs`
+- Modify: `crates/qr-lab-core/tests/common/mod.rs`, `crates/qr-lab-core/tests/fixtures_smoke.rs`
 - Regenerate: `fixtures/` (all JSONs gain 2 fields; existing png/luma must stay byte-identical; 16 new fixtures)
 
 **Interfaces:**
@@ -1483,7 +1483,7 @@ Pass `code.inverted, code.opaque_plate` into `render.render_code(...)` and add t
 
 - [ ] **Step 7: Full verification + commit**
 
-`pytest` (tools/fixtures): all pass including the two new render tests and updated matrix/sanity counts. `cargo test -p qrk-core`: 7/7. Commit code + regenerated fixtures: "feat: inverted and transparent-background fixture scenarios".
+`pytest` (tools/fixtures): all pass including the two new render tests and updated matrix/sanity counts. `cargo test -p qr-lab-core`: 7/7. Commit code + regenerated fixtures: "feat: inverted and transparent-background fixture scenarios".
 
 ## Self-review notes
 

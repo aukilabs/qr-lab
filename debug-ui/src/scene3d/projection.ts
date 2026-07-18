@@ -12,7 +12,7 @@ import type { Camera, Vector3 } from "three";
 /**
  * Project `point` (world space) through `camera` into pixel coordinates
  * for a `width x height` render target — the SAME convention
- * `qrk_core::scan`'s SOURCE-px geometry (and this debug UI's `refined_
+ * `qr_lab_core::scan`'s SOURCE-px geometry (and this debug UI's `refined_
  * corners`) uses: pixel CENTERS at integer coordinates, `(0, 0)` at the
  * top-left pixel's center, x right, y DOWN. This matches
  * `tools/fixtures/camera.py` ("pixel centers at integer coordinates";

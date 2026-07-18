@@ -1,0 +1,15 @@
+[package]
+name = "qr-lab-geometry"
+description = "Projective geometry, image sampling, and line fitting for QR Lab"
+keywords = ["geometry", "homography", "computer-vision", "sampling"]
+categories = ["computer-vision", "science::mathematics"]
+authors.workspace = true
+homepage.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+qr-lab-image = { path = "../qr-lab-image" }

@@ -4,7 +4,7 @@
 
 **Goal:** A React web app that loads any image/video (or a golden fixture, or a real capture), runs the WASM scanner per frame at a selectable working resolution, and renders every pipeline stage as an independently togglable overlay with a per-stage timings side panel — the visual harness every later scanner stage lands into.
 
-**Architecture:** Vite + React + TypeScript app in `debug-ui/`. The `qrk-wasm` crate is packaged with `wasm-pack` (web target) and run inside a Web Worker (24MP scans must not block the UI). A viewport component stacks the source bitmap and overlay canvases under shared pan/zoom; overlays are pure functions `(trace, detections, groundTruth) → draw commands` registered per stage with toggles. Ground truth from golden-fixture JSONs renders as its own layer, so detected-vs-truth is visually comparable. Video mode steps frames via `requestVideoFrameCallback` + seek. `StageClock` gets a real wasm implementation (`performance.now`) so the timings panel shows genuine per-stage numbers.
+**Architecture:** Vite + React + TypeScript app in `debug-ui/`. The `qr-lab-wasm` crate is packaged with `wasm-pack` (web target) and run inside a Web Worker (24MP scans must not block the UI). A viewport component stacks the source bitmap and overlay canvases under shared pan/zoom; overlays are pure functions `(trace, detections, groundTruth) → draw commands` registered per stage with toggles. Ground truth from golden-fixture JSONs renders as its own layer, so detected-vs-truth is visually comparable. Video mode steps frames via `requestVideoFrameCallback` + seek. `StageClock` gets a real wasm implementation (`performance.now`) so the timings panel shows genuine per-stage numbers.
 
 **Tech Stack:** Vite, React 18, TypeScript (strict), vitest for logic tests, wasm-pack. No three.js yet (that arrives with the 3D scene mode in a later plan). No UI component library — plain CSS; this is a tool, not a product.
 
@@ -14,7 +14,7 @@
 - The working-resolution downscale must replicate the production path: **nearest-neighbor**, max-dim cap, same rounding (`round(dim * scale)`), so the debug UI predicts device behavior (validated on real_2: detection differs by scale).
 - Overlay coordinates: scanner space = downscaled-image pixels, pixel centers at integer coordinates. Every overlay draws through one shared `imageToScreen` transform (pan/zoom aware). No overlay computes its own mapping.
 - All scanning happens in the Worker; the main thread never calls `scan_rgba`.
-- `qrk-core` mobile builds stay dependency-free: the `StageClock` wasm implementation may add `js-sys` ONLY under `[target.'cfg(target_arch = "wasm32")'.dependencies]`.
+- `qr-lab-core` mobile builds stay dependency-free: the `StageClock` wasm implementation may add `js-sys` ONLY under `[target.'cfg(target_arch = "wasm32")'.dependencies]`.
 - Logic modules (downscale, transforms, trace parsing, layer registry) are vitest-tested TDD; React components are thin and verified by the Task 7 manual checklist. No e2e framework in this plan.
 - Commits end with the repo's Claude co-author trailer.
 
@@ -49,8 +49,8 @@ debug-ui/
       useImageSource.ts                     file/fixture → ImageBitmap + rgba extraction
       useVideoSource.ts                     video element + rVFC stepping controls
   public/ (vite serves; fixtures reached via fs allow or symlink — Task 2 decides and documents)
-crates/qrk-wasm/src/bin/ or tests/          envelope snapshot generator (Task 1)
-crates/qrk-core/src/scanner.rs              StageClock wasm impl (Task 5)
+crates/qr-lab-wasm/src/bin/ or tests/          envelope snapshot generator (Task 1)
+crates/qr-lab-core/src/scanner.rs              StageClock wasm impl (Task 5)
 scripts/build-wasm.sh                       wasm-pack build → debug-ui/src/wasm/
 ```
 
@@ -59,7 +59,7 @@ scripts/build-wasm.sh                       wasm-pack build → debug-ui/src/was
 ### Task 1: Envelope snapshot + TS contract types
 
 **Files:**
-- Create: `crates/qrk-wasm/tests/envelope_snapshot.rs`
+- Create: `crates/qr-lab-wasm/tests/envelope_snapshot.rs`
 - Create: `debug-ui/src/scanner/types.ts`, `debug-ui/src/scanner/envelope.test.ts`, `debug-ui/src/scanner/__snapshots__/envelope.near_00.json`
 - Create: `debug-ui/package.json`, `debug-ui/tsconfig.json`, `debug-ui/vite.config.ts`, `debug-ui/index.html`, minimal `debug-ui/src/main.tsx` (placeholder renders "qrk debug ui")
 
@@ -80,7 +80,7 @@ scripts/build-wasm.sh                       wasm-pack build → debug-ui/src/was
   (Field names MUST come from reading the generated snapshot, not from this plan — if Rust serializes differently, the snapshot wins and types.ts follows.)
 - `envelope.test.ts` (vitest): `parseScanResult(JSON.parse(snapshot))` succeeds; mutating any required key (delete `detections.finders`, set `trace.tiles.thresholds` to a string) throws with a useful path.
 
-**Steps:** write the Rust snapshot test → run with `UPDATE_SNAPSHOT=1` to generate → commit snapshot + drift gate green; scaffold `debug-ui` (`npm create vite@latest` equivalent files written directly, strict tsconfig, vitest configured); write failing `envelope.test.ts` → implement `types.ts`/`parseScanResult` → green; `npm test` and `cargo test -p qrk-wasm` both green; commit `feat: wasm envelope snapshot contract + debug-ui scaffold`.
+**Steps:** write the Rust snapshot test → run with `UPDATE_SNAPSHOT=1` to generate → commit snapshot + drift gate green; scaffold `debug-ui` (`npm create vite@latest` equivalent files written directly, strict tsconfig, vitest configured); write failing `envelope.test.ts` → implement `types.ts`/`parseScanResult` → green; `npm test` and `cargo test -p qr-lab-wasm` both green; commit `feat: wasm envelope snapshot contract + debug-ui scaffold`.
 
 ---
 
@@ -90,7 +90,7 @@ scripts/build-wasm.sh                       wasm-pack build → debug-ui/src/was
 - Create: `scripts/build-wasm.sh` (extend existing check script or new build script), `debug-ui/src/scanner/worker.ts`, `debug-ui/src/scanner/client.ts`, `debug-ui/src/scanner/client.test.ts`, `debug-ui/src/scanner/downscale.ts`, `debug-ui/src/scanner/downscale.test.ts`
 
 **Interfaces:**
-- `scripts/build-wasm.sh`: `wasm-pack build crates/qrk-wasm --target web --out-dir ../../debug-ui/src/wasm --release` (install wasm-pack if missing via cargo install; document). `debug-ui/src/wasm/` is gitignored; `npm run build:wasm` wraps it; `npm run dev` errors helpfully if wasm is missing.
+- `scripts/build-wasm.sh`: `wasm-pack build crates/qr-lab-wasm --target web --out-dir ../../debug-ui/src/wasm --release` (install wasm-pack if missing via cargo install; document). `debug-ui/src/wasm/` is gitignored; `npm run build:wasm` wraps it; `npm run dev` errors helpfully if wasm is missing.
 - `downscale.ts`: `export function downscaleRgba(rgba: Uint8ClampedArray, w: number, h: number, maxDim: number): { rgba: Uint8ClampedArray; width: number; height: number }` — nearest-neighbor, production rounding; identity (same buffer) when `maxDim <= 0 || max(w,h) <= maxDim`.
 - `client.ts`: `export class ScannerClient { async init(): Promise<void>; async scan(rgba, w, h, opts: { maxDim: number; withTrace: boolean }): Promise<{ result: ScanResult; wallMs: number }> }` — posts to the worker (transferring the buffer), worker downscales + calls `scan_rgba`, responds with the parsed result + `performance.now` wall time measured around the wasm call in the worker; one in-flight scan at a time, latest-wins queueing (drop stale requests — video mode needs this).
 - Tests: `downscale.test.ts` — exact expected pixels on a 4×2 → maxDim 2 case, identity case, rounding parity with the JNI formula (`round(dim * maxDim / max(w,h))`); `client.test.ts` — queueing logic (latest-wins) with a mocked worker.
@@ -153,11 +153,11 @@ scripts/build-wasm.sh                       wasm-pack build → debug-ui/src/was
 ### Task 5: Real per-stage timings on wasm (`StageClock`) + timings panel
 
 **Files:**
-- Modify: `crates/qrk-core/Cargo.toml`, `crates/qrk-core/src/scanner.rs` (StageClock wasm arm)
+- Modify: `crates/qr-lab-core/Cargo.toml`, `crates/qr-lab-core/src/scanner.rs` (StageClock wasm arm)
 - Create: `debug-ui/src/panels/TimingsPanel.tsx`
 
 **Interfaces:**
-- `qrk-core` gains `[target.'cfg(target_arch = "wasm32")'.dependencies] js-sys = "0.3"`; `StageClock` on wasm32 uses `js_sys::Date::now()` (ms f64 → ns u64; documented precision caveat) — chosen over web-sys `performance.now` to keep the dependency to one tiny crate; if `Date::now` precision proves insufficient for µs-scale stages, a follow-up swaps in `web-sys::Performance` (record decision in code comment). Native path untouched; `cargo test -p qrk-core` unaffected; `scripts/check-wasm.sh` still green.
+- `qr-lab-core` gains `[target.'cfg(target_arch = "wasm32")'.dependencies] js-sys = "0.3"`; `StageClock` on wasm32 uses `js_sys::Date::now()` (ms f64 → ns u64; documented precision caveat) — chosen over web-sys `performance.now` to keep the dependency to one tiny crate; if `Date::now` precision proves insufficient for µs-scale stages, a follow-up swaps in `web-sys::Performance` (record decision in code comment). Native path untouched; `cargo test -p qr-lab-core` unaffected; `scripts/check-wasm.sh` still green.
 - `TimingsPanel.tsx`: table of tiles/finders/triplets (µs, from `detections.timings`) + worker wall ms + main-thread round-trip ms; a 60-sample rolling sparkline per row (plain canvas). Shows "n/a" gracefully when timings are zero.
 
 **Steps:** Rust change + feature-matrix re-verify (test/check native + wasm) → panel → manual check that near_00 shows nonzero stage timings in the browser → commit.

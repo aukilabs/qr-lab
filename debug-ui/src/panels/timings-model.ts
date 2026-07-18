@@ -56,7 +56,7 @@ const US_PER_MS = 1_000;
  * Format a stage duration in nanoseconds as a human-scale string:
  * `"n/a"` for `<= 0` (the wasm `StageClock` reports exactly 0ns for a
  * stage that ran faster than its ms-resolution `Date.now()` clock could
- * observe — see `qrk_core::StageClock`'s doc comment — so 0 reads as "not
+ * observe — see `qr_lab_core::StageClock`'s doc comment — so 0 reads as "not
  * measurable" rather than "instant"), microseconds with one decimal below
  * 1ms, milliseconds with one decimal at or above it.
  *

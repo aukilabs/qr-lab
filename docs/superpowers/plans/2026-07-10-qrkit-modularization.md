@@ -1,12 +1,12 @@
-# QRKit modularization plan
+# QR Lab modularization plan
 
-Status: implemented on `codex/qrkit-modularization` (2026-07-10); final
-verification evidence is recorded in the repository's QRKit documentation.
+Status: implemented on `codex/qr-lab-modularization` (2026-07-10); final
+verification evidence is recorded in the repository's QR Lab documentation.
 
-Goal: evolve the repository into QRKit: a layered Rust computer-vision toolkit
+Goal: evolve the repository into QR Lab: a layered Rust computer-vision toolkit
 that preserves the complete cross-compiled QR scanner while exposing useful
 image-processing components to other pipelines. A barcode scanner, for example,
-should be able to use QRKit's illumination correction or deblurring without
+should be able to use QR Lab's illumination correction or deblurring without
 depending on QR detection, decoding, session handling, WASM bindings, or mobile
 wrappers.
 
@@ -15,32 +15,32 @@ wrappers.
 Use focused library crates beneath a QR-specific scanner and an umbrella facade:
 
 ```text
-qrkit                    Umbrella API and complete-scanner entry point
-└── qrkit-qr             QR detection, decoding, robust ladder, and sessions
-    ├── qrkit-imgproc    Enhancement, restoration, and thresholding
-    ├── qrkit-geometry   Transforms, sampling, and geometric fitting
-    └── qrkit-image      Grayscale image views, owned images, ROIs, and buffers
+qr-lab                    Umbrella API and complete-scanner entry point
+└── qr-lab-qr             QR detection, decoding, robust ladder, and sessions
+    ├── qr-lab-imgproc    Enhancement, restoration, and thresholding
+    ├── qr-lab-geometry   Transforms, sampling, and geometric fitting
+    └── qr-lab-image      Grayscale image views, owned images, ROIs, and buffers
 
-qrkit-imgproc
-├── qrkit-geometry
-└── qrkit-image
+qr-lab-imgproc
+├── qr-lab-geometry
+└── qr-lab-image
 
-qrkit-geometry
-└── qrkit-image
+qr-lab-geometry
+└── qr-lab-image
 
-qrkit-ffi  ─────────────> qrkit
-qrkit-wasm ─────────────> qrkit
-Expo / Android / iOS ───> qrkit-ffi
-qrk-core compatibility ─> qrkit
+qr-lab-ffi  ─────────────> qr-lab
+qr-lab-wasm ─────────────> qr-lab
+Expo / Android / iOS ───> qr-lab-ffi
+qr-lab-core compatibility ─> qr-lab
 ```
 
-The dependency direction is the key constraint. `qrkit-imgproc` must not pull
+The dependency direction is the key constraint. `qr-lab-imgproc` must not pull
 in `rqrr`, QR finder logic, scanner sessions, JSON serialization, WASM, JNI, or
 Expo code.
 
 This structure follows the umbrella-plus-focused-crates direction used by
 [Kornia-rs](https://github.com/kornia/kornia-rs) and described in its
-[2025 architecture paper](https://arxiv.org/abs/2505.12425). QRKit should keep
+[2025 architecture paper](https://arxiv.org/abs/2505.12425). QR Lab should keep
 the practical, bounded scope seen in Rust's
 [`image`](https://docs.rs/image/latest/image/) and
 [`imageproc`](https://docs.rs/imageproc/latest/imageproc/) crates rather than
@@ -48,7 +48,7 @@ attempting to become a generic tensor or graph-execution framework.
 
 ## 2. Proposed crates and responsibilities
 
-### 2.1 `qrkit-image`
+### 2.1 `qr-lab-image`
 
 Provide the minimal data foundation shared by every other crate:
 
@@ -65,10 +65,10 @@ The first public image model should remain grayscale-first. This covers QR and
 barcode processing, camera Y planes, documents, thresholding, and deblurring
 without prematurely creating a general tensor abstraction.
 
-The current [`LumaView`](../../../crates/qrk-core/src/luma.rs) is the starting
+The current [`LumaView`](../../../crates/qr-lab-core/src/luma.rs) is the starting
 point. Its internal subview functionality should become a checked public API.
 
-### 2.2 `qrkit-geometry`
+### 2.2 `qr-lab-geometry`
 
 Expose reusable image geometry and sampling:
 
@@ -81,14 +81,14 @@ Expose reusable image geometry and sampling:
 - Line intersection and geometric validation.
 
 The current
-[`PerspectiveTransform`](../../../crates/qrk-core/src/homography.rs) moves here.
+[`PerspectiveTransform`](../../../crates/qr-lab-core/src/homography.rs) moves here.
 Duplicate bilinear sampling in refinement and QR version sampling should be
 replaced by one shared implementation.
 
 Generic edge localization and line fitting should be separated from the
 QR-specific logic that chooses which QR edges to probe.
 
-### 2.3 `qrkit-imgproc`
+### 2.3 `qr-lab-imgproc`
 
 This is the main reusable computer-vision package.
 
@@ -136,7 +136,7 @@ This is the main reusable computer-vision package.
 - Configurable blur length, iterations, relaxation, and border behavior.
 
 Most of this functionality already exists privately in
-[`enhance.rs`](../../../crates/qrk-core/src/enhance.rs). The first extraction
+[`enhance.rs`](../../../crates/qr-lab-core/src/enhance.rs). The first extraction
 must preserve the algorithms and integer behavior exactly. Algorithm upgrades
 belong in later, independently measured work.
 
@@ -151,10 +151,10 @@ deblur_line_into(src, dst, &config, &mut workspace)?;
 ```
 
 Blur estimation and restoration must remain separate. Consumers may need the
-estimate without using QRKit's restoration, or may want to select a different
+estimate without using QR Lab's restoration, or may want to select a different
 restoration method.
 
-### 2.4 `qrkit-qr`
+### 2.4 `qr-lab-qr`
 
 Keep functionality here when its semantics depend on QR structure:
 
@@ -169,18 +169,18 @@ Keep functionality here when its semantics depend on QR structure:
 - Temporal scan session and QR finder pooling.
 - QR trace and diagnostic results.
 
-The robust scanner in [`ladder.rs`](../../../crates/qrk-core/src/ladder.rs)
+The robust scanner in [`ladder.rs`](../../../crates/qr-lab-core/src/ladder.rs)
 should consume general operators but remain QR-specific. Its evidence model,
 module-pitch thresholds, ROI policy, checksum oracle, and retry decisions are
 not general image-processing APIs.
 
-### 2.5 `qrkit`
+### 2.5 `qr-lab`
 
 Provide the umbrella package for users who want the complete scanner:
 
 ```rust
-let mut scanner = qrkit::qr::Scanner::new(
-    qrkit::qr::ScannerConfig::robust_fast(),
+let mut scanner = qr_lab::qr::Scanner::new(
+    qr_lab::qr::ScannerConfig::robust_fast(),
 );
 
 let result = scanner.scan(frame)?;
@@ -189,30 +189,30 @@ let result = scanner.scan(frame)?;
 It may re-export commonly used modules for convenience:
 
 ```rust
-use qrkit::image::Gray8View;
-use qrkit::imgproc::deblur;
+use qr_lab::image::Gray8View;
+use qr_lab::imgproc::deblur;
 ```
 
 Consumers concerned with dependency size can depend directly on
-`qrkit-imgproc` or another focused crate.
+`qr-lab-imgproc` or another focused crate.
 
 ## 3. Current functionality mapping
 
 | Current area | Destination | Classification |
 |---|---|---|
-| `luma.rs` | `qrkit-image` | General |
-| `downscale.rs` | `qrkit-imgproc::resize` | General |
-| `homography.rs` | `qrkit-geometry` | General |
-| Tile grid and adaptive binarization | `qrkit-imgproc::threshold` | General after configuration |
-| Morphology and background division | `qrkit-imgproc` | General |
-| Sharpening and blur analysis | `qrkit-imgproc` | General |
-| Directional deblurring | `qrkit-imgproc` | High-value public functionality |
-| Generic edge localization and TLS fitting | `qrkit-geometry` or `qrkit-imgproc` | General |
-| QR edge-probe selection | `qrkit-qr` | QR-specific |
-| Finder, triplet, version, and alignment logic | `qrkit-qr` | QR-specific |
-| Module sampling, `BitMatrix`, and decoding | `qrkit-qr` | QR-specific |
-| Robust ladder and temporal session | `qrkit-qr` | QR-specific |
-| Scanner trace and timings | `qrkit-qr` | QR-specific initially |
+| `luma.rs` | `qr-lab-image` | General |
+| `downscale.rs` | `qr-lab-imgproc::resize` | General |
+| `homography.rs` | `qr-lab-geometry` | General |
+| Tile grid and adaptive binarization | `qr-lab-imgproc::threshold` | General after configuration |
+| Morphology and background division | `qr-lab-imgproc` | General |
+| Sharpening and blur analysis | `qr-lab-imgproc` | General |
+| Directional deblurring | `qr-lab-imgproc` | High-value public functionality |
+| Generic edge localization and TLS fitting | `qr-lab-geometry` or `qr-lab-imgproc` | General |
+| QR edge-probe selection | `qr-lab-qr` | QR-specific |
+| Finder, triplet, version, and alignment logic | `qr-lab-qr` | QR-specific |
+| Module sampling, `BitMatrix`, and decoding | `qr-lab-qr` | QR-specific |
+| Robust ladder and temporal session | `qr-lab-qr` | QR-specific |
+| Scanner trace and timings | `qr-lab-qr` | QR-specific initially |
 | NEON implementation details | Private backend modules | Internal |
 
 Experimental Catmull-Rom code and architecture-specific SIMD functions should
@@ -243,12 +243,12 @@ applications.
 
 For at least one compatibility release:
 
-- Preserve `qrk_core::scan` and related Rust entry points.
+- Preserve `qr_lab_core::scan` and related Rust entry points.
 - Preserve C symbols such as `qrk_scan_luma`.
 - Preserve WASM `scan_rgba`, `scan_rgba_robust`, and `WasmScanSession`.
 - Preserve the Expo package API.
 - Preserve Android shared libraries, the iOS XCFramework, and the WASM build.
-- Make `qrk-core` a compatibility facade over the new implementation.
+- Make `qr-lab-core` a compatibility facade over the new implementation.
 - Deprecate compatibility names only after repository consumers and bindings
   have migrated.
 
@@ -285,7 +285,7 @@ Estimated effort: 1–2 days.
 - Record current public Rust, C, WASM, Expo, Android, and iOS interfaces.
 - Capture dependency, binary-size, recall, and latency baselines.
 - Decide MSRV, publication policy, crate names, and support tiers.
-- Check crates.io/npm availability and unrelated uses of the QRKit name.
+- Check crates.io/npm availability and unrelated uses of the QR Lab name.
 - Record coordinate, border, allocation, and error-handling decisions.
 
 No behavior changes are allowed in this phase.
@@ -294,7 +294,7 @@ No behavior changes are allowed in this phase.
 
 Estimated effort: 3–5 days.
 
-- Add `qrkit-image` and `qrkit-geometry`.
+- Add `qr-lab-image` and `qr-lab-geometry`.
 - Move `LumaView`, homography, geometric primitives, and bilinear sampling.
 - Add checked buffer construction and public ROI views.
 - Remove duplicate samplers.
@@ -305,11 +305,11 @@ Estimated effort: 3–5 days.
 
 Estimated effort: 5–8 days.
 
-- Add `qrkit-imgproc`.
+- Add `qr-lab-imgproc`.
 - Move resize, morphology, illumination normalization, sharpening, blur
   estimation, and restoration.
 - Preserve current integer arithmetic and deterministic results.
-- Keep scanner policies and constants that express QR evidence in `qrk-core`.
+- Keep scanner policies and constants that express QR evidence in `qr-lab-core`.
 - Initially expose current behavior through narrow, honest operation names.
 
 This is a structural phase, not a deblur redesign.
@@ -332,12 +332,12 @@ Example use from an unrelated barcode pipeline:
 let src = Gray8View::new(bytes, width, height, stride)?;
 
 let estimate =
-    qrkit_imgproc::blur::estimate_line_blur(src, &estimate_config)?;
+    qr_lab_imgproc::blur::estimate_line_blur(src, &estimate_config)?;
 
 let mut output = Gray8Image::new(src.size());
 let mut workspace = DeblurWorkspace::default();
 
-qrkit_imgproc::deblur::van_cittert_line_into(
+qr_lab_imgproc::deblur::van_cittert_line_into(
     src,
     output.view_mut(),
     &DeblurConfig::from_estimate(estimate),
@@ -351,17 +351,17 @@ barcode_scanner.decode(output.view());
 
 Estimated effort: 4–6 days.
 
-- Move QR-specific code into `qrkit-qr`.
+- Move QR-specific code into `qr-lab-qr`.
 - Add a stateful `Scanner` API while preserving stateless calls.
-- Add the `qrkit` umbrella crate.
-- Convert `qrk-core` into a compatibility facade.
+- Add the `qr-lab` umbrella crate.
+- Convert `qr-lab-core` into a compatibility facade.
 - Verify complete scanner behavior and diagnostics remain compatible.
 
 ### Phase 5 — Bindings and cross-compilation
 
 Estimated effort: 5–8 days.
 
-- Point C, WASM, Android, iOS, and Expo scanner bindings at `qrkit`.
+- Point C, WASM, Android, iOS, and Expo scanner bindings at `qr-lab`.
 - Add a versioned native operator API for the first selected modules.
 - Start with normalization/deblur only if operator benchmarks justify them.
 - Verify ARM64, x86-64, WASM, Android, and iOS artifacts.
@@ -377,7 +377,7 @@ Provide examples for:
 - Temporal video scanning.
 - Zero-copy camera Y-plane input.
 - Standalone deblurring.
-- A barcode preprocessor using QRKit enhancement.
+- A barcode preprocessor using QR Lab enhancement.
 - C operator use with a reusable workspace.
 - WASM scanner integration.
 
@@ -393,8 +393,8 @@ Every phase must satisfy the relevant gates:
 
 - Existing scanner outputs remain correct.
 - Extraction phases produce bit-identical operator results.
-- `qrkit-imgproc` has no dependency on `rqrr`, QR decoding, WASM, JNI, or Expo.
-- A standalone barcode/deblur example compiles without `qrkit-qr`.
+- `qr-lab-imgproc` has no dependency on `rqrr`, QR decoding, WASM, JNI, or Expo.
+- A standalone barcode/deblur example compiles without `qr-lab-qr`.
 - Scanner recall does not regress on the evaluation corpus.
 - Mean and p95 latency remain within an agreed extraction tolerance; start with
   3% until target-specific budgets are established.
@@ -426,7 +426,7 @@ Use small procedural fixtures in Git and keep large evaluation packs external
 and optional. Do not add the previously excluded large degraded fixture pack to
 `main`.
 
-## 9. Explicit non-goals for the first QRKit release
+## 9. Explicit non-goals for the first QR Lab release
 
 - No general tensor abstraction.
 - No GPU compute framework.
@@ -439,7 +439,7 @@ and optional. Do not add the previously excluded large degraded fixture pack to
 OpenCV's [G-API](https://docs.opencv.org/4.x/d0/d1e/gapi.html) demonstrates the
 potential value of graph execution, but also its complexity and API volatility.
 Composable functions, explicit buffers, and reusable workspaces are the more
-appropriate first target for QRKit.
+appropriate first target for QR Lab.
 
 ## 10. Decisions to approve before implementation
 
@@ -461,6 +461,6 @@ Before Phase 0 completes, confirm:
 - Whether the modular crates will be published immediately or remain workspace
   packages for one stabilization cycle.
 - The MSRV and whether any foundational crate needs `no_std` support.
-- Which operators, if any, must be available through C/WASM in the first QRKit
+- Which operators, if any, must be available through C/WASM in the first QR Lab
   release.
 - Target-specific performance and binary-size budgets.

@@ -19,9 +19,9 @@
 ```
 cpuscanner2/
   crates/
-    qrk-core/        pure Rust, no platform deps: detection, sampling, refinement, trace
-    qrk-ffi/         cdylib+staticlib, C ABI + JNI (jni crate), AHardwareBuffer lock (cfg android)
-    qrk-wasm/        wasm-bindgen bindings, debug-trace enabled, serde trace export
+    qr-lab-core/        pure Rust, no platform deps: detection, sampling, refinement, trace
+    qr-lab-ffi/         cdylib+staticlib, C ABI + JNI (jni crate), AHardwareBuffer lock (cfg android)
+    qr-lab-wasm/        wasm-bindgen bindings, debug-trace enabled, serde trace export
   debug-ui/          Vite + React + react-three-fiber app (two modes, overlays, timings panel)
   expo-qr-scanner/   new Expo module (Kotlin + Swift shells, prebuilt .so/.xcframework)
   expo-ark-scanner/  existing GPU module — untouched reference
@@ -32,9 +32,9 @@ cpuscanner2/
 
 (Names `qrk-*`/`expo-qr-scanner` are placeholders — bikeshed at review.)
 
-Workspace-level decisions: Rust ≥1.87 (safe NEON intrinsics), `#![forbid(unsafe_code)]` in `qrk-core` (unsafe lives only in `qrk-ffi`), no linear-algebra dependency (hand-rolled 60-line adjugate perspective transform and 20-line weighted total-least-squares line fit, per zxing-cpp/AprilTag), `glam` optional for ergonomics only.
+Workspace-level decisions: Rust ≥1.87 (safe NEON intrinsics), `#![forbid(unsafe_code)]` in `qr-lab-core` (unsafe lives only in `qr-lab-ffi`), no linear-algebra dependency (hand-rolled 60-line adjugate perspective transform and 20-line weighted total-least-squares line fit, per zxing-cpp/AprilTag), `glam` optional for ergonomics only.
 
-## 3. Core pipeline (`qrk-core`)
+## 3. Core pipeline (`qr-lab-core`)
 
 Input: `LumaView { data, width, height, stride }` — 8-bit luma, stride-aware, zero-copy. RGBA→luma helper for WASM/tests. Output: `ScanOutcome { detections: Vec<Detection>, diagnostics, trace: Option<Trace> }`.
 
@@ -74,13 +74,13 @@ Calibration task: measure zxing-cpp on the same device/frames first — no publi
 ## 4. FFI & Expo module
 
 - **API (JS):** same shape as today's module: `scanFrame(pointer) → result`, `destroyScanner()`. Result per detection: `corners[4]` (coarse), `improvedCorners[4]` (subpixel), `size` (modules), `version`, `eccLevel`, `payload` (string) + `payloadBytes` (base64), `bits` (row-major), `mirrored`. Envelope: `scanWidth/Height`, `toBufferUv[6]`, `diagnostics { finderCount, earlyOut, markerCount, msByStage? }`. No `id`/`frameId`.
-- **`qrk-ffi`:** `crate-type = ["cdylib", "staticlib"]`. Core C ABI: `qrk_scan_luma(ptr, w, h, stride, opts) → owned JSON/flatbuffer` + `qrk_free`. Android extras (cfg android): JNI `extern "system"` entry accepting either an `AHardwareBuffer*` (locked via `AHardwareBuffer_lockPlanes`, Y plane only, released before return) or a direct `ByteBuffer` for the ARCore `Image` path. Built with `-Wl,-z,max-page-size=16384` (Google Play 16 KB page requirement).
+- **`qr-lab-ffi`:** `crate-type = ["cdylib", "staticlib"]`. Core C ABI: `qrk_scan_luma(ptr, w, h, stride, opts) → owned JSON/flatbuffer` + `qrk_free`. Android extras (cfg android): JNI `extern "system"` entry accepting either an `AHardwareBuffer*` (locked via `AHardwareBuffer_lockPlanes`, Y plane only, released before return) or a direct `ByteBuffer` for the ARCore `Image` path. Built with `-Wl,-z,max-page-size=16384` (Google Play 16 KB page requirement).
 - **`expo-qr-scanner`:** Expo Modules API Kotlin/Swift shells calling the C ABI. **Prebuilt binaries shipped in the npm package** (cargo-ndk → `jniLibs/arm64-v8a` in CI; iOS later: `aarch64-apple-ios{,-sim}` staticlibs → `xcodebuild -create-xcframework`, cbindgen header). Consumers never need a Rust toolchain. UniFFI/uniffi-bindgen-react-native rejected: pre-production, and the API surface is 2 functions.
 - **iOS v1 scope:** core + xcframework build script exist; Swift binding is a fast-follow, not in v1 acceptance.
 
 ## 5. Debug UI (`debug-ui/`)
 
-React + react-three-fiber + Vite, running `qrk-wasm` (debug-trace build, `serde`-serialized trace via wasm-bindgen).
+React + react-three-fiber + Vite, running `qr-lab-wasm` (debug-trace build, `serde`-serialized trace via wasm-bindgen).
 
 **Mode 1 — 3D scene:** a QR code (any version/payload, generated in-app) textured on a plane in an orbitable scene (OrbitControls); optional camera-simulation knobs (blur, noise, exposure, resolution). Every frame the canvas is read back (`readPixels` → luma) and scanned; overlays render on a 2D layer registered to the canvas. **Because the QR's world transform and camera are known, the UI projects ground-truth corner positions and displays live subpixel corner error** — real-time accuracy measurement while orbiting, the core dev loop for stage 8.
 
@@ -120,10 +120,10 @@ React + react-three-fiber + Vite, running `qrk-wasm` (debug-trace build, `serde`
 
 ## 8. Milestones (implementation-plan granularity comes next)
 
-1. Workspace + `qrk-core` skeleton + **Python fixture generator + committed golden suite** — tests first.
+1. Workspace + `qr-lab-core` skeleton + **Python fixture generator + committed golden suite** — tests first.
 2. Stages 1–3 (tile stats, finder search, grouping) + trace + WASM build.
 3. Debug UI shell + mode 2 (image) + overlay framework — from here on, every stage lands with its overlay.
 4. Stages 4–7 (version, alignment, sampling, rqrr decode) — round-trip matrix green.
 5. Stage 8 refinement + corner-accuracy harness + debug UI mode 1 (3D scene, live corner error).
-6. `qrk-ffi` + `expo-qr-scanner` Android + on-device bench vs zxing-cpp baseline.
+6. `qr-lab-ffi` + `expo-qr-scanner` Android + on-device bench vs zxing-cpp baseline.
 7. NEON stage 1, affinity, budget gate; polish; iOS build scripts.

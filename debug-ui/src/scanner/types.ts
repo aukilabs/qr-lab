@@ -1,10 +1,10 @@
-// TypeScript mirror of the JSON envelope `qrk-wasm`'s `scan_rgba` returns
+// TypeScript mirror of the JSON envelope `qr-lab-wasm`'s `scan_rgba` returns
 // (via `serde-wasm-bindgen`) and, byte-for-byte, of
 // `debug-ui/src/scanner/__snapshots__/envelope.near_00.json` — the
-// Rust-generated snapshot from `crates/qrk-wasm/tests/envelope_snapshot.rs`.
+// Rust-generated snapshot from `crates/qr-lab-wasm/tests/envelope_snapshot.rs`.
 // That snapshot is the source of truth: these field names were read off it,
 // not guessed. If `WasmResult`'s shape changes on the Rust side, regenerate
-// the snapshot (`UPDATE_SNAPSHOT=1 cargo test -p qrk-wasm --test
+// the snapshot (`UPDATE_SNAPSHOT=1 cargo test -p qr-lab-wasm --test
 // envelope_snapshot`) and update the types/parser here to match — the
 // envelope.test.ts suite fails loudly if the two drift apart.
 
@@ -33,7 +33,7 @@ export interface TripletCandidate {
 }
 
 /** A fully decoded QR payload (Plan 4 Task 6) — mirrors Rust's
- * `qrk_core::decode::DecodedCode`. `corners` is `[TL, TR, BR, BL]` in
+ * `qr_lab_core::decode::DecodedCode`. `corners` is `[TL, TR, BR, BL]` in
  * working-res image px, the same space `scan`'s other geometry lives in. */
 export interface DecodedCode {
   payload: string;
@@ -53,7 +53,7 @@ export interface DecodedCode {
    * to compare the two spaces directly. */
   refined_corners: [[number, number], [number, number], [number, number], [number, number]] | null;
   /** Per-corner refinement provenance for `refined_corners`, `[TL, TR, BR,
-   * BL]` — mirrors `qrk_core::decode::DecodedCode::corner_refined`. `[false,
+   * BL]` — mirrors `qr_lab_core::decode::DecodedCode::corner_refined`. `[false,
    * false, false, false]` when `refined_corners` is `null`; otherwise
    * `true` at index `i` iff that corner came from intersecting its two
    * adjacent fitted edge lines rather than keeping the coarse (source-
@@ -63,7 +63,7 @@ export interface DecodedCode {
   corner_refined: [boolean, boolean, boolean, boolean];
 }
 
-/** One decode attempt's trace (mirrors `qrk_core::decode::DecodeAttemptTrace`).
+/** One decode attempt's trace (mirrors `qr_lab_core::decode::DecodeAttemptTrace`).
  * `outcome === "decoded"` (or starts with `"decoded"` — see the dimension-
  * mismatch discrepancy note on the Rust struct) marks a successful decode;
  * anything else is a short failure reason. `rounds` is per-round visibility
@@ -88,7 +88,7 @@ export interface DecodeAttemptTrace {
 }
 
 /** One alignment-pattern lattice slot's predicted-vs-found position (mirrors
- * `qrk_core::trace::AlignmentTraceEntry`); finder-corner slots are excluded
+ * `qr_lab_core::trace::AlignmentTraceEntry`); finder-corner slots are excluded
  * (never searched — see the Rust doc). */
 export interface AlignmentTraceEntry {
   predicted: [number, number];
@@ -96,7 +96,7 @@ export interface AlignmentTraceEntry {
 }
 
 /** One sample region's module rectangle and the image-pixel quad its four
- * corners map to (mirrors `qrk_core::trace::SampleRegionTrace`).
+ * corners map to (mirrors `qr_lab_core::trace::SampleRegionTrace`).
  * `module_rect` is `[x0, y0, x1, y1)` in raw module units; `quad` is
  * `[TL, TR, BR, BL]` in working-res image px. */
 export interface SampleRegionTrace {
@@ -105,7 +105,7 @@ export interface SampleRegionTrace {
 }
 
 /** The last successfully decoded candidate's sampled bit matrix (mirrors
- * `qrk_core::trace::BitsTrace`) — packed row-major `u32` words, `dim` wide.
+ * `qr_lab_core::trace::BitsTrace`) — packed row-major `u32` words, `dim` wide.
  * `words.length === ceil(dim / 32) * dim`. */
 export interface BitsTrace {
   dim: number;
@@ -113,7 +113,7 @@ export interface BitsTrace {
 }
 
 /** One DECODED code's own alignment/sample-region/bits trace data (Plan 5C:
- * multi-code trace) — mirrors `qrk_core::trace::DecodedCodeTrace`. A frame
+ * multi-code trace) — mirrors `qr_lab_core::trace::DecodedCodeTrace`. A frame
  * with N decoded codes carries N of these on `Trace.codes`, so a
  * multi-code scene's overlays can visualize every decoded code, not just
  * the last one. */
@@ -130,7 +130,7 @@ export interface DecodedCodeTrace {
 }
 
 /** One outer module-region edge's subpixel refinement point counts (Plan 5
- * Task 3) — mirrors `qrk_core::trace::EdgeRefineTrace`. */
+ * Task 3) — mirrors `qr_lab_core::trace::EdgeRefineTrace`. */
 export interface EdgeRefineStat {
   points_probed: number;
   points_fit: number;
@@ -139,7 +139,7 @@ export interface EdgeRefineStat {
 }
 
 /** Subpixel corner refinement diagnostics for the last decoded candidate
- * this frame (Plan 5 Task 3) — mirrors `qrk_core::trace::RefineTrace`.
+ * this frame (Plan 5 Task 3) — mirrors `qr_lab_core::trace::RefineTrace`.
  * `edges` is `[top, right, bottom, left]` (module-space `y=0`, `x=dim`,
  * `y=dim`, `x=0`); `corner_refined` is `[TL, TR, BR, BL]`, `true` where the
  * corner came from intersecting its two adjacent edge lines rather than
@@ -168,7 +168,7 @@ export interface Detections {
   codes: DecodedCode[];
   timings: StageTimings;
   /** Working-resolution ÷ source-resolution scale (Plan 5 Task 1), mirrors
-   * `qrk_core::Detections::source_scale`: `working_dim / source_dim`,
+   * `qr_lab_core::Detections::source_scale`: `working_dim / source_dim`,
    * always `<= 1`. `1.0` whenever `scan` didn't need to downscale. Every
    * OTHER geometry field on `Detections` (and `DecodedCode.corners`) is in
    * WORKING px — divide by this to get SOURCE px: `source_px = working_px
@@ -184,7 +184,7 @@ export interface TileTrace {
   skip: boolean[];
 }
 
-/** Mirrors `qrk_core::trace::Trace`.
+/** Mirrors `qr_lab_core::trace::Trace`.
  *
  * Plan 5C (multi-code trace): `codes` carries one `DecodedCodeTrace` per
  * DECODED code this frame — a multi-code scene (e.g. `multi_07`'s 4 codes)
@@ -385,7 +385,7 @@ function parseStringArray(v: unknown, path: string): string[] {
 
 // QA finding (Plan 4 Task 7): the committed envelope snapshot (JSON text,
 // via `serde_json`) renders a Rust `None` as `null`, but the LIVE wasm
-// binding (`serde_wasm_bindgen::to_value`, `qrk-wasm/src/lib.rs`) renders it
+// binding (`serde_wasm_bindgen::to_value`, `qr-lab-wasm/src/lib.rs`) renders it
 // as `undefined` instead — `serde-wasm-bindgen`'s documented default for
 // `Option::None` fields, distinct from JSON's own `null`. Every "OrNull"
 // parser below must treat both the same, or every scan whose trace has at

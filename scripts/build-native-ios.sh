@@ -13,7 +13,7 @@ cd "$ROOT"
 
 # Workspace profile: LTO + strip (see root Cargo.toml [profile.release-mobile]).
 PROFILE="${QRK_MOBILE_PROFILE:-release-mobile}"
-HEADER="$ROOT/crates/qrk-ffi/include/qrk.h"
+HEADER="$ROOT/crates/qr-lab-ffi/include/qrk.h"
 OUT_XCFW="$ROOT/bindings/expo-cpu-scanner/ios/Qrk.xcframework"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/qrk-ios.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
@@ -37,11 +37,11 @@ for t in "$DEVICE_TARGET" "$SIM_TARGET"; do
   fi
 done
 
-echo "==> Building qrk-ffi staticlib (device, profile $PROFILE)"
-cargo build -p qrk-ffi --target "$DEVICE_TARGET" --profile "$PROFILE"
+echo "==> Building qr-lab-ffi staticlib (device, profile $PROFILE)"
+cargo build -p qr-lab-ffi --target "$DEVICE_TARGET" --profile "$PROFILE"
 
-echo "==> Building qrk-ffi staticlib (simulator)"
-cargo build -p qrk-ffi --target "$SIM_TARGET" --profile "$PROFILE"
+echo "==> Building qr-lab-ffi staticlib (simulator)"
+cargo build -p qr-lab-ffi --target "$SIM_TARGET" --profile "$PROFILE"
 
 DEVICE_LIB="$ROOT/target/$DEVICE_TARGET/$PROFILE/libqrk_ffi.a"
 SIM_LIB="$ROOT/target/$SIM_TARGET/$PROFILE/libqrk_ffi.a"
@@ -78,8 +78,8 @@ SIM_STAGED="$STAGE/sim/libqrk_ffi.a"
 cp "$DEVICE_LIB" "$DEVICE_STAGED"
 
 if rustup target list --installed | grep -qx "x86_64-apple-ios"; then
-  echo "==> Building qrk-ffi staticlib (x86_64 simulator)"
-  cargo build -p qrk-ffi --target x86_64-apple-ios --profile "$PROFILE"
+  echo "==> Building qr-lab-ffi staticlib (x86_64 simulator)"
+  cargo build -p qr-lab-ffi --target x86_64-apple-ios --profile "$PROFILE"
   X86_LIB="$ROOT/target/x86_64-apple-ios/$PROFILE/libqrk_ffi.a"
   if [[ -f "$X86_LIB" ]]; then
     lipo -create "$SIM_LIB" "$X86_LIB" -output "$SIM_STAGED"

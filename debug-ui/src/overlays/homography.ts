@@ -1,4 +1,4 @@
-// TS port of `crates/qrk-core/src/homography.rs`'s `PerspectiveTransform`
+// TS port of `crates/qr-lab-core/src/homography.rs`'s `PerspectiveTransform`
 // (`square_to_quad` + `map` only — `inverse` isn't needed by the overlay
 // layers this exists for). Kept algebraically identical to the Rust source
 // so the two never quietly drift; see `homography.test.ts` for the

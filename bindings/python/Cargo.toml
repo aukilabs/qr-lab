@@ -1,6 +1,6 @@
 [package]
-name = "qrkit-python"
-description = "Python and NumPy bindings for QRKit"
+name = "qr-lab-python"
+description = "Python and NumPy bindings for QR Lab"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -18,5 +18,5 @@ doctest = false
 numpy = "0.29.0"
 pyo3 = "0.29.0"
 pythonize = "0.29.0"
-qrkit = { path = "../../crates/qrkit", features = ["serde"] }
+qr-lab = { path = "../../crates/qr-lab", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }

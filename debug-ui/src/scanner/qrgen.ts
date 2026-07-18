@@ -1,5 +1,5 @@
 // Main-thread wrapper around the wasm `generate_qr` binding (Plan 5 Task
-// 5, feature `qr-gen` — see `crates/qrk-wasm/src/qrgen.rs`'s doc). Unlike
+// 5, feature `qr-gen` — see `crates/qr-lab-wasm/src/qrgen.rs`'s doc). Unlike
 // `scan_rgba` (which only ever runs on the scanner Worker, see
 // `scanner/worker.ts`), the 3D-scene mode needs QR generation on the MAIN
 // thread — it textures a three.js plane with the result, and three.js
@@ -8,9 +8,9 @@
 // (wasm modules aren't shared across threads without the shared-memory
 // threads proposal, which this project doesn't use) — a second `init()`
 // call here is expected, not a bug.
-import init, { generate_qr } from "../wasm/qrk_wasm.js";
+import init, { generate_qr } from "../wasm/qr_lab_wasm.js";
 
-/** Same packed shape as `qrk_core::trace::BitsTrace` (see `overlays/
+/** Same packed shape as `qr_lab_core::trace::BitsTrace` (see `overlays/
  * layers/bits.ts`'s `bitAt` for the unpacking convention this mirrors):
  * row-major `u32` words, `ceil(dim/32)` words per row, `dim` rows. */
 export interface GeneratedQr {
@@ -63,7 +63,7 @@ function ready(): Promise<void> {
  * Generate a QR bit matrix for `payload` on the main thread. `version`:
  * `0` = auto-select the smallest version that fits; `1..=40` requests
  * that exact version. `ecc`: `0..=3` for L/M/Q/H. See `generate_qr`'s
- * Rust doc (`crates/qrk-wasm/src/qrgen.rs`) for the full contract.
+ * Rust doc (`crates/qr-lab-wasm/src/qrgen.rs`) for the full contract.
  *
  * Rejects with {@link GenerateQrError} if the wasm call errors (e.g.
  * payload too large for the requested version) or its result doesn't

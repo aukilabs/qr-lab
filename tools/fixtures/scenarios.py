@@ -169,7 +169,7 @@ def _overlaps(intr, a: CodeSpec, b: CodeSpec) -> bool:
 #
 # Constants:
 _RENDER_CONTRAST = 210.0  # render.Levels: white 235 - black 25
-_CONTRAST_FLOOR = 12.0    # qrk-core binarizer skip threshold (6 sigma of the
+_CONTRAST_FLOOR = 12.0    # qr-lab-core binarizer skip threshold (6 sigma of the
                           # fixture sensor-noise model, sigma = 2.0)
 # Approximate fraction of codewords each ECC level can correct:
 _ECC_CAPACITY = {"l": 0.07, "m": 0.15, "q": 0.25, "h": 0.30}

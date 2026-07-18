@@ -7,7 +7,7 @@
 // blurring or mipmap moiré.
 //
 // `bitAt`/`wordsPerRow` mirror `overlays/layers/bits.ts`'s helpers of the
-// same name exactly (same packed format, `qrk_core::trace::BitsTrace`) —
+// same name exactly (same packed format, `qr_lab_core::trace::BitsTrace`) —
 // duplicated rather than imported, matching this codebase's established
 // precedent for small, self-contained copies across independently
 // evolving contracts (see `groundtruth-types.ts`'s doc comment on exactly

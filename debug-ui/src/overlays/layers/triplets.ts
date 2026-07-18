@@ -10,7 +10,7 @@
 // WINNER vs CANDIDATE (Plan 5C): `scan.detections.triplets` includes every
 // grouped triplet candidate, on purpose — decode arbitration resolves
 // overlapping/cross-code phantoms later, and the trace stays honest by not
-// hiding them (see `qrk_core::triplet`'s doc). In a multi-code scene those
+// hiding them (see `qr_lab_core::triplet`'s doc). In a multi-code scene those
 // phantoms visually "link" unrelated codes together with solid lime legs,
 // same as a real winner — misleading at a glance. This layer instead
 // distinguishes: a WINNER (its `finder_indices` match a decoded

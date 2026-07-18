@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `qrk-core` decodes QR payloads end to end — version estimation with cross-checks, alignment-pattern location, perspective grid sampling, rqrr decode with mirrored retry, and cross-code arbitration — gated on payload-exact decode of all 81 golden fixtures AND the two real captures, with every new stage visible as a debug-UI overlay.
+**Goal:** `qr-lab-core` decodes QR payloads end to end — version estimation with cross-checks, alignment-pattern location, perspective grid sampling, rqrr decode with mirrored retry, and cross-code arbitration — gated on payload-exact decode of all 81 golden fixtures AND the two real captures, with every new stage visible as a debug-UI overlay.
 
 **Architecture:** After triplet grouping, candidates are proximity-deduped and attempted best-first. Per candidate: dimension is fixed by cross-checks (timing-transition counting for small versions, BCH version-info bits for v≥7 — authoritative over the triplet estimate, per the recorded ver_12_v40 requirement); alignment patterns are located by parallelogram prediction + concentric re-centering; module centers are sampled through perspective transforms (single transform for v1/fallback, alignment-anchored regions otherwise) against tile thresholds, polarity-aware; the bit matrix feeds rqrr's `BitGrid` decode with a `MirroredGrid` retry. A successful decode consumes its three finders, killing the spurious cross-code triplets seen in multi scenes. Trace gains four stages, the envelope snapshot regenerates, and four new overlays land in the debug UI.
 
-**Tech Stack:** Rust; **new required qrk-core deps: `rqrr` (default-features = false → pulls only `g2p`, `lru`)** — the spec-planned decode engine; dev-deps: `qrcode` (test matrix generation), `png` (reading real-capture PNGs in gate tests). TS/debug-ui: no new deps.
+**Tech Stack:** Rust; **new required qr-lab-core deps: `rqrr` (default-features = false → pulls only `g2p`, `lru`)** — the spec-planned decode engine; dev-deps: `qrcode` (test matrix generation), `png` (reading real-capture PNGs in gate tests). TS/debug-ui: no new deps.
 
 ## Global Constraints
 
-- **Dependency change is deliberate and recorded:** qrk-core drops "zero required runtime deps" (Plan 2 wording) in favor of the spec §3.7 decision: `rqrr = { version = "0.10", default-features = false }`. License MIT/Apache-2.0 + ISC. No other new runtime deps; `serde`/`js-sys` stay optional/target-gated. `#![forbid(unsafe_code)]` stays.
+- **Dependency change is deliberate and recorded:** qr-lab-core drops "zero required runtime deps" (Plan 2 wording) in favor of the spec §3.7 decision: `rqrr = { version = "0.10", default-features = false }`. License MIT/Apache-2.0 + ISC. No other new runtime deps; `serde`/`js-sys` stay optional/target-gated. `#![forbid(unsafe_code)]` stays.
 - **No overfitting (standing user directive):** fixtures verify, never tune. Every new constant carries a principled derivation (ISO 18004, zxing/zxing-cpp practice, or an explicit noise model). Gate-failure protocol from Plan 2 applies verbatim (exact miss lists, DONE_WITH_CONCERNS, controller decision recorded here).
 - Pinned constants (in `consts.rs`, each with a provenance comment):
   - Version-info BCH(18,6): correct ≤ 3 bit errors (min distance 8, ISO 18004) — reject at ≥4.
@@ -30,7 +30,7 @@
 ## File Structure
 
 ```
-crates/qrk-core/src/
+crates/qr-lab-core/src/
   version.rs      timing-transition count + BCH version-info decode (+ tables)
   alignment.rs    Annex E coordinate table + prediction + concentric re-centering
   sample.rs       provisional transform, alignment-anchored region transforms, module sampling → BitMatrix
@@ -39,8 +39,8 @@ crates/qrk-core/src/
   scanner.rs      detect() gains stages 4-7 + timings fields
   trace.rs        new stage records
   consts.rs       new pinned constants
-crates/qrk-core/tests/decode_gate.rs      gates 1-3
-crates/qrk-wasm/tests/envelope_snapshot.rs (regenerated snapshot)
+crates/qr-lab-core/tests/decode_gate.rs      gates 1-3
+crates/qr-lab-wasm/tests/envelope_snapshot.rs (regenerated snapshot)
 debug-ui/src/overlays/layers/{alignment,samplegrid,bits,decoded}.ts (+ tests)
 debug-ui/src/scanner/types.ts             extended
 ```
@@ -49,7 +49,7 @@ debug-ui/src/scanner/types.ts             extended
 
 ### Task 1: Packed bit matrix + rqrr BitGrid adapter + decode smoke
 
-**Files:** Create `crates/qrk-core/src/bitmatrix.rs`; modify `Cargo.toml` (rqrr required; qrcode+png dev), `lib.rs`.
+**Files:** Create `crates/qr-lab-core/src/bitmatrix.rs`; modify `Cargo.toml` (rqrr required; qrcode+png dev), `lib.rs`.
 
 **Interfaces:**
 - `pub struct BitMatrix { pub dim: usize /* rows == cols */, words: Vec<u32> /* row-major, ceil(dim/32) words per row */ }` with `new(dim)`, `get(x, y) -> bool`, `set(x, y, v)`, `words(&self) -> &[u32]` (trace serialization), `words_per_row()`.
@@ -115,7 +115,7 @@ mod tests {
 }
 ```
 
-**Steps:** deps → tests fail → implement → green; `cargo tree -p qrk-core -e normal` shows exactly rqrr+g2p+lru (record output in report); workspace green; commit.
+**Steps:** deps → tests fail → implement → green; `cargo tree -p qr-lab-core -e normal` shows exactly rqrr+g2p+lru (record output in report); workspace green; commit.
 
 ---
 
@@ -181,7 +181,7 @@ Plus integration-style tests using synthetic renders: rasterize a v7 and a v20 c
   4. Every attempt records a `DecodeAttemptTrace { triplet_index, dimension_est, dimension_final, timing_check: Option<u32>, version_bits: Option<u32>, alignment_found: u32, alignment_total: u32, oob_fraction: f64, outcome: String /* "decoded" | failure reason */ }`.
 - `detect()`/`detect_with` gain the stages; `Detections` gains `codes: Vec<DecodedCode>`; `StageTimings` gains `version_ns, alignment_ns, sample_decode_ns`.
 
-**Gate test `crates/qrk-core/tests/decode_gate.rs` (structure verbatim, assertions per the Global Constraints gates):** iterate `common::load_all()`, `detect`, assert per-code payload/version/mirrored exact and per-fixture decoded count == ground-truth count; then the real-capture section: decode `fixtures/real/real_{1,2}.png` via the `png` dev-dep (grayscale or RGB→luma via `luma_from_rgba`), NN-downscale to 1280 with a test-local copy of the production formula, assert the pinned payloads. Report per-prefix decode stats.
+**Gate test `crates/qr-lab-core/tests/decode_gate.rs` (structure verbatim, assertions per the Global Constraints gates):** iterate `common::load_all()`, `detect`, assert per-code payload/version/mirrored exact and per-fixture decoded count == ground-truth count; then the real-capture section: decode `fixtures/real/real_{1,2}.png` via the `png` dev-dep (grayscale or RGB→luma via `luma_from_rgba`), NN-downscale to 1280 with a test-local copy of the production formula, assert the pinned payloads. Report per-prefix decode stats.
 
 ---
 
@@ -226,6 +226,6 @@ b. **v40 `sample_decode` cost.** Measured ~24.5ms host-side for a v40 candidate'
 c. **Attempt cap should count rounds, not attempts.** `MAX_DECODE_ATTEMPTS` (`consts.rs`, currently 24) counts *attempts* (one triplet at one corner-rotation), but since Task 5b a single attempt can now spend up to 3 sample+decode *rounds* (parallelogram + up to two edge-fit refinement retries — see `DecodeAttemptTrace::rounds`). The cap's original "≈4 codes/frame × 3 rotations × 2 headroom" budget reasoned in attempts, not rounds, so the real worst-case round count per frame is now up to 3x higher than that budget assumed. Not a correctness bug — every round is still RS-validated before anything is trusted — but the cap should be re-derived (or re-expressed) in rounds so its stated provenance stays accurate; left for a follow-up pass rather than re-deriving the constant under final-review time pressure.
 d. **Rotation-retry starvation of the 9th+ candidate on cluttered frames.** `decode_candidates`' corner-role rotation retry (see `rotated_corner_roles_still_decode_via_rotation_retry`) can, on a sufficiently cluttered frame with many candidate triplets, consume enough of the attempt cap retrying mis-assigned corner roles that a legitimate 9th-or-later candidate never gets attempted. Acceptable within this project's stated 4-codes-per-frame envelope (the cap's own headroom comfortably covers it there); flagged to monitor if real-world frame counts grow past that envelope, not to fix now.
 e. **Dead timing-adopt branch.** The dimension-refinement pipeline's timing cross-check (module doc, step 1) has a code path for adopting the timing-derived dimension that, per the current gate suite and real-capture corpus, is never actually exercised as live/reachable in practice (the version-info-bits check or the geometric estimate already agree in every observed case that reaches it). Recorded to either gain a `debug_assert!` documenting the invariant that makes it unreachable, or be removed outright, once someone re-verifies which — left as a follow-up rather than deleting code whose necessity hasn't been re-confirmed at final review.
-f. **EXIF orientation mismatch, host vs. browser.** The browser path's `createImageBitmap` (see `debug-ui/src/App.tsx` and `useImageSource.ts`) honors EXIF orientation tags automatically; the Rust host-side examples (e.g. `crates/qrk-core/examples/decode_photo.rs`) do not perform any EXIF-orientation correction. This means a real photo with a non-identity EXIF orientation tag can present a *different* pixel frame (rotated/flipped) to the host pipeline than to the browser pipeline for the exact same source file. Not a bug in either path individually — recorded so a future cross-checked host/browser comparison isn't misattributed to a decode regression when it's actually this orientation mismatch.
+f. **EXIF orientation mismatch, host vs. browser.** The browser path's `createImageBitmap` (see `debug-ui/src/App.tsx` and `useImageSource.ts`) honors EXIF orientation tags automatically; the Rust host-side examples (e.g. `crates/qr-lab-core/examples/decode_photo.rs`) do not perform any EXIF-orientation correction. This means a real photo with a non-identity EXIF orientation tag can present a *different* pixel frame (rotated/flipped) to the host pipeline than to the browser pipeline for the exact same source file. Not a bug in either path individually — recorded so a future cross-checked host/browser comparison isn't misattributed to a decode regression when it's actually this orientation mismatch.
 g. **Timing exact-agreement + alignment-probe noise robustness.** The timing cross-check's "adopt within ±2 modules" rule and the alignment concentric re-centering probe's tolerances are both derived from the synthetic fixture suite plus the two real captures on hand; as the real-capture corpus grows, both should be revisited against a wider noise distribution (sensor noise, compression artifacts, motion blur) than what two captures can characterize. No action needed now — recorded so this isn't forgotten once more real photos are available.
 h. **`samplegrid` overlay draws region borders only.** Task 6's spec called for the sample-grid overlay to draw "region borders + every 4th module line" for a visual sense of the sampled grid's density. The shipped `debug-ui/src/overlays/layers/samplegrid.ts` deliberately draws only the region-border quads (see that file's own header comment) — expanding `SampleRegionTrace`'s corner-quad-only serialization back into a per-module grid client-side was judged not worth the added draw cost at v40 (up to 36 regions). Recorded as an intentional deviation from the original task description, not an oversight.

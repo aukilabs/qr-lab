@@ -1,7 +1,7 @@
 // Pure color math for the 3D scene's QR-appearance controls (Plan 5d):
 // hex parsing + the scanner's own luma formula (same 77/150/29 fixed-point
 // coefficients as `media/luma.ts`'s `lumaAt`/`lumaBufferFromRgba`, in turn
-// mirroring `qrk_core::luma_from_rgba`) applied to the two flat colors a
+// mirroring `qr_lab_core::luma_from_rgba`) applied to the two flat colors a
 // user picks (ink, background) rather than a sampled pixel — so
 // `expectedInverted` reasons about the SAME luma the scanner's binarizer
 // would derive from those colors once rendered.
@@ -32,7 +32,7 @@ export function rgbToHex(r: number, g: number, b: number): string {
 }
 
 /**
- * `qrk_core::luma_from_rgba`'s exact per-pixel formula (BT.601-ish
+ * `qr_lab_core::luma_from_rgba`'s exact per-pixel formula (BT.601-ish
  * fixed-point coefficients, 77/150/29 over 256, rounded), applied to a
  * single flat color rather than a sampled buffer pixel — the same
  * arithmetic as `media/luma.ts`'s `lumaAt`/`lumaBufferFromRgba`, kept as an

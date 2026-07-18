@@ -6,7 +6,7 @@
 
 **Architecture:** A new `scan()` entry point owns both views: it downscales the source luma internally (production NN formula moves into Rust), detects at working resolution, but samples modules and refines corners against the **source-resolution** luma through scale-composed transforms. Refinement (stage 8): for each decoded code, the bit matrix identifies dark border modules; perpendicular gradient profiles at their edge crossings are localized by quadratic peak interpolation (Devernay), each edge gets a gradient-weighted total-least-squares line fit with one outlier-rejection pass, and adjacent lines intersect into `refined_corners` (source px). The debug UI gains mode 1: an orbitable react-three-fiber scene rendering a known QR with a known camera, projecting analytic ground-truth corners and displaying live refined-corner error while you orbit.
 
-**Tech Stack:** Rust (no new required deps); debug-ui adds `three` + `@react-three/fiber` (+ `@react-three/drei` for OrbitControls); `qrcode` becomes a (dev→) feature dep of qrk-wasm for in-browser QR generation.
+**Tech Stack:** Rust (no new required deps); debug-ui adds `three` + `@react-three/fiber` (+ `@react-three/drei` for OrbitControls); `qrcode` becomes a (dev→) feature dep of qr-lab-wasm for in-browser QR generation.
 
 ## Global Constraints
 
@@ -27,14 +27,14 @@
 ## File Structure
 
 ```
-crates/qrk-core/src/
+crates/qr-lab-core/src/
   scan.rs          scan() orchestration: owned downscale, dual-view plumbing, refine call
   downscale.rs     NN downscale (production formula, moved from TS scan path; tested vs the TS vectors)
   refine.rs        edge probing, Devernay profiles, weighted TLS, intersections
   decode.rs        round budget; sample_module_ink reads SOURCE view via scale-composed transform
   consts.rs        new pinned constants
-crates/qrk-core/tests/refine_gate.rs
-crates/qrk-wasm/   scan_rgba(source, max_dim, with_trace, refine); feature "qr-gen" (qrcode) for generate_qr
+crates/qr-lab-core/tests/refine_gate.rs
+crates/qr-lab-wasm/   scan_rgba(source, max_dim, with_trace, refine); feature "qr-gen" (qrcode) for generate_qr
 debug-ui/src/
   scanner/{worker,client,types}.ts   source-through plumbing; refined corners
   overlays/layers/refined.ts         refined vs coarse corner overlay (+ per-corner error vs ground truth when available)
@@ -69,7 +69,7 @@ debug-ui/src/
 
 ### Task 5: Debug UI mode 1 — 3D orbit scene with live corner error
 
-- deps: three/@react-three/fiber/@react-three/drei (recorded; dev tool only). qrk-wasm feature `qr-gen`: `generate_qr(payload, version?, ecc?) -> {dim, words}` via the qrcode crate (compiled into the debug wasm build only — keep the mobile-relevant default build free of it; verify via a feature-gated cargo check).
+- deps: three/@react-three/fiber/@react-three/drei (recorded; dev tool only). qr-lab-wasm feature `qr-gen`: `generate_qr(payload, version?, ecc?) -> {dim, words}` via the qrcode crate (compiled into the debug wasm build only — keep the mobile-relevant default build free of it; verify via a feature-gated cargo check).
 - `scene3d/`: mode tab "3D Scene"; a plane textured with a generated QR (canvas-rendered from the bit matrix, configurable payload/version + physical size), OrbitControls camera; per-frame: renderer canvas → rgba → ScannerClient.scan (latest-wins absorbs); overlays reuse the existing registry on a 2D layer over the WebGL canvas.
 - **Ground truth**: project the plane's module-region corners through the three.js camera (Vector3.project → px) each frame; error panel shows per-corner |refined − truth| in px with rolling mean/p95 sparkline — the live accuracy meter.
 - Camera-sim knobs: resolution (render target size), Gaussian blur (2-pass shader or ctx.filter), sensor noise (post-process), exposure offset — each a slider; document that these are approximations.

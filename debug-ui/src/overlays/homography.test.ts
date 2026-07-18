@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mapPoint, squareToQuad, type Point2 } from "./homography";
 
-// Same Q used by crates/qrk-core/src/homography.rs's `#[cfg(test)] mod
+// Same Q used by crates/qr-lab-core/src/homography.rs's `#[cfg(test)] mod
 // tests` — kept byte-identical so this file's assertions are checking the
 // TS port against the Rust source of truth, not an independently invented
 // fixture.

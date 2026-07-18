@@ -1,7 +1,7 @@
 # qrk debug UI
 
-A React + Vite app for visually driving the `qrk-core` QR scanner (compiled
-to WASM via `qrk-wasm`) against golden fixtures, real photos, and arbitrary
+A React + Vite app for visually driving the `qr-lab-core` QR scanner (compiled
+to WASM via `qr-lab-wasm`) against golden fixtures, real photos, and arbitrary
 dropped images/videos — with every detection stage rendered as an
 independently togglable overlay and a live per-stage timings panel. This is
 a development tool, not a product: plain CSS, no component library, no
@@ -10,7 +10,7 @@ router.
 ## Setup
 
 From the repo root, the WASM package must be built once (and rebuilt any
-time `crates/qrk-core`/`crates/qrk-wasm` change) before the app can run —
+time `crates/qr-lab-core`/`crates/qr-lab-wasm` change) before the app can run —
 `predev`/`prebuild` check for it and fail with a pointer to this command if
 it's missing:
 
@@ -41,7 +41,7 @@ regenerate `public/fixtures-manifest.json` (gitignored) from whatever is
 currently on disk in `fixtures/` — see `scripts/gen-fixture-manifest.mjs`.
 
 A rebuilt WASM package is picked up on the **next full page reload** — the
-worker imports `src/wasm/qrk_wasm.js` once at startup, so `npm run
+worker imports `src/wasm/qr_lab_wasm.js` once at startup, so `npm run
 build:wasm` followed by a browser reload (not just a fixture change) is
 required to pick up new Rust code while `npm run dev` keeps running.
 
@@ -64,8 +64,8 @@ required to pick up new Rust code while `npm run dev` keeps running.
                        ▼
                   ScannerClient.scan(rgba, w, h, {maxDim, refine})
                        →  scanner/worker.ts (Web Worker), full-res rgba
-                       │     scan_rgba() from qrk-wasm — luma + the NN
-                       │     downscale now happen in Rust (qrk_core::scan)
+                       │     scan_rgba() from qr-lab-wasm — luma + the NN
+                       │     downscale now happen in Rust (qr_lab_core::scan)
                        ▼
                   ScanResult { detections: { finders, triplets, codes,
                                               timings, source_scale },
@@ -97,14 +97,14 @@ Key modules:
 - `scanner/types.ts` — the TS mirror of the WASM envelope. **Cross-language
   contract**: field names come from
   `scanner/__snapshots__/envelope.near_00.json`, a Rust-generated snapshot
-  (`crates/qrk-wasm/tests/envelope_snapshot.rs`), not from guessing. If
+  (`crates/qr-lab-wasm/tests/envelope_snapshot.rs`), not from guessing. If
   `WasmResult`'s Rust shape changes, regenerate the snapshot
-  (`UPDATE_SNAPSHOT=1 cargo test -p qrk-wasm --test envelope_snapshot`) and
+  (`UPDATE_SNAPSHOT=1 cargo test -p qr-lab-wasm --test envelope_snapshot`) and
   update `parseScanResult` to match — `envelope.test.ts` fails loudly on
   drift. **Gotcha (found by Plan 4 Task 7's live-browser QA, fixed in the
   same task):** the snapshot is JSON text (`serde_json`), which renders a
   Rust `Option::None` as `null` — but the REAL `scan_rgba` binding
-  (`serde_wasm_bindgen::to_value`, `qrk-wasm/src/lib.rs`) renders `None` as
+  (`serde_wasm_bindgen::to_value`, `qr-lab-wasm/src/lib.rs`) renders `None` as
   `undefined` instead (key present, value `undefined`), `serde-wasm-bindgen`'s
   documented default. Every "OrNull" parser in this file (`parseNumberOrNull`,
   `parsePairOrNull`, `parseBitsTraceOrNull`, `parseTileTraceOrNull`,
@@ -201,7 +201,7 @@ Media mode's sidebar gains a "Robust" panel whose master **Robust mode**
 checkbox (off by default — when off the scan path is byte-identical to the
 classic behavior) routes `App.runScan` through
 `ScannerClient.scanRobust` → `scan_rgba_robust`, the adaptive escalation
-ladder (`qrk_core::scan_robust`), instead of the plain `scan_rgba`. Works
+ladder (`qr_lab_core::scan_robust`), instead of the plain `scan_rgba`. Works
 in both image and video mode (the shared latest-wins queue covers video —
 a robust request and a plain request occupy the SAME slot, so a newer
 request of either kind supersedes a queued one of either kind); the 3D
@@ -298,7 +298,7 @@ mean (−30%), +13% triplet-evidence frames, zero payload loss.**
 - **Two knobs** (both min 1): `rotation period` (default 3) — how many
   frames a full ladder rotation spans; `pool TTL frames` (default 4) — how
   long a pooled candidate survives before it's evicted. They map to
-  `qrk_core::SessionConfig`'s defaults.
+  `qr_lab_core::SessionConfig`'s defaults.
 - **Video + robust only.** The toggle and inputs render always but App gates
   their USE to `source.mediaKind === "video"` with robust mode on; still
   images and the classic (non-robust) path are byte-identical to before —
@@ -366,7 +366,7 @@ accuracy meter you can orbit around.
   frame, plus a 60-sample rolling mean/p95 sparkline (mirrors
   `TimingsPanel`'s pattern).
 - `scene3d/qrTexture.ts` — canvas-renders the wasm-generated bit matrix
-  (`qrk-wasm`'s `qr-gen` feature, `scanner/qrgen.ts`) into a
+  (`qr-lab-wasm`'s `qr-gen` feature, `scanner/qrgen.ts`) into a
   `CanvasTexture`; `NearestFilter` (mag) for sharp edges,
   `LinearMipMapLinearFilter` (min) to avoid aliasing under keystone.
 
@@ -447,7 +447,7 @@ of Plan 5 Task 5's original scene.
 - **"reads as: normal/inverted" + low-contrast warning**
   (`scene3d/colorUtils.ts`): the code's inverted-polarity status is
   EMERGENT from `luma(ink)` vs `luma(bg)` (same BT.601 fixed-point
-  coefficients as `qrk_core::luma_from_rgba`) — no separate flag. A
+  coefficients as `qr_lab_core::luma_from_rgba`) — no separate flag. A
   warning fires when `|Δluma| < CONTRAST_WARN_THRESHOLD` (30, chosen with
   headroom above the Rust detector's actual per-tile `CONTRAST_FLOOR`,
   12) since blur/noise/exposure erode contrast further on top of a user's
@@ -506,7 +506,7 @@ of Plan 5 Task 5's original scene.
     `capturedRgba`) so it survives later ticks mutating scratch buffers.
   - `.png`: that rgba through a temporary canvas's `toBlob('image/png')`.
   - `.luma`: `media/luma.ts`'s `lumaBufferFromRgba` — the exact
-    `qrk_core::luma_from_rgba` fixed-point formula (77/150/29 over 256),
+    `qr_lab_core::luma_from_rgba` fixed-point formula (77/150/29 over 256),
     not an approximation; verified byte-identical against a
     Python/Pillow-derived luma plane of the same PNG in this feature's
     headless QA pass (see Verification below).
@@ -529,7 +529,7 @@ of Plan 5 Task 5's original scene.
     pickers (`probeInvertedFromRgba`: sample luma 0.5 modules diagonally
     inside the TL module-region corner [finder ink] vs 0.5 modules
     outside [paper/scene], the same probe geometry as
-    `crates/qrk-core/tests/fixtures_smoke.rs`; `inverted =
+    `crates/qr-lab-core/tests/fixtures_smoke.rs`; `inverted =
     lumaInside > lumaOutside`) — necessary because with a translucent
     paper the effective background is whatever the scene composites
     behind it, and gates hard-branch on this flag; if the probe's
@@ -605,7 +605,7 @@ this list).
 
 1. **Extend the contract, if the new stage needs new envelope fields.**
    Add the field(s) to the Rust `WasmResult`/`Trace`/`Detections` types,
-   regenerate the snapshot (`UPDATE_SNAPSHOT=1 cargo test -p qrk-wasm
+   regenerate the snapshot (`UPDATE_SNAPSHOT=1 cargo test -p qr-lab-wasm
    --test envelope_snapshot`), then mirror the new field(s) in
    `scanner/types.ts` (interface + `parse*` function) so
    `envelope.test.ts` keeps passing. Skip this step if your layer only

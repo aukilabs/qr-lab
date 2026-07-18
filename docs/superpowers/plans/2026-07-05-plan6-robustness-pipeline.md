@@ -320,7 +320,7 @@ exactly, and the robustness families get their own reporting + a ratchet gate
 
 ## 6. Metrics (benchmark harness)
 
-New `qrk-bench` binary (workspace member, depends on qrk-core; JSON output):
+New `qr-lab-bench` binary (workspace member, depends on qr-lab-core; JSON output):
 runs {fixture × config-preset × working-dim} and emits machine-readable
 records: per-fixture (name, family, difficulty, degradation params, apparent
 px/module) × per-config: detected/decoded per code, corner error vs truth,
@@ -336,7 +336,7 @@ budget.
 
 Branch `plan6-robustness`. Files:
 
-1. **qrk-core**: `enhance.rs` (box_downscale_2x, bilinear_upscale_2x,
+1. **qr-lab-core**: `enhance.rs` (box_downscale_2x, bilinear_upscale_2x,
    box_blur_running / background_divide, unsharp_5tap, structure_tensor_theta,
    directional_unsharp — all pure fixed-point, unit-tested against small
    analytic images); `tiles.rs` (+ `build_with(view, offset, contrast_floor)`,
@@ -351,7 +351,7 @@ Branch `plan6-robustness`. Files:
 3. **tests**: gates updated for expectations + count; new `robustness_gate.rs`
    (ratchet vs committed baseline results JSON); keep the bit-identical
    baseline pin green.
-4. **qrk-bench**: batch runner + JSON emitter (+ optional real-frame mode:
+4. **qr-lab-bench**: batch runner + JSON emitter (+ optional real-frame mode:
    PNG dir).
 5. **Experiments** (parallel worktrees on top of the infra branch): E1 multi-
    scale, E2 contrast/threshold sweep, E3 shadow normalization + Sauvola,
@@ -534,7 +534,7 @@ irreducible full-ladder-per-frame floor that per-frame variant rotation
 
 ### 9.2 ScanSession: temporal amortization for video (2026-07-05)
 
-`ScanSession` (public, `qrk-core`) is the stateful multi-frame entry point
+`ScanSession` (public, `qr-lab-core`) is the stateful multi-frame entry point
 for a continuous camera stream, sitting above single-frame `scan_robust`
 (unchanged; still the right call for stills). Two deterministic mechanisms
 (the frame counter drives everything — a session replayed on identical
@@ -556,7 +556,7 @@ frames produces identical output):
    is self-correcting and cannot fabricate a code (verified: zero spurious
    payloads over 368 real frames).
 
-Measured (11-34-54, 368 frames, robust-fast, max-dim 1280; `qrk-bench
+Measured (11-34-54, 368 frames, robust-fast, max-dim 1280; `qr-lab-bench
 --session`): mean **31.9 → 22.5 ms/frame (−30 %)**, triplet-evidence frames
 **85 → 96 (+13 %** — more AR track-points), and every distinct payload still
 captured (5/5; the 3 frames that dropped a single-frame decode each recover

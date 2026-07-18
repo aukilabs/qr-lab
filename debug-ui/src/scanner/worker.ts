@@ -1,4 +1,4 @@
-// Scanner Web Worker: loads the qrk-wasm package once, then services scan
+// Scanner Web Worker: loads the qr-lab-wasm package once, then services scan
 // requests off the main thread so a 24MP frame's detection cost never
 // blocks the UI. Kept thin per plan: result validation happens client-side
 // (client.ts) via parseScanResult/parseRobustScanResult — this file only
@@ -6,7 +6,7 @@
 //
 // Plan 5 Task 1: this file no longer downscales. `scan_rgba` now takes the
 // SOURCE rgba + `maxDim` directly and owns the NN downscale in Rust (see
-// `qrk_core::scan`/`downscale_luma`) — this worker just forwards the full
+// `qr_lab_core::scan`/`downscale_luma`) — this worker just forwards the full
 // frame it was sent. Worker traffic has ALWAYS carried the full source
 // frame (App sends source rgba; pre-Task-1 the worker downscaled it after
 // receipt) — Task 1 only moved WHERE the downscale computes (JS→Rust); a
@@ -49,7 +49,7 @@ import init, {
   scan_rgba,
   scan_rgba_robust,
   WasmScanSession,
-} from "../wasm/qrk_wasm.js";
+} from "../wasm/qr_lab_wasm.js";
 
 interface ScanRequestMessage {
   type: "scan";
@@ -126,8 +126,8 @@ type RequestMessage =
 
 /** Just the two fields this file reads off `scan_rgba`/`scan_rgba_robust`'s
  * return value before forwarding the whole (otherwise opaque) result to
- * the main thread — the working resolution `qrk_core::scan` actually
- * picked (see `qrk_wasm::WasmResult::scan_width`/`scan_height`); both
+ * the main thread — the working resolution `qr_lab_core::scan` actually
+ * picked (see `qr_lab_wasm::WasmResult::scan_width`/`scan_height`); both
  * envelopes carry the same two fields. */
 interface ScanRgbaResult {
   scan_width: number;
@@ -266,7 +266,7 @@ ctx.addEventListener("message", (ev) => {
 
     try {
       // scan_rgba wants a Uint8Array view over the SOURCE rgba's bytes —
-      // no copy, and no local downscale: `qrk_core::scan` owns that now
+      // no copy, and no local downscale: `qr_lab_core::scan` owns that now
       // (see this file's module doc comment).
       const full = new Uint8ClampedArray(msg.rgba);
       const view = new Uint8Array(full.buffer, full.byteOffset, full.byteLength);

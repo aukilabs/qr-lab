@@ -452,51 +452,100 @@ dependencies = [
 ]
 
 [[package]]
-name = "qrcode"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+name = "qr-lab"
+version = "0.1.0"
+dependencies = [
+ "qr-lab-geometry",
+ "qr-lab-image",
+ "qr-lab-imgproc",
+ "qr-lab-qr",
+]
 
 [[package]]
-name = "qrk-bench"
+name = "qr-lab-bench"
 version = "0.1.0"
 dependencies = [
  "png",
- "qrkit",
+ "qr-lab",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "qrk-core"
+name = "qr-lab-core"
 version = "0.1.0"
 dependencies = [
  "png",
+ "qr-lab-geometry",
+ "qr-lab-image",
+ "qr-lab-imgproc",
+ "qr-lab-qr",
  "qrcode",
- "qrkit-geometry",
- "qrkit-image",
- "qrkit-imgproc",
- "qrkit-qr",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "qrk-ffi"
+name = "qr-lab-ffi"
 version = "0.1.0"
 dependencies = [
  "jni",
- "qrkit",
+ "qr-lab",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "qrk-wasm"
+name = "qr-lab-geometry"
 version = "0.1.0"
 dependencies = [
+ "qr-lab-image",
+]
+
+[[package]]
+name = "qr-lab-image"
+version = "0.1.0"
+
+[[package]]
+name = "qr-lab-imgproc"
+version = "0.1.0"
+dependencies = [
+ "qr-lab-geometry",
+ "qr-lab-image",
+]
+
+[[package]]
+name = "qr-lab-python"
+version = "0.1.0"
+dependencies = [
+ "numpy",
+ "pyo3",
+ "pythonize",
+ "qr-lab",
+ "serde",
+]
+
+[[package]]
+name = "qr-lab-qr"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "png",
+ "qr-lab-geometry",
+ "qr-lab-image",
+ "qr-lab-imgproc",
  "qrcode",
- "qrkit",
+ "rqrr",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "qr-lab-wasm"
+version = "0.1.0"
+dependencies = [
+ "qr-lab",
+ "qrcode",
  "serde",
  "serde-wasm-bindgen",
  "serde_bytes",
@@ -505,59 +554,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "qrkit"
-version = "0.1.0"
-dependencies = [
- "qrkit-geometry",
- "qrkit-image",
- "qrkit-imgproc",
- "qrkit-qr",
-]
-
-[[package]]
-name = "qrkit-geometry"
-version = "0.1.0"
-dependencies = [
- "qrkit-image",
-]
-
-[[package]]
-name = "qrkit-image"
-version = "0.1.0"
-
-[[package]]
-name = "qrkit-imgproc"
-version = "0.1.0"
-dependencies = [
- "qrkit-geometry",
- "qrkit-image",
-]
-
-[[package]]
-name = "qrkit-python"
-version = "0.1.0"
-dependencies = [
- "numpy",
- "pyo3",
- "pythonize",
- "qrkit",
- "serde",
-]
-
-[[package]]
-name = "qrkit-qr"
-version = "0.1.0"
-dependencies = [
- "js-sys",
- "png",
- "qrcode",
- "qrkit-geometry",
- "qrkit-image",
- "qrkit-imgproc",
- "rqrr",
- "serde",
- "serde_json",
-]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quote"

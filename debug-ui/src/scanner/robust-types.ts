@@ -1,7 +1,7 @@
-// TypeScript mirror of the Plan 6 robust envelope `qrk-wasm`'s
+// TypeScript mirror of the Plan 6 robust envelope `qr-lab-wasm`'s
 // `scan_rgba_robust` returns (via `serde-wasm-bindgen`) and, byte-for-byte,
 // of `debug-ui/src/scanner/__snapshots__/envelope.robust.shadow_04.json` —
-// the Rust-generated snapshot from `crates/qrk-wasm/tests/
+// the Rust-generated snapshot from `crates/qr-lab-wasm/tests/
 // envelope_snapshot.rs`. That snapshot is the source of truth: field names
 // were read off it, not guessed. If `WasmRobustResult`'s Rust shape changes,
 // regenerate the snapshot and update the types/parser here to match —
@@ -56,7 +56,7 @@ export const BARE_VARIANT_KINDS = [
 
 export type BareVariantKind = (typeof BARE_VARIANT_KINDS)[number];
 
-/** Mirrors `qrk_core::ladder::VariantKind` — an externally tagged serde
+/** Mirrors `qr_lab_core::ladder::VariantKind` — an externally tagged serde
  * enum: unit variants cross as bare strings, payload variants as a
  * single-key object (`{"Pyramid":{"level":1}}`). */
 export type VariantKind =
@@ -68,7 +68,7 @@ export type VariantKind =
   | { VanCittert: { theta_deg: number; len: number } };
 
 /** One decoded code plus its ladder provenance — mirrors
- * `qrk_core::ladder::RobustCode`. Coordinate spaces (load-bearing, from the
+ * `qr_lab_core::ladder::RobustCode`. Coordinate spaces (load-bearing, from the
  * Rust doc): `corners_source`/`refined_corners_source` are SOURCE px;
  * `code.corners` stays in that code's own VARIANT working px — never draw
  * those directly. */
@@ -83,7 +83,7 @@ export interface RobustCode {
 }
 
 /** One ladder rung's execution record — mirrors
- * `qrk_core::ladder::VariantRecord`. `variants[0]` is always the baseline
+ * `qr_lab_core::ladder::VariantRecord`. `variants[0]` is always the baseline
  * pass. */
 export interface VariantRecord {
   kind: VariantKind;
@@ -99,7 +99,7 @@ export interface VariantRecord {
 }
 
 /** One ladder variant's grayscale buffer thumbnail (capture mode only) —
- * mirrors `qrk_wasm::WasmSnapshot`; ≤320px longest side, one entry per
+ * mirrors `qr_lab_wasm::WasmSnapshot`; ≤320px longest side, one entry per
  * `variants` record, same order. */
 export interface RobustSnapshot {
   kind: VariantKind;
@@ -113,7 +113,7 @@ export interface RobustSnapshot {
   luma: Uint8Array;
 }
 
-/** One frame's ladder result — mirrors `qrk_core::ladder::RobustDetections`. */
+/** One frame's ladder result — mirrors `qr_lab_core::ladder::RobustDetections`. */
 export interface RobustDetections {
   /** Accepted (deduplicated) codes, cheapest rung first. */
   codes: RobustCode[];
@@ -126,7 +126,7 @@ export interface RobustDetections {
   triplet_evidence: [number, number][];
 }
 
-/** Mirrors `qrk_wasm::WasmRobustResult` — the one-pipeline contract:
+/** Mirrors `qr_lab_wasm::WasmRobustResult` — the one-pipeline contract:
  * `detections` has EXACTLY the classic envelope's shape and conventions
  * (finders/triplets/codes in working px, `source_scale`, baseline stage
  * timings), assembled in Rust from the ladder's cross-variant union, so
@@ -143,8 +143,8 @@ export interface RobustScanResult {
   scan_height: number;
 }
 
-/** camelCase mirror of `qrk_wasm::RobustConfig` (itself mirroring
- * `qrk_core::ScanConfig`) — the plain object `scan_rgba_robust` takes and
+/** camelCase mirror of `qr_lab_wasm::RobustConfig` (itself mirroring
+ * `qr_lab_core::ScanConfig`) — the plain object `scan_rgba_robust` takes and
  * `robust_presets()` returns. */
 export interface RobustConfig {
   enableMultiScale: boolean;
@@ -159,7 +159,7 @@ export interface RobustConfig {
   enableEarlyExit: boolean;
 }
 
-/** Mirrors `qrk_wasm::RobustPresets` — the authoritative Rust preset
+/** Mirrors `qr_lab_wasm::RobustPresets` — the authoritative Rust preset
  * values (`ScanConfig::{BASELINE, ROBUST_FAST, ROBUST_FULL_BENCHMARK}`),
  * fetched at runtime so the UI never hardcodes copies that could drift. */
 export interface RobustPresets {
@@ -264,7 +264,7 @@ export function variantKindLabel(kind: VariantKind): string {
 
 /** One color per ladder stage (0 = baseline … 6 = deblur, 7 = cross-variant
  * pool — the Plan 6 §9 stage numbering, see `VariantKind::stage()` in
- * `qrk-core`). Stage 0 reuses the decoded layer's green family
+ * `qr-lab-core`). Stage 0 reuses the decoded layer's green family
  * (`decoded.ts`'s `DECODED_COLOR`) so a baseline-found code reads as "the
  * normal case"; recovery stages get visually distinct hues. */
 const STAGE_COLORS = [

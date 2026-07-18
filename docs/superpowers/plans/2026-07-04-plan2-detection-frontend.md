@@ -2,16 +2,16 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `qrk-core` detects QR finder patterns and groups them into ordered triplet candidates on every fixture in the golden suite — both polarities, no white-plate assumption — with per-stage tracing and a compiling WASM target.
+**Goal:** `qr-lab-core` detects QR finder patterns and groups them into ordered triplet candidates on every fixture in the golden suite — both polarities, no white-plate assumption — with per-stage tracing and a compiling WASM target.
 
 **Architecture:** One dense pass builds a 16×16 tile min/max grid (local thresholds + skip mask). A row-skipped scanline pass run-length-matches `1:1:3:1:1` in both polarities, cross-checks vertically and diagonally, and merges hits into verified finder candidates. Triplet grouping filters candidate triples by module-size ratio, leg balance, and corner angle, orders them TL/TR/BL, and estimates the symbol dimension. A square↔quad perspective transform (needed by tests now, by grid sampling in Plan 3) is its own tested unit. All stages record artifacts/timings into a `Trace` that compiles to nothing without the `debug-trace` feature.
 
-**Tech Stack:** Rust (no new required deps; optional `serde` feature on qrk-core), `wasm-bindgen` + `serde-wasm-bindgen` in the new `qrk-wasm` crate.
+**Tech Stack:** Rust (no new required deps; optional `serde` feature on qr-lab-core), `wasm-bindgen` + `serde-wasm-bindgen` in the new `qr-lab-wasm` crate.
 
 ## Global Constraints
 
-- Rust MSRV 1.87; `qrk-core` keeps `#![forbid(unsafe_code)]` and zero *required* runtime deps (serde is optional, off by default; mobile builds stay dep-free).
-- Pinned algorithm constants (single source: `crates/qrk-core/src/consts.rs`):
+- Rust MSRV 1.87; `qr-lab-core` keeps `#![forbid(unsafe_code)]` and zero *required* runtime deps (serde is optional, off by default; mobile builds stay dep-free).
+- Pinned algorithm constants (single source: `crates/qr-lab-core/src/consts.rs`):
   - `TILE: usize = 16`; tile threshold = `(min+max)/2` after 3×3 tile dilation of extrema; `CONTRAST_FLOOR: u8 = 12` (tiles with `max-min < 12` are skip).
   - `ROW_STEP: usize = 2` (scan every 2nd row).
   - Run-pattern check (zxing variance rules): `unit = total/7.0`; runs 0,1,3,4 must satisfy `|run − unit| < unit/2`; run 2 must satisfy `|run − 3·unit| < 3·unit/2`; all runs ≥ 1 px.
@@ -27,7 +27,7 @@
 ## File Structure
 
 ```
-crates/qrk-core/src/
+crates/qr-lab-core/src/
   lib.rs           (add: mod consts, homography, tiles, finder, triplet, trace, scanner; re-exports)
   consts.rs        pinned constants above
   homography.rs    PerspectiveTransform (square→quad, inverse, quad→quad)
@@ -37,8 +37,8 @@ crates/qrk-core/src/
   triplet.rs       triplet grouping
   trace.rs         Trace (debug-trace feature)
   scanner.rs       detect() orchestration + StageTimings
-crates/qrk-core/examples/scan_fixture.rs   CLI: scan one fixture, print stages/timings
-crates/qrk-wasm/   (new crate: cdylib, wasm-bindgen scan_rgba)
+crates/qr-lab-core/examples/scan_fixture.rs   CLI: scan one fixture, print stages/timings
+crates/qr-lab-wasm/   (new crate: cdylib, wasm-bindgen scan_rgba)
 scripts/check-wasm.sh
 ```
 
@@ -47,8 +47,8 @@ scripts/check-wasm.sh
 ### Task 1: Perspective transform (`homography.rs`)
 
 **Files:**
-- Create: `crates/qrk-core/src/homography.rs`, `crates/qrk-core/src/consts.rs`
-- Modify: `crates/qrk-core/src/lib.rs`
+- Create: `crates/qr-lab-core/src/homography.rs`, `crates/qr-lab-core/src/consts.rs`
+- Modify: `crates/qr-lab-core/src/lib.rs`
 
 **Interfaces:**
 - Produces: `pub struct PerspectiveTransform` with
@@ -113,7 +113,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cargo test -p qrk-core homography` → compile error.
+- [ ] **Step 2: Run to verify failure** — `cargo test -p qr-lab-core homography` → compile error.
 
 - [ ] **Step 3: Implement** (zxing's PerspectiveTransform, unit-square variant)
 
@@ -198,10 +198,10 @@ pub const ROW_STEP: usize = 2;
 
 ### Task 2: RGBA→luma helper
 
-**Files:** Modify `crates/qrk-core/src/luma.rs`, `lib.rs`.
+**Files:** Modify `crates/qr-lab-core/src/luma.rs`, `lib.rs`.
 
 **Interfaces:**
-- Produces: `pub fn luma_from_rgba(rgba: &[u8], width: usize, height: usize) -> Vec<u8>` — BT.601 integer luma `y = (77·r + 150·g + 29·b + 128) >> 8`. Consumed by qrk-wasm (canvas readPixels) and future consumer adapters.
+- Produces: `pub fn luma_from_rgba(rgba: &[u8], width: usize, height: usize) -> Vec<u8>` — BT.601 integer luma `y = (77·r + 150·g + 29·b + 128) >> 8`. Consumed by qr-lab-wasm (canvas readPixels) and future consumer adapters.
 
 - [ ] **Step 1: Failing tests** (in `luma.rs` tests module)
 
@@ -240,7 +240,7 @@ pub fn luma_from_rgba(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
 
 ### Task 3: Tile grid (`tiles.rs`)
 
-**Files:** Create `crates/qrk-core/src/tiles.rs`; modify `lib.rs`.
+**Files:** Create `crates/qr-lab-core/src/tiles.rs`; modify `lib.rs`.
 
 **Interfaces:**
 - Produces: `pub struct TileGrid { pub tiles_x: usize, pub tiles_y: usize, /* private: min, max, threshold: Vec<u8>, skip: Vec<bool> */ }`
@@ -383,7 +383,7 @@ impl TileGrid {
 
 ### Task 4: Run-pattern matcher (`finder.rs`, part 1)
 
-**Files:** Create `crates/qrk-core/src/finder.rs`; modify `lib.rs`.
+**Files:** Create `crates/qr-lab-core/src/finder.rs`; modify `lib.rs`.
 
 **Interfaces:**
 - Produces (consumed by Task 5 in the same file):
@@ -487,7 +487,7 @@ pub(crate) fn pattern_fits(runs: &[f64; 5]) -> bool {
 
 ### Task 5: Scanline finder detection (`finder.rs`, part 2)
 
-**Files:** Modify `crates/qrk-core/src/finder.rs`, `lib.rs`. Test: `crates/qrk-core/tests/finder_gate.rs`.
+**Files:** Modify `crates/qr-lab-core/src/finder.rs`, `lib.rs`. Test: `crates/qr-lab-core/tests/finder_gate.rs`.
 
 **Interfaces:**
 - Produces: `pub struct FinderCandidate { pub x: f64, pub y: f64, pub module: f64, pub inverted: bool, pub hits: u32 }`
@@ -545,12 +545,12 @@ pub(crate) fn pattern_fits(runs: &[f64; 5]) -> bool {
 
 (Note the dark-cell predicate above is just "outer ring + 3×3 center"; write it plainly: `let dark = my == 0 || my == 6 || mx == 0 || mx == 6 || ((2..=4).contains(&mx) && (2..=4).contains(&my));`.)
 
-- [ ] **Step 2: Fixture gate test** — `crates/qrk-core/tests/finder_gate.rs`
+- [ ] **Step 2: Fixture gate test** — `crates/qr-lab-core/tests/finder_gate.rs`
 
 ```rust
 mod common;
 
-use qrk_core::{find_finders, LumaView, PerspectiveTransform, TileGrid};
+use qr_lab_core::{find_finders, LumaView, PerspectiveTransform, TileGrid};
 
 fn expected_centers(c: &common::CodeTruth) -> [[f64; 2]; 3] {
     let n = (4 * c.version + 17) as f64;
@@ -597,7 +597,7 @@ fn every_ground_truth_finder_is_detected() {
 
 ### Task 6: Triplet grouping (`triplet.rs`)
 
-**Files:** Create `crates/qrk-core/src/triplet.rs`; modify `lib.rs`. Test: `crates/qrk-core/tests/triplet_gate.rs`.
+**Files:** Create `crates/qr-lab-core/src/triplet.rs`; modify `lib.rs`. Test: `crates/qr-lab-core/tests/triplet_gate.rs`.
 
 **Interfaces:**
 - Produces: `pub struct TripletCandidate { pub tl: [f64; 2], pub tr: [f64; 2], pub bl: [f64; 2], pub module: f64, pub dimension: u32, pub snap_error: f64, pub inverted: bool }`
@@ -672,12 +672,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Fixture gate** — `crates/qrk-core/tests/triplet_gate.rs`: same shape as the finder gate; for every code, at least one triplet must have all three of {tl,tr,bl} within `max(2.0, module_size_px)` of the expected three centers **as a set** (mirrored fixtures land with tr/bl swapped — match set-wise), `inverted == truth.inverted`, and `dimension` within ±4 of `4·version+17` (dimension refinement is Plan 3's job; this bounds gross errors). Reuse `expected_centers` by moving it into `tests/common/mod.rs` as `pub fn expected_finder_centers(c: &CodeTruth) -> [[f64; 2]; 3]` (update `finder_gate.rs` to use it from common).
+- [ ] **Step 2: Fixture gate** — `crates/qr-lab-core/tests/triplet_gate.rs`: same shape as the finder gate; for every code, at least one triplet must have all three of {tl,tr,bl} within `max(2.0, module_size_px)` of the expected three centers **as a set** (mirrored fixtures land with tr/bl swapped — match set-wise), `inverted == truth.inverted`, and `dimension` within ±4 of `4·version+17` (dimension refinement is Plan 3's job; this bounds gross errors). Reuse `expected_centers` by moving it into `tests/common/mod.rs` as `pub fn expected_finder_centers(c: &CodeTruth) -> [[f64; 2]; 3]` (update `finder_gate.rs` to use it from common).
 
 ```rust
 mod common;
 
-use qrk_core::{find_finders, group_triplets, LumaView, TileGrid};
+use qr_lab_core::{find_finders, group_triplets, LumaView, TileGrid};
 
 #[test]
 fn every_code_yields_a_matching_triplet() {
@@ -716,7 +716,7 @@ fn every_code_yields_a_matching_triplet() {
 
 ### Task 7: Trace + `detect()` orchestration + example
 
-**Files:** Create `crates/qrk-core/src/trace.rs`, `crates/qrk-core/src/scanner.rs`, `crates/qrk-core/examples/scan_fixture.rs`; modify `lib.rs`, `crates/qrk-core/Cargo.toml`.
+**Files:** Create `crates/qr-lab-core/src/trace.rs`, `crates/qr-lab-core/src/scanner.rs`, `crates/qr-lab-core/examples/scan_fixture.rs`; modify `lib.rs`, `crates/qr-lab-core/Cargo.toml`.
 
 **Interfaces:**
 - `Cargo.toml` gains `[features] debug-trace = [] serde = ["dep:serde"]` with serde optional (`serde = { version = "1", features = ["derive"], optional = true }` moved/added as optional dep; keep the dev-dependency too).
@@ -759,27 +759,27 @@ mod tests {
 - [ ] **Step 2: Implement; verify all four feature combinations compile & pass:**
 
 ```bash
-cargo test -p qrk-core
-cargo test -p qrk-core --features debug-trace
-cargo check -p qrk-core --features serde
-cargo check -p qrk-core --features "debug-trace serde"
+cargo test -p qr-lab-core
+cargo test -p qr-lab-core --features debug-trace
+cargo check -p qr-lab-core --features serde
+cargo check -p qr-lab-core --features "debug-trace serde"
 ```
 
-- [ ] **Step 3: Example** — `examples/scan_fixture.rs`: `cargo run -p qrk-core --example scan_fixture -- near_00` loads `fixtures/<name>.{json,luma}` (reuse the same serde structs inline — examples can't use tests/common), runs `detect`, prints per-stage µs, candidate/triplet counts, and each triplet's centers/dimension. Verify it runs on `near_00` and `inv_00`.
+- [ ] **Step 3: Example** — `examples/scan_fixture.rs`: `cargo run -p qr-lab-core --example scan_fixture -- near_00` loads `fixtures/<name>.{json,luma}` (reuse the same serde structs inline — examples can't use tests/common), runs `detect`, prints per-stage µs, candidate/triplet counts, and each triplet's centers/dimension. Verify it runs on `near_00` and `inv_00`.
 - [ ] **Step 4: Commit** — `feat: detect() orchestration, debug-trace feature, scan_fixture example`
 
 ---
 
-### Task 8: `qrk-wasm` crate
+### Task 8: `qr-lab-wasm` crate
 
-**Files:** Create `crates/qrk-wasm/Cargo.toml`, `crates/qrk-wasm/src/lib.rs`, `scripts/check-wasm.sh`; modify root `Cargo.toml` (workspace member).
+**Files:** Create `crates/qr-lab-wasm/Cargo.toml`, `crates/qr-lab-wasm/src/lib.rs`, `scripts/check-wasm.sh`; modify root `Cargo.toml` (workspace member).
 
 **Interfaces:**
-- `qrk-wasm` (crate-type `["cdylib", "rlib"]`), deps: `qrk-core` with `features = ["debug-trace", "serde"]`, `wasm-bindgen = "0.2"`, `serde-wasm-bindgen = "0.6"`, `serde`.
+- `qr-lab-wasm` (crate-type `["cdylib", "rlib"]`), deps: `qr-lab-core` with `features = ["debug-trace", "serde"]`, `wasm-bindgen = "0.2"`, `serde-wasm-bindgen = "0.6"`, `serde`.
 - Exports `#[wasm_bindgen] pub fn scan_rgba(rgba: &[u8], width: u32, height: u32, with_trace: bool) -> JsValue` — converts via `luma_from_rgba`, runs `detect`/`detect_traced`, returns `serde_wasm_bindgen::to_value(&WasmResult { detections, trace: Option<Trace> })`.
-- `scripts/check-wasm.sh`: `rustup target add wasm32-unknown-unknown 2>/dev/null; cargo check -p qrk-wasm --target wasm32-unknown-unknown` (the debug UI's real packaging via wasm-pack is Plan 3).
+- `scripts/check-wasm.sh`: `rustup target add wasm32-unknown-unknown 2>/dev/null; cargo check -p qr-lab-wasm --target wasm32-unknown-unknown` (the debug UI's real packaging via wasm-pack is Plan 3).
 
-- [ ] **Step 1: Native test first** (qrk-wasm builds for native too via rlib):
+- [ ] **Step 1: Native test first** (qr-lab-wasm builds for native too via rlib):
 
 ```rust
 #[cfg(test)]
@@ -789,9 +789,9 @@ mod tests {
         // Round-trip the result struct through serde_json natively to pin
         // the field names the debug UI will consume.
         let d = vec![128u8; 32 * 32 * 4];
-        let luma = qrk_core::luma_from_rgba(&d, 32, 32);
-        let view = qrk_core::LumaView::new(&luma, 32, 32, 32).unwrap();
-        let det = qrk_core::detect(&view);
+        let luma = qr_lab_core::luma_from_rgba(&d, 32, 32);
+        let view = qr_lab_core::LumaView::new(&luma, 32, 32, 32).unwrap();
+        let det = qr_lab_core::detect(&view);
         let json = serde_json::to_value(&det).unwrap();
         assert!(json.get("finders").is_some());
         assert!(json.get("triplets").is_some());
@@ -800,10 +800,10 @@ mod tests {
 }
 ```
 
-(add `serde_json` as qrk-wasm dev-dependency)
+(add `serde_json` as qr-lab-wasm dev-dependency)
 
-- [ ] **Step 2: Implement crate; run** `cargo test -p qrk-wasm` **and** `bash scripts/check-wasm.sh` (must exit 0).
-- [ ] **Step 3: Commit** — `feat: qrk-wasm crate with scan_rgba binding`
+- [ ] **Step 2: Implement crate; run** `cargo test -p qr-lab-wasm` **and** `bash scripts/check-wasm.sh` (must exit 0).
+- [ ] **Step 3: Commit** — `feat: qr-lab-wasm crate with scan_rgba binding`
 
 ---
 

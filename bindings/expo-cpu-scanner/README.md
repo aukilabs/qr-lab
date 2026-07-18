@@ -1,6 +1,6 @@
 # expo-cpu-scanner
 
-Expo module for the QRKit pure-CPU QR scanner.
+Expo module for the QR Lab pure-CPU QR scanner.
 
 Native binaries are **prebuilt** into this package so app consumers never need
 a Rust toolchain:
@@ -59,5 +59,5 @@ expo-cpu-scanner/
   android/             Expo module + jniLibs (prebuilt .so)
   ios/                 Expo module + Qrk.xcframework (prebuilt)
   example/             Expo dev-client app that links this package
-crates/qrk-ffi/        Rust cdylib/staticlib + include/qrk.h
+crates/qr-lab-ffi/        Rust cdylib/staticlib + include/qrk.h
 ```

@@ -1,0 +1,16 @@
+[package]
+name = "qr-lab-imgproc"
+description = "Reusable grayscale image processing and restoration for QR Lab"
+keywords = ["image-processing", "threshold", "morphology", "deblur"]
+categories = ["computer-vision", "multimedia::images"]
+authors.workspace = true
+homepage.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+qr-lab-image = { path = "../qr-lab-image" }
+qr-lab-geometry = { path = "../qr-lab-geometry" }

@@ -1,15 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/qrkit-image",
-  "crates/qrkit-geometry",
-  "crates/qrkit-imgproc",
-  "crates/qrkit-qr",
-  "crates/qrkit",
-  "crates/qrk-core",
-  "crates/qrk-wasm",
-  "crates/qrk-bench",
-  "crates/qrk-ffi",
+  "crates/qr-lab-image",
+  "crates/qr-lab-geometry",
+  "crates/qr-lab-imgproc",
+  "crates/qr-lab-qr",
+  "crates/qr-lab",
+  "crates/qr-lab-core",
+  "crates/qr-lab-wasm",
+  "crates/qr-lab-bench",
+  "crates/qr-lab-ffi",
   "bindings/python",
 ]
 
@@ -18,9 +18,12 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.87"
 license = "MIT"
-repository = "https://github.com/aukilabs/qrkit"
+authors = ["Auki Labs"]
+repository = "https://github.com/aukilabs/qr-lab"
+homepage = "https://github.com/aukilabs/qr-lab"
+readme = "README.md"
 
-# Mobile / size-sensitive release for qrk-ffi (cdylib + staticlib).
+# Mobile / size-sensitive release for qr-lab-ffi (cdylib + staticlib).
 # Host benches/tests keep the default release profile.
 [profile.release-mobile]
 inherits = "release"

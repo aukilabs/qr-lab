@@ -1,5 +1,5 @@
 // TS mirror of the golden-fixture JSON's per-code shape (see
-// `fixtures/*.json`'s `codes[]`, and `crates/qrk-core/tests/common/mod.rs`'s
+// `fixtures/*.json`'s `codes[]`, and `crates/qr-lab-core/tests/common/mod.rs`'s
 // `CodeTruth` for the Rust-side deserialization contract) — trimmed to only
 // the fields the overlay layers need (the ground-truth quad + expected
 // finder centers). Extra fixture fields (`ecc`, `mirrored`, `distance_m`,

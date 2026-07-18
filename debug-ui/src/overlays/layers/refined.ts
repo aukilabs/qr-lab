@@ -1,7 +1,7 @@
 // Subpixel-refined-corner overlay (Plan 5 Task 4): for every decoded code
 // whose `refined_corners` is populated (`ScanOptions.refine === true` and
 // refinement produced at least 2 valid edge lines — see
-// `qrk_core::refine::refine_corners`'s doc), draws:
+// `qr_lab_core::refine::refine_corners`'s doc), draws:
 //   - a crosshair at each corner in `refined_corners` (SOURCE px, scaled to
 //     working px via `workingScale` — the same convention `groundtruth.ts`
 //     already establishes for source-px data): magenta where
@@ -22,7 +22,7 @@
 //
 // Ground-truth corner correspondence: IDENTITY (`corners_px[i]` <->
 // `refined_corners[i]`), regardless of the code's `mirrored` flag — see
-// `crates/qrk-core/tests/refine_gate.rs`'s module doc for the full
+// `crates/qr-lab-core/tests/refine_gate.rs`'s module doc for the full
 // derivation (QR finder patterns are content-independent, so the
 // pipeline's purely-geometric TL/TR/BR/BL corner labeling never depends on
 // which corner's data happens to be mirrored) and its empirical

@@ -1,6 +1,6 @@
 // Point-sample luma (grayscale) at an integer-rounded pixel coordinate in a
 // tightly packed RGBA buffer, using the scanner's own integer BT.601-ish
-// formula (see `crates/qrk-core/src/luma.rs`'s `luma_from_rgba`) rather than
+// formula (see `crates/qr-lab-core/src/luma.rs`'s `luma_from_rgba`) rather than
 // a from-scratch grayscale approximation — so the debug UI's status-bar
 // readout shows the same value the scanner itself would derive from this
 // pixel, not merely "a" luma.
@@ -39,7 +39,7 @@ export function lumaAt(
  * Whole-buffer sibling of {@link lumaAt}: converts a tightly-packed
  * `width x height` rgba buffer into a `width * height`-byte luma plane,
  * pixel-for-pixel, via the exact same fixed-point formula as
- * `qrk_core::luma_from_rgba` (`crates/qrk-core/src/luma.rs`) — used by the
+ * `qr_lab_core::luma_from_rgba` (`crates/qr-lab-core/src/luma.rs`) — used by the
  * 3D scene's "save as fixture" `.luma` export (Plan 5d), which must
  * byte-match what the Rust pipeline would derive from the same rgba frame,
  * not merely approximate it.

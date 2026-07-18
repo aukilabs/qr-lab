@@ -1,6 +1,6 @@
 // Pure geometry: where a QR's module-region corners (the dark-square
 // boundary, quiet zone excluded — same "corner" definition Plan 5's Rust
-// side uses throughout, see qrk-core's Global Constraints doc) sit in the
+// side uses throughout, see qr-lab-core's Global Constraints doc) sit in the
 // LOCAL (object-space, z=0) coordinate frame of a plane mesh that has the
 // FULL code + quiet zone painted across its entire physical extent.
 //

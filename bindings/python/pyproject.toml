@@ -3,9 +3,9 @@ requires = ["maturin>=1.14,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "aukilabs-qrkit"
+name = "qr-lab"
 version = "0.1.0"
-description = "Fast QR scanning and reusable computer-vision operators powered by QRKit"
+description = "Fast QR scanning and reusable computer-vision operators powered by QR Lab"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
@@ -26,11 +26,11 @@ dependencies = ["numpy>=1.24"]
 test = ["pytest>=8"]
 
 [project.urls]
-Repository = "https://github.com/aukilabs/qrkit"
+Repository = "https://github.com/aukilabs/qr-lab"
 
 [tool.maturin]
 bindings = "pyo3"
-module-name = "auki_qrkit._native"
+module-name = "qr_lab._native"
 python-source = "python"
 strip = true
 

@@ -1,0 +1,14 @@
+[package]
+name = "qr-lab-image"
+description = "Zero-copy grayscale image views and owned buffers for QR Lab"
+keywords = ["image", "grayscale", "computer-vision", "zero-copy"]
+categories = ["computer-vision", "multimedia::images"]
+authors.workspace = true
+homepage.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

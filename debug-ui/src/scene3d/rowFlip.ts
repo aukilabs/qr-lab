@@ -3,7 +3,7 @@
 // is the bottom scanline of the rendered image, the opposite of every
 // other rgba buffer this debug UI handles (`useImageSource`/
 // `useVideoSource`'s `getImageData`, `downscaleRgba`'s output, ...), which
-// are all top-down (row 0 = top). `qrk_core::scan` (and every image the
+// are all top-down (row 0 = top). `qr_lab_core::scan` (and every image the
 // Rust pipeline was designed against) assumes top-down rows, so a
 // readback buffer MUST be flipped before it's handed to
 // `ScannerClient.scan` — otherwise the scan (and the ground-truth

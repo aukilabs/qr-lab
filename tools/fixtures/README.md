@@ -37,7 +37,7 @@ they are NOT part of the golden gate suite. Regenerate
 the scanner-readable pair for a photo with cv2 (grayscale read → raw bytes +
 `{name,width,height,codes:[]}` JSON), then explore with:
 
-    cargo run --release -p qrk-core --example scan_debug -- real/real_2 1280
+    cargo run --release -p qr-lab-core --example scan_debug -- real/real_2 1280
 
 Video workflow: source videos live locally in `fixtures/real/domain-data-mp4/`;
 extract a frame of interest with ffmpeg to a PNG (e.g.

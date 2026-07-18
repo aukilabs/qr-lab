@@ -2,7 +2,7 @@
 // object for the scene's current frame, plus the impure glue to encode the
 // captured rgba into a `.png`/`.luma` pair and trigger three browser
 // downloads. Schema reference: `tools/fixtures/generate.py`'s `meta` dict
-// (`render_fixture`) and its Rust consumer, `crates/qrk-core/tests/
+// (`render_fixture`) and its Rust consumer, `crates/qr-lab-core/tests/
 // common/mod.rs`'s `Meta`/`CodeTruth` (a subset — extra fields are
 // ignored, so this file's harmless extra `exposure_offset` field is safe).
 //
@@ -21,7 +21,7 @@ export type EccLetter = "l" | "m" | "q" | "h";
 
 /** `generate_qr`'s `0..=3` ecc index -> the lowercase letter the fixture
  * schema (and `segno`/`tools/fixtures/render.py`) expects — see
- * `crates/qrk-core/tests/common/mod.rs`'s `CodeTruth.ecc: String`. */
+ * `crates/qr-lab-core/tests/common/mod.rs`'s `CodeTruth.ecc: String`. */
 export function eccLetterFromIndex(ecc: number): EccLetter {
   const letters: readonly EccLetter[] = ["l", "m", "q", "h"];
   const letter = letters[ecc];
@@ -114,7 +114,7 @@ export interface InvertedProbe {
  * `inverted` flag feeds test gates that hard-branch on it, so it must be
  * ground truth, not a prediction.
  *
- * Probe geometry mirrors `crates/qrk-core/tests/fixtures_smoke.rs`: step
+ * Probe geometry mirrors `crates/qr-lab-core/tests/fixtures_smoke.rs`: step
  * `0.5 * moduleSizePx` along the TL->BR diagonal INTO the module region
  * from the TL corner (the finder pattern's outer ring — always ink) and
  * the same distance OUT of it (quiet zone paper, or the scene showing

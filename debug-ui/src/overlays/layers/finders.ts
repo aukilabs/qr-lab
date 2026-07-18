@@ -4,7 +4,7 @@
 // by polarity, labeled with its `hits` count. Draws from
 // `scan.detections.finders`, which is always populated regardless of
 // whether a trace was captured (unlike `tilesLayer`, which needs
-// `trace.tiles`) — see `crates/qrk-core/src/scanner.rs`'s `detect_with`,
+// `trace.tiles`) — see `crates/qr-lab-core/src/scanner.rs`'s `detect_with`,
 // where `trace.finders` is just a recorded copy of the same `finders` that
 // flow into `Detections`.
 import { imageToScreen } from "../../viewport/transform";

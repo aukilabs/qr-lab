@@ -2,10 +2,10 @@
 // debug UI's headline feature: an orbitable plane textured with a real,
 // decodable QR code, whose module-region corners are known analytically
 // (via the plane's own transform + the three.js camera) and compared each
-// frame against `qrk_core::scan`'s live `refined_corners`.
+// frame against `qr_lab_core::scan`'s live `refined_corners`.
 
 /** Quiet-zone width in modules, matching the Rust pipeline's own
- * convention throughout `qrk-core` (`decode.rs`/`sample.rs`/`alignment.rs`/
+ * convention throughout `qr-lab-core` (`decode.rs`/`sample.rs`/`alignment.rs`/
  * `version.rs`'s `axis_aligned_quad`/`axis_aligned_transform` test
  * helpers, and `tools/fixtures/render.py`'s `QUIET_MODULES`) — the ISO/IEC
  * 18004 standard quiet zone is 4 modules on every side. */
@@ -44,7 +44,7 @@ export const EXPOSURE_OFFSET_RANGE = { min: -60, max: 60, step: 1, default: 0 } 
 
 export const DEFAULT_PAYLOAD = "HTTPS://AUKILABS.COM/CPUSCANNER2/SCENE3D";
 /** `0` = auto-select the smallest version that fits the payload — see
- * `qrk-wasm`'s `generate_qr` doc. */
+ * `qr-lab-wasm`'s `generate_qr` doc. */
 export const DEFAULT_VERSION = 0;
 /** `1` = ECC level M — matches `generate_qr`'s `0..=3` -> L/M/Q/H mapping. */
 export const DEFAULT_ECC = 1;
@@ -58,7 +58,7 @@ export const DEFAULT_QR_BG_ALPHA = 1;
 export const QR_BG_ALPHA_RANGE = { min: 0, max: 1, step: 0.05 } as const;
 
 /** `expectedInverted`'s contrast warning fires below this |Δluma| (0-255
- * scale). Set with headroom above `qrk_core::consts::CONTRAST_FLOOR` (12,
+ * scale). Set with headroom above `qr_lab_core::consts::CONTRAST_FLOOR` (12,
  * a per-TILE contrast floor the Rust detector actually enforces) — this
  * warning is a coarse whole-color heads-up for a human picking colors in
  * the UI, not a re-derivation of the tile-level floor, so it fires well

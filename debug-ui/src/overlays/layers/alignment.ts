@@ -11,7 +11,7 @@
 //
 // WHICH CANDIDATE(S) (Plan 5C: multi-code trace): `scan.trace.codes`
 // carries one entry PER DECODED code this frame (see
-// `qrk_core::trace::Trace::codes`'s doc) — this layer draws every entry's
+// `qr_lab_core::trace::Trace::codes`'s doc) — this layer draws every entry's
 // alignment search, so a multi-code scene shows all of them, not just one.
 // Only when NOTHING decoded this frame (`codes` empty) does it fall back
 // to the legacy singular `scan.trace.alignment` field, which then holds

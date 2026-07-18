@@ -1,0 +1,28 @@
+[package]
+name = "qr-lab-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Compatibility facade for the QR Lab QR scanner"
+keywords = ["qr", "barcode", "scanner", "compatibility"]
+categories = ["computer-vision", "multimedia::images"]
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+qr-lab-image = { path = "../qr-lab-image" }
+qr-lab-geometry = { path = "../qr-lab-geometry" }
+qr-lab-imgproc = { path = "../qr-lab-imgproc" }
+qr-lab-qr = { path = "../qr-lab-qr" }
+
+[dev-dependencies]
+png = "0.18.1"
+qrcode = { version = "0.14.1", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+debug-trace = ["qr-lab-qr/debug-trace"]
+serde = ["qr-lab-qr/serde"]

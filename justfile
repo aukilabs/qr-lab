@@ -1,4 +1,4 @@
-# QRKit — developer recipes
+# QR Lab — developer recipes
 #
 # Common:
 #   just ui          # build WASM (release) + install deps + start Vite
@@ -12,7 +12,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
-# Build crates/qrk-wasm → debug-ui/src/wasm (release, qr-gen for 3D scene)
+# Build crates/qr-lab-wasm → debug-ui/src/wasm (release, qr-gen for 3D scene)
 wasm:
     ./scripts/build-wasm.sh
 
@@ -44,12 +44,12 @@ test:
 
 # Domain gold-standard eval (needs /tmp/domain_gold frames; see domain-extract)
 domain-eval max_dim="1280":
-    cargo run --release -p qrk-bench --bin domain_eval -- \
+    cargo run --release -p qr-lab-bench --bin domain_eval -- \
         --config baseline --config robust-fast --max-dim {{max_dim}} --obs-only
 
 # Fixture matrix bench
 bench max_dim="1280":
-    cargo run --release -p qrk-bench --bin qrk-bench -- \
+    cargo run --release -p qr-lab-bench --bin qr-lab-bench -- \
         --config baseline --config robust-fast --max-dim {{max_dim}} --quiet
 
 # ── Expo module (expo-cpu-scanner) native binaries ───────────────────
@@ -73,21 +73,21 @@ expo-native: expo-android expo-ios
 
 # Host unit tests for the FFI crate (no NDK/Xcode required)
 ffi-test:
-    cargo test -p qrk-ffi --release
+    cargo test -p qr-lab-ffi --release
 
 # Check reusable-crate dependency boundaries and supported feature combinations.
-qrkit-deps:
-    ./scripts/check-qrkit-deps.sh
+qr-lab-deps:
+    ./scripts/check-qr-lab-deps.sh
 
 # Check legacy scanner and reusable operator C ABI exports.
-qrkit-abi:
-    ./scripts/check-qrkit-abi.sh
+qr-lab-abi:
+    ./scripts/check-qr-lab-abi.sh
 
 # Run the standalone 1280x720 restoration microbenchmark.
-qrkit-operator-bench:
-    cargo run -p qrkit-imgproc --release --example operator_bench
+qr-lab-operator-bench:
+    cargo run -p qr-lab-imgproc --release --example operator_bench
 
-# Build the aukilabs-qrkit Python wheel into bindings/python/dist/.
+# Build the qr-lab Python wheel into bindings/python/dist/.
 python-build:
     ./scripts/build-python.sh
 

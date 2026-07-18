@@ -5,7 +5,7 @@
 // WHICH CODE(S) (Plan 5C: multi-code trace): `scan.trace.codes` carries one
 // entry PER DECODED code this frame, each pairing a `bits` matrix with the
 // `code_index` into `scan.detections.codes` its homography corners come
-// from (see `qrk_core::trace::Trace::codes`'s doc) — this layer fills EVERY
+// from (see `qr_lab_core::trace::Trace::codes`'s doc) — this layer fills EVERY
 // entry's modules, so a multi-code scene (e.g. `multi_07`'s 4 codes) shows
 // all of them, not just one. The trailing singular-`trace.bits` fallback
 // below is DEFENSIVE ONLY — unreachable against the current backend:

@@ -1,7 +1,7 @@
 {
   "name": "expo-cpu-scanner",
   "version": "0.1.0",
-  "description": "CPU QR scanner for Expo, powered by QRKit",
+  "description": "CPU QR scanner for Expo, powered by QR Lab",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "scripts": {

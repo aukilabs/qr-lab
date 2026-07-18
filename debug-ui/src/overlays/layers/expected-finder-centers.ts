@@ -1,5 +1,5 @@
 // Ground-truth pixel centers of a code's three finder patterns (TL, TR,
-// BL), computed the same way as `crates/qrk-core/tests/common/mod.rs`'s
+// BL), computed the same way as `crates/qr-lab-core/tests/common/mod.rs`'s
 // `expected_finder_centers`: map the finder-center points in unit-square
 // (module-fraction) coordinates — 3.5 modules in from each relevant edge,
 // the center of a 7x7-module finder pattern — through the code's

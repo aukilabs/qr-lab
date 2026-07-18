@@ -20,7 +20,7 @@ else
   exit 1
 fi
 
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/qrkit-python.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/qr-lab-python.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 uv venv --quiet --system-site-packages --python "${PYTHON:-python3}" "$TMP/venv"
