@@ -37,6 +37,6 @@
     "react-native": "*"
   },
   "devDependencies": {
-    "expo": "~57.0.4"
+    "expo": "~57.0.20"
   }
 }
