@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate golden fixtures
+        run: |
+          python3 -m pip install -r tools/fixtures/requirements.txt
+          python3 tools/fixtures/generate.py --out fixtures --seed 7
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Crate boundaries
+        run: ./scripts/check-qr-lab-deps.sh
+
+      - name: C ABI
+        run: ./scripts/check-qr-lab-abi.sh

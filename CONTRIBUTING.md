@@ -3,10 +3,10 @@
 Thank you for helping improve QR Lab. This guide covers the shared repository
 workflow; component-specific details live in the README inside each component.
 
-## Code of conduct
-
 Be respectful and constructive in issues, pull requests, and discussions. We
 assume good faith and prioritize technical clarity over formality.
+
+Security issues should be reported privately — see [SECURITY.md](SECURITY.md).
 
 ## Before you start
 
@@ -86,6 +86,8 @@ Run the checks relevant to the files you changed. For core Rust changes, the
 minimum is:
 
 ```bash
+just ci                   # format + workspace tests (matches GitHub Actions)
+# or:
 cargo fmt --all --check
 cargo test --workspace --release
 ```

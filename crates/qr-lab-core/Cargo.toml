@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Compatibility facade for the QR Lab QR scanner"
 keywords = ["qr", "barcode", "scanner", "compatibility"]
 categories = ["computer-vision", "multimedia::images"]

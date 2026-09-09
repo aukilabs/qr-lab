@@ -11,6 +11,8 @@ changes; see [docs/qr-lab/stability.md](docs/qr-lab/stability.md)).
 
 ### Changed
 
+- Open-source announcement prep: source-first install instructions (not on
+  crates.io / PyPI / npm yet), security policy, GitHub issue/PR templates, and CI.
 - Renamed the project from **QRKit** / `qrkit` to **QR Lab** / `qr-lab`.
   - Rust crates: `qr-lab`, `qr-lab-image`, `qr-lab-geometry`, `qr-lab-imgproc`,
     `qr-lab-qr`, `qr-lab-core`, `qr-lab-ffi`, `qr-lab-wasm`, `qr-lab-bench`

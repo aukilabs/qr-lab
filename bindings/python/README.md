@@ -5,21 +5,17 @@ complete QR scanner and selected reusable computer-vision operators.
 
 | | |
 |---|---|
-| **PyPI name** | `qr-lab` |
 | **Import** | `import qr_lab` |
 | **Python** | 3.9+ |
 | **License** | MIT |
 
 ## Install
 
-```bash
-pip install qr-lab
-```
-
-If the package is not yet published, build a wheel from the monorepo root:
+Not on PyPI yet. Build a wheel from a clone of this repository:
 
 ```bash
 just python-build   # → bindings/python/dist/
+pip install bindings/python/dist/qr_lab-*.whl
 # or, from this directory:
 maturin build --release --out dist
 ```

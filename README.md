@@ -1,5 +1,10 @@
 # QR Lab
 
+[![CI](https://github.com/aukilabs/qr-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/aukilabs/qr-lab/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![MSRV](https://img.shields.io/badge/MSRV-1.87+-orange.svg)](rust-toolchain.toml)
+[![Status](https://img.shields.io/badge/status-pre--1.0-yellow.svg)](docs/qr-lab/stability.md)
+
 **QR Lab** is a modular, CPU-only computer-vision toolkit centered on a complete
 QR code scanner. It targets real camera frames: versions 1–40, multiple and
 mirrored codes, robust recovery for difficult lighting and blur, temporal video
@@ -7,18 +12,19 @@ scanning, and subpixel corner refinement for pose estimation.
 
 The core is pure Rust. The same scanner is available from Rust, Python/NumPy, C
 (and Android/iOS via that ABI), WebAssembly, and Expo. The image, geometry, and
-image-processing crates can be used on their own—no QR decoder required.
+image-processing crates can be used on their own — no QR decoder required.
 
 > **Status:** pre-1.0. Public APIs may still change. See the
 > [API stability policy](docs/qr-lab/stability.md) before depending on QR Lab in
-> a public library.
+> a public library. Crates.io, PyPI, and npm packages are not published yet;
+> install from this repository (below).
 
 ## Why QR Lab
 
 | | |
 |---|---|
 | **CPU-only** | No GPU, no platform Vision frameworks, no camera stack |
-| **Camera-first** | Strided Y planes, working-resolution caps, multi-code frames |
+| **Camera-first** | Strided Y planes, RGB8 frames, working-resolution caps, multi-code frames |
 | **Robust** | Recovery ladder for blur, low resolution, uneven light, polarity flips |
 | **Composable** | Image / geometry / imgproc crates usable without the QR pipeline |
 | **Portable** | One core, many bindings (Rust, Python, C, WASM, mobile) |
@@ -35,27 +41,37 @@ image-processing crates can be used on their own—no QR decoder required.
 
 ## Install
 
+QR Lab is source-first until the first crates.io / PyPI / npm release.
+
 ### Rust
 
 ```toml
 [dependencies]
-qr-lab = "0.1"
+qr-lab = { git = "https://github.com/aukilabs/qr-lab" }
 ```
 
 Or depend only on the pieces you need:
 
 ```toml
 [dependencies]
-qr-lab-image = "0.1"
-qr-lab-geometry = "0.1"
-qr-lab-imgproc = "0.1"
-qr-lab-qr = "0.1"
+qr-lab-image = { git = "https://github.com/aukilabs/qr-lab" }
+qr-lab-geometry = { git = "https://github.com/aukilabs/qr-lab" }
+qr-lab-imgproc = { git = "https://github.com/aukilabs/qr-lab" }
+qr-lab-qr = { git = "https://github.com/aukilabs/qr-lab" }
 ```
+
+A path checkout works the same way: clone the repo and point Cargo at
+`crates/qr-lab`.
 
 ### Python
 
+Build a wheel from a clone (Maturin, Python 3.9+):
+
 ```bash
-pip install qr-lab
+git clone https://github.com/aukilabs/qr-lab.git
+cd qr-lab
+just python-build          # → bindings/python/dist/
+pip install bindings/python/dist/qr_lab-*.whl
 ```
 
 ```python
@@ -68,8 +84,8 @@ for code in result["codes"]:
     print(code["payload"], code["corners_source"])
 ```
 
-> If the package is not yet on PyPI, build a local wheel with
-> `just python-build` (see [Python guide](bindings/python/README.md)).
+See the [Python guide](bindings/python/README.md) for temporal scanning and
+image operators.
 
 ### C / mobile
 
@@ -115,6 +131,9 @@ fn scan_frame(
 }
 ```
 
+Packed RGB8 frames use `Scanner::scan_rgb8` with `qr_lab::qr::Rgb8View` (BT.601
+luma, allocation reused across frames).
+
 ### Crate layout
 
 ```text
@@ -142,10 +161,24 @@ bindings/python           PyPI / Maturin project (`import qr_lab`)
 
 Publishable integrations are summarized in the [bindings guide](bindings/README.md).
 
+## Limitations
+
+- **Pre-1.0.** Minor versions may include breaking changes. See
+  [stability](docs/qr-lab/stability.md).
+- **Reed-Solomon / bitstream decode** is delegated to
+  [`rqrr`](https://crates.io/crates/rqrr) (MIT OR Apache-2.0). Finder detection,
+  sampling, robust recovery, temporal scanning, and corner refinement are QR Lab.
+- **No FNC1 or Structured Append.** ECI payloads are returned as bytes for the
+  caller to interpret.
+- **No GPU, no `no_std`, no camera capture.** Feed it a grayscale or RGB8 buffer.
+- **Packages are not on crates.io / PyPI / npm yet.** Install from git or a
+  local checkout.
+
 ## Development
 
 ```bash
 just test                 # Rust workspace tests (release)
+just ci                   # format check + workspace tests (what GitHub Actions runs)
 just ui                   # build WASM and start the Vite debug UI
 just ui-test              # debug UI unit tests
 just python-build         # build a wheel into bindings/python/dist
@@ -207,8 +240,15 @@ tools/fixtures/         deterministic fixture generator and tests
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for
 setup, testing, fixtures, and pull-request guidance.
 
+Security issues should be reported privately — see [SECURITY.md](SECURITY.md).
+
+## Acknowledgments
+
+QR bitstream decoding uses [`rqrr`](https://crates.io/crates/rqrr) by
+[WanzenBug](https://github.com/WanzenBug/rqrr) and contributors.
+
 ## License
 
 QR Lab is licensed under the [MIT License](LICENSE).
 
-Copyright (c) 2026 Auki Labs.
+Copyright (c) 2026 [Auki Labs](https://auki.com).

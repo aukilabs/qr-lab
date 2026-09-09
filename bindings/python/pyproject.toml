@@ -27,6 +27,8 @@ test = ["pytest>=8"]
 
 [project.urls]
 Repository = "https://github.com/aukilabs/qr-lab"
+Issues = "https://github.com/aukilabs/qr-lab/issues"
+Changelog = "https://github.com/aukilabs/qr-lab/blob/develop/CHANGELOG.md"
 
 [tool.maturin]
 bindings = "pyo3"

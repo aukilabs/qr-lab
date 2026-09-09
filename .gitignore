@@ -28,6 +28,9 @@ bindings/python/dist/
 # Misc
 .DS_Store
 *.log
+.env
+.env.*
+!.env.example
 
 # Fixtures are not committed (large binaries).
 # - Golden fixtures are regenerated deterministically with

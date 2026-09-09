@@ -1,0 +1,56 @@
+name: Bug report
+description: Something is not working as documented
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Search existing issues first.
+        Security problems should go through [SECURITY.md](https://github.com/aukilabs/qr-lab/blob/develop/SECURITY.md), not this form.
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Commands, a short Rust/Python snippet, or a description of the frame. Do not attach production camera captures unless they are required and you have the right to share them.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - Rust (qr-lab / qr-lab-qr)
+        - Image / geometry / imgproc crates
+        - Python
+        - C ABI / FFI
+        - Expo / mobile
+        - Debug UI / WASM
+        - Fixtures / docs
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Git commit, crate version, or `develop` at DATE.
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, rustc (`rustc -V`), Python, target triple if relevant.

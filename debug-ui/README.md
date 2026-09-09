@@ -1,16 +1,17 @@
-# qrk debug UI
+# QR Lab debug UI
 
-A React + Vite app for visually driving the `qr-lab-core` QR scanner (compiled
-to WASM via `qr-lab-wasm`) against golden fixtures, real photos, and arbitrary
-dropped images/videos — with every detection stage rendered as an
-independently togglable overlay and a live per-stage timings panel. This is
-a development tool, not a product: plain CSS, no component library, no
-router.
+A React + Vite app for visually driving the QR Lab scanner (compiled to WASM
+via `qr-lab-wasm`) against golden fixtures, real photos, and arbitrary dropped
+images/videos — with every detection stage rendered as an independently
+togglable overlay and a live per-stage timings panel. This is a development
+tool, not a product: plain CSS, no component library, no router.
+
+From the repository root, `just ui` builds WASM and starts Vite.
 
 ## Setup
 
 From the repo root, the WASM package must be built once (and rebuilt any
-time `crates/qr-lab-core`/`crates/qr-lab-wasm` change) before the app can run —
+time `crates/qr-lab-qr`/`crates/qr-lab-wasm` change) before the app can run —
 `predev`/`prebuild` check for it and fail with a pointer to this command if
 it's missing:
 
@@ -27,9 +28,7 @@ npm test                 # vitest run — logic modules (downscale, transform,
                           #   overlays/registry, timings-model, envelope
                           #   parsing, scanner client) are unit-tested;
                           #   DOM-heavy hooks (useImageSource/useVideoSource)
-                          #   and components are manual-QA'd instead — see
-                          #   `.superpowers/sdd/task-7-report.md` for the
-                          #   executed checklist.
+                          #   and components are manual-QA'd instead.
 npm run build             # tsc --noEmit && vite build
 ```
 

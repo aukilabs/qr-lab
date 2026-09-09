@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+title: QR Lab
+message: If you use QR Lab, please cite it as below.
+type: software
+authors:
+  - name: Auki Labs
+    website: https://auki.com
+    email: contact@aukilabs.com
+repository-code: https://github.com/aukilabs/qr-lab
+url: https://github.com/aukilabs/qr-lab
+abstract: >
+  A modular, CPU-only computer-vision toolkit centered on a complete QR code
+  scanner for real camera frames, with Rust, Python, C, WebAssembly, and Expo
+  bindings.
+license: MIT
+keywords:
+  - qr
+  - barcode
+  - computer-vision
+  - rust
+  - scanner
+version: 0.1.0
+date-released: "2026-09-09"

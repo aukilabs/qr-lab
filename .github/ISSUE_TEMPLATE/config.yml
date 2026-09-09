@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security report
+    url: https://github.com/aukilabs/qr-lab/security/advisories/new
+    about: Report a vulnerability privately. Do not file a public issue.
+  - name: Documentation
+    url: https://github.com/aukilabs/qr-lab/blob/develop/docs/qr-lab/README.md
+    about: Architecture, stability, migration, and benchmark notes.

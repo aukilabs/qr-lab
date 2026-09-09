@@ -6,6 +6,7 @@ rust-version = "1.87"
 license = "MIT"
 repository = "https://github.com/aukilabs/qr-lab"
 description = "C ABI + Android JNI bindings for QR Lab (Expo / mobile)"
+publish = false
 
 [lib]
 name = "qrk_ffi"

@@ -15,9 +15,9 @@ Status: accepted for the initial workspace implementation (2026-07-10).
 - The existing workspace MSRV of Rust 1.87 is retained.
 - Foundational crates require `std` for the first release; `no_std` is deferred
   until a concrete consumer and allocator policy exist.
-- The Python distribution is `qr-lab` and imports as `qr_lab`.
-  The shorter `qr-lab` distribution is an unrelated package on PyPI, so neither
-  the distribution nor import name will shadow it.
+- The Python distribution is `qr-lab` and imports as `qr_lab`. As of 2026-09-09
+  neither PyPI nor crates.io had a `qr-lab` package; names remain unpublished
+  until the first release.
 - Python wheels use Maturin, PyO3, and rust-numpy. NumPy integration makes
   version-specific CPython wheels preferable to `abi3`: it preserves the
   standard ndarray C API and avoids a second buffer abstraction.

@@ -5,9 +5,11 @@ QR scanner and reusable computer-vision types.
 
 ## Install
 
+Not on crates.io yet. From a git checkout:
+
 ```toml
 [dependencies]
-qr-lab = "0.1"
+qr-lab = { git = "https://github.com/aukilabs/qr-lab" }
 ```
 
 ## Example

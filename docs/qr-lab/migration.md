@@ -52,8 +52,8 @@ Depend on the smallest crate that provides the required functionality:
 
 ```toml
 [dependencies]
-qr-lab-image = "0.1"
-qr-lab-imgproc = "0.1"
+qr-lab-image = { git = "https://github.com/aukilabs/qr-lab" }
+qr-lab-imgproc = { git = "https://github.com/aukilabs/qr-lab" }
 ```
 
 `qr-lab-imgproc` does not depend on `rqrr`, `serde`, WASM, JNI, or Expo.

@@ -1,0 +1,36 @@
+name: Feature request
+description: Propose a change or new capability
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a large feature, public API change, new dependency, or scanner-pipeline
+        redesign, an issue first is preferred over a surprise pull request. See
+        [CONTRIBUTING.md](https://github.com/aukilabs/qr-lab/blob/develop/CONTRIBUTING.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What would you like to exist instead?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: api
+    attributes:
+      label: API impact
+      options:
+        - label: This would change a public Rust, Python, C, WASM, or Expo API
+        - label: This would add a required dependency

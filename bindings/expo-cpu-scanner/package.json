@@ -21,6 +21,16 @@
   ],
   "author": "Auki Labs",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aukilabs/qr-lab.git",
+    "directory": "bindings/expo-cpu-scanner"
+  },
+  "homepage": "https://github.com/aukilabs/qr-lab/tree/develop/bindings/expo-cpu-scanner",
+  "bugs": {
+    "url": "https://github.com/aukilabs/qr-lab/issues"
+  },
+  "private": true,
   "peerDependencies": {
     "expo": "*",
     "react": "*",

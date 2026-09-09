@@ -38,6 +38,12 @@ ui-build: wasm ui-install
 ui-test: ui-install
     cd debug-ui && npm test
 
+# Format check + workspace tests (matches .github/workflows/ci.yml, minus
+# fixture generation and the C ABI / crate-boundary scripts).
+ci:
+    cargo fmt --all --check
+    cargo test --workspace
+
 # Rust workspace tests (release)
 test:
     cargo test --workspace --release
