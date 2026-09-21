@@ -241,6 +241,79 @@ impl<'a> Gray8View<'a> {
     }
 }
 
+/// Borrowed, zero-copy view over a packed RGB8 image.
+///
+/// Pixels are consecutive red, green, and blue bytes. Rows may be padded.
+#[derive(Clone, Copy, Debug)]
+pub struct Rgb8View<'a> {
+    data: &'a [u8],
+    width: usize,
+    height: usize,
+    stride: usize,
+}
+
+impl<'a> Rgb8View<'a> {
+    /// Borrow `data` as RGB8. `stride` is measured in bytes.
+    pub fn new(
+        data: &'a [u8],
+        width: usize,
+        height: usize,
+        stride: usize,
+    ) -> Result<Self, LumaError> {
+        let row_bytes = width.checked_mul(3).ok_or(LumaError::BufferTooSmall)?;
+        validate_layout(data.len(), row_bytes, height, stride)?;
+        Ok(Self {
+            data,
+            width,
+            height,
+            stride,
+        })
+    }
+
+    /// Image width in pixels.
+    pub const fn width(&self) -> usize {
+        self.width
+    }
+
+    /// Image height in pixels.
+    pub const fn height(&self) -> usize {
+        self.height
+    }
+
+    /// Row stride in bytes.
+    pub const fn stride(&self) -> usize {
+        self.stride
+    }
+
+    /// Image dimensions.
+    pub const fn size(&self) -> Size {
+        Size::new(self.width, self.height)
+    }
+
+    /// Borrow one row containing exactly `width * 3` RGB bytes.
+    pub fn row(&self, y: usize) -> &'a [u8] {
+        debug_assert!(y < self.height);
+        let start = y * self.stride;
+        &self.data[start..start + self.width * 3]
+    }
+
+    /// Convert to tightly packed BT.601 luminance, reusing `output`.
+    pub fn write_luma(&self, output: &mut Vec<u8>) {
+        let pixel_count = self
+            .width
+            .checked_mul(self.height)
+            .expect("validated RGB8 layout cannot overflow");
+        output.resize(pixel_count, 0);
+        for y in 0..self.height {
+            let rgb_row = self.row(y);
+            let luma_row = &mut output[y * self.width..(y + 1) * self.width];
+            for (rgb, luma) in rgb_row.chunks_exact(3).zip(luma_row) {
+                *luma = rgb_to_luma(rgb[0], rgb[1], rgb[2]);
+            }
+        }
+    }
+}
+
 /// Mutable, zero-copy view over an 8-bit grayscale image.
 #[derive(Debug)]
 pub struct Gray8ViewMut<'a> {
@@ -426,9 +499,7 @@ pub fn try_luma_from_rgba(rgba: &[u8], width: usize, height: usize) -> Result<Ve
     }
     Ok(rgba
         .chunks_exact(4)
-        .map(|pixel| {
-            ((77 * pixel[0] as u32 + 150 * pixel[1] as u32 + 29 * pixel[2] as u32 + 128) >> 8) as u8
-        })
+        .map(|pixel| rgb_to_luma(pixel[0], pixel[1], pixel[2]))
         .collect())
 }
 
@@ -442,10 +513,13 @@ pub fn luma_from_rgba(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
         .expect("rgba buffer size mismatch");
     assert_eq!(rgba.len(), expected, "rgba buffer size mismatch");
     rgba.chunks_exact(4)
-        .map(|pixel| {
-            ((77 * pixel[0] as u32 + 150 * pixel[1] as u32 + 29 * pixel[2] as u32 + 128) >> 8) as u8
-        })
+        .map(|pixel| rgb_to_luma(pixel[0], pixel[1], pixel[2]))
         .collect()
+}
+
+#[inline]
+fn rgb_to_luma(red: u8, green: u8, blue: u8) -> u8 {
+    ((77 * red as u32 + 150 * green as u32 + 29 * blue as u32 + 128) >> 8) as u8
 }
 
 /// Backward-compatible alias used by the scanner pipeline.
@@ -535,6 +609,27 @@ mod tests {
     fn rgba_conversion_matches_scanner_formula() {
         let rgba = [255, 255, 255, 255, 0, 0, 0, 255, 255, 0, 0, 255];
         assert_eq!(try_luma_from_rgba(&rgba, 3, 1).unwrap(), [255, 0, 77]);
+    }
+
+    #[test]
+    fn rgb_view_converts_padded_rows_and_reuses_output() {
+        let rgb = [255, 255, 255, 0, 0, 0, 99, 99, 255, 0, 0, 0, 255, 0, 88, 88];
+        let view = Rgb8View::new(&rgb, 2, 2, 8).unwrap();
+        let mut luma = vec![42; 32];
+        view.write_luma(&mut luma);
+        assert_eq!(luma, [255, 0, 77, 149]);
+    }
+
+    #[test]
+    fn rgb_view_rejects_invalid_layouts() {
+        assert_eq!(
+            Rgb8View::new(&[0; 6], 2, 1, 5).unwrap_err(),
+            LumaError::StrideTooSmall
+        );
+        assert_eq!(
+            Rgb8View::new(&[0; 11], 2, 2, 6).unwrap_err(),
+            LumaError::BufferTooSmall
+        );
     }
 
     #[test]

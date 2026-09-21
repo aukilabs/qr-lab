@@ -48,7 +48,7 @@ pub use ladder::{
 };
 #[doc(hidden)]
 pub use ladder::{scan_robust_with_kernel, UpscaleKernel};
-pub use luma::{luma_from_rgba, LumaError, LumaView};
+pub use luma::{luma_from_rgba, LumaError, LumaView, Rgb8View};
 pub use scan::{scan, scan_traced, ScanOptions};
 pub use scanner::{detect, detect_traced, detect_with, Detections, StageClock, StageTimings};
 pub use tiles::{BinarizeSpec, TileGrid};

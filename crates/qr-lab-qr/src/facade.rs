@@ -1,5 +1,6 @@
 use crate::{
-    scan_robust, LumaView, RobustDetections, ScanConfig, ScanOptions, ScanSession, SessionConfig,
+    scan_robust, LumaView, Rgb8View, RobustDetections, ScanConfig, ScanOptions, ScanSession,
+    SessionConfig,
 };
 
 /// Complete-scanner configuration for the ergonomic [`Scanner`] facade.
@@ -59,6 +60,7 @@ impl Default for ScannerConfig {
 pub struct Scanner {
     config: ScannerConfig,
     session: Option<ScanSession>,
+    luma_scratch: Vec<u8>,
 }
 
 impl Scanner {
@@ -68,7 +70,11 @@ impl Scanner {
         let session = config
             .session
             .map(|session| ScanSession::new(config.scan, session));
-        Self { config, session }
+        Self {
+            config,
+            session,
+            luma_scratch: Vec::new(),
+        }
     }
 
     /// Scan one grayscale frame and return robust detections with provenance.
@@ -76,6 +82,26 @@ impl Scanner {
         match &mut self.session {
             Some(session) => session.scan_frame(frame, &self.config.options),
             None => scan_robust(frame, &self.config.options, &self.config.scan),
+        }
+    }
+
+    /// Convert and scan one packed RGB8 frame.
+    ///
+    /// The conversion uses BT.601 integer luminance. Its backing allocation is
+    /// retained by the scanner and reused across frames.
+    pub fn scan_rgb8(&mut self, frame: &Rgb8View<'_>) -> RobustDetections {
+        frame.write_luma(&mut self.luma_scratch);
+        let luma = LumaView::new(
+            &self.luma_scratch,
+            frame.width(),
+            frame.height(),
+            frame.width(),
+        )
+        .expect("RGB8 conversion always produces a valid luma layout");
+
+        match &mut self.session {
+            Some(session) => session.scan_frame(&luma, &self.config.options),
+            None => scan_robust(&luma, &self.config.options, &self.config.scan),
         }
     }
 
@@ -122,5 +148,37 @@ mod tests {
         assert_eq!(first.codes.len(), replay.codes.len());
         assert_eq!(first.finders.len(), replay.finders.len());
         assert_eq!(first.triplets.len(), replay.triplets.len());
+    }
+
+    #[test]
+    fn rgb8_scanner_decodes_a_qr_from_padded_rows() {
+        let payload = b"auki://portal/qr-lab-rgb8";
+        let code = qrcode::QrCode::new(payload).unwrap();
+        let module_count = code.width();
+        let scale = 6;
+        let quiet_zone = 4;
+        let width = (module_count + 2 * quiet_zone) * scale;
+        let height = width;
+        let stride = width * 3 + 5;
+        let mut pixels = vec![17; stride * height];
+        for y in 0..height {
+            for x in 0..width {
+                let module_x = x / scale;
+                let module_y = y / scale;
+                let dark = module_x >= quiet_zone
+                    && module_y >= quiet_zone
+                    && module_x < quiet_zone + module_count
+                    && module_y < quiet_zone + module_count
+                    && code[(module_x - quiet_zone, module_y - quiet_zone)] == qrcode::Color::Dark;
+                let value = if dark { 0 } else { 255 };
+                pixels[y * stride + x * 3..y * stride + x * 3 + 3].fill(value);
+            }
+        }
+        let frame = Rgb8View::new(&pixels, width, height, stride).unwrap();
+        let result = Scanner::new(ScannerConfig::robust_fast()).scan_rgb8(&frame);
+        assert!(result
+            .codes
+            .iter()
+            .any(|detected| detected.code.payload_bytes == payload));
     }
 }
