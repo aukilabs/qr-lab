@@ -33,6 +33,8 @@ pub mod resize;
 pub mod sharpen;
 /// Tile-local adaptive thresholds and Sauvola binarization.
 pub mod threshold;
+/// Calibrated lens rectification with reusable pixel maps.
+pub mod undistort;
 
 /// Errors produced by image-processing operators.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

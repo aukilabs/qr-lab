@@ -9,12 +9,8 @@
 // module doc on why `camera.aspect` is forced to 1 — so square pixels are
 // a safe assumption here, unlike a general aspect-ratio camera), `cx =
 // (w-1)/2`, `cy = (h-1)/2`.
-export interface Intrinsics {
-  fx: number;
-  fy: number;
-  cx: number;
-  cy: number;
-}
+import type { Intrinsics } from "../scanner/calibration";
+export type { Intrinsics } from "../scanner/calibration";
 
 /**
  * Derive pinhole intrinsics for a `width x height` (square, per this

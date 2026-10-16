@@ -19,6 +19,9 @@ export interface CameraSimValues {
   blurSigma: number;
   noiseSigma: number;
   exposureOffset: number;
+  fisheye: boolean;
+  fisheyeStrength: number;
+  correctLens: boolean;
 }
 
 export interface CameraSimControlsProps {
@@ -70,6 +73,31 @@ export function CameraSimControls({
         `${values.resolution}×${values.resolution}`,
       )}
       {row(
+        "lens",
+        <select value={values.fisheye ? "fisheye" : "pinhole"}
+          onChange={(e) => onChange({ ...values, fisheye: e.target.value === "fisheye" })}>
+          <option value="pinhole">pinhole</option>
+          <option value="fisheye">fisheye (OpenCV)</option>
+        </select>,
+        values.fisheye ? "fisheye" : "pinhole",
+      )}
+      {values.fisheye && <>
+        {row("extra barrel distortion", <input type="range" min={0} max={1} step={0.05}
+          value={values.fisheyeStrength}
+          onChange={(e) => onChange({ ...values, fisheyeStrength: Number(e.target.value) })} />,
+          `${Math.round(values.fisheyeStrength * 100)}%`)}
+        <label style={{ fontSize: 12 }}>
+          <input type="checkbox" checked={values.correctLens}
+            onChange={(e) => onChange({ ...values, correctLens: e.target.checked })} />
+          scan with known intrinsics
+        </label>
+        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          0% is equidistant fisheye. Zoom or pan toward an edge to stress the lens.
+          Sensor view stays on; areas outside the rendered view use the scene background.
+          {values.correctLens && " Calibrated scans show decoded corners; internal trace overlays are unavailable."}
+        </div>
+      </>}
+      {row(
         "blur sigma (approx.)",
         <input
           type="range"
@@ -108,14 +136,15 @@ export function CameraSimControls({
       {row(
         "sensor view",
         <select
-          value={sensorView}
+          value={values.fisheye ? "on" : sensorView}
+          disabled={values.fisheye}
           onChange={(e) => onSensorViewChange(e.target.value as SensorViewMode)}
         >
           <option value="auto">auto (when any knob active)</option>
           <option value="on">on</option>
           <option value="off">off</option>
         </select>,
-        sensorView,
+        values.fisheye ? "on (fisheye)" : sensorView,
       )}
     </div>
   );

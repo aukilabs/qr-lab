@@ -47,4 +47,9 @@ pub use qr_lab_qr::{BinarizeSpec, TileGrid};
 
 // New facade types are additive to the compatibility surface.
 #[doc(inline)]
+pub use qr_lab_qr::{
+    scan_calibrated, CalibratedCode, CalibratedDetections, CalibratedScanner, CalibrationError,
+    CameraCalibration, CameraIntrinsics, LensDistortion,
+};
+#[doc(inline)]
 pub use qr_lab_qr::{Scanner, ScannerConfig};

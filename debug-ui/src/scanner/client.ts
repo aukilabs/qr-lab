@@ -11,7 +11,8 @@ import {
   type RobustPresets,
   type RobustScanResult,
 } from "./robust-types";
-import { parseScanResult, type ScanResult } from "./types";
+import type { CameraCalibration } from "./calibration";
+import { parseScanResult, parseCalibratedScanResult, type ScanResult } from "./types";
 
 /**
  * The subset of the real `Worker` API this client depends on. Matching a
@@ -62,6 +63,8 @@ export class WorkerInitTimeoutError extends Error {
 }
 
 export interface ScanOptions {
+  /** Calibrated scans return sensor-space corners without a diagnostic trace. */
+  calibration?: CameraCalibration;
   maxDim: number;
   withTrace: boolean;
   /** Enables subpixel corner refinement (Plan 5 Task 3 — see
@@ -117,6 +120,7 @@ export interface SessionScanOptions {
 }
 
 interface ScanRequestMessage {
+  calibration?: CameraCalibration;
   type: "scan";
   id: number;
   rgba: ArrayBuffer;
@@ -427,6 +431,7 @@ export class ScannerClient {
         height: pending.height,
         maxDim: pending.opts.maxDim,
         withTrace: pending.opts.withTrace,
+        ...(pending.opts.calibration ? { calibration: pending.opts.calibration } : {}),
         refine: pending.opts.refine ?? false,
       };
     } else if (pending.kind === "scan-robust") {
@@ -507,7 +512,7 @@ export class ScannerClient {
         // `RobustScanOutcome`, so they share the else branch.
         if (pending.kind === "scan") {
           pending.resolve({
-            result: parseScanResult(data.result),
+            result: pending.opts.calibration ? parseCalibratedScanResult(data.result) : parseScanResult(data.result),
             wallMs: data.wallMs,
             scanWidth: data.scanWidth,
             scanHeight: data.scanHeight,

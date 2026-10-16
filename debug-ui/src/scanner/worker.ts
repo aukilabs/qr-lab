@@ -44,14 +44,20 @@
 // Vite bundles this file (and its imports, including the wasm package)
 // for that worker entry automatically.
 
+import type { CameraCalibration } from "./calibration";
 import init, {
   robust_presets,
   scan_rgba,
   scan_rgba_robust,
   WasmScanSession,
+  WasmCalibratedScanner,
 } from "../wasm/qr_lab_wasm.js";
 
+let calibratedScanner: WasmCalibratedScanner | null = null;
+let calibrationKey = "";
+
 interface ScanRequestMessage {
+  calibration?: CameraCalibration;
   type: "scan";
   id: number;
   rgba: ArrayBuffer;
@@ -283,7 +289,20 @@ ctx.addEventListener("message", (ev) => {
       const start = performance.now();
       let result: unknown;
       if (msg.type === "scan") {
-        result = scan_rgba(view, msg.width, msg.height, msg.maxDim, msg.withTrace, msg.refine);
+        if (msg.calibration) {
+          const key = JSON.stringify([msg.width, msg.height, msg.maxDim, msg.refine, msg.calibration]);
+          if (!calibratedScanner || key !== calibrationKey) {
+            calibratedScanner?.free();
+            calibratedScanner = null;
+            calibratedScanner = new WasmCalibratedScanner(msg.width, msg.height, msg.calibration, msg.maxDim, msg.refine);
+            calibrationKey = key;
+          }
+          result = calibratedScanner.scan_rgba(view);
+        } else {
+          calibratedScanner?.free();
+          calibratedScanner = null;
+          result = scan_rgba(view, msg.width, msg.height, msg.maxDim, msg.withTrace, msg.refine);
+        }
       } else if (msg.type === "scan-robust") {
         result = scan_rgba_robust(
           view,

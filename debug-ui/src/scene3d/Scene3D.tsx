@@ -51,6 +51,8 @@ import { BackgroundPlane } from "./BackgroundPlane";
 import { computeCameraStats, type CameraStats } from "./cameraStats";
 import { drawHud, formatHudLines } from "./hud";
 import { sensorViewActive, type SensorViewMode } from "./sensorView";
+import { FisheyeWarp, fisheyeCalibration, distortPoint, type FisheyeCalibration } from "./fisheye";
+import { distortTruth } from "./distortedTruth";
 import { intrinsicsFromFov } from "./intrinsics";
 import {
   buildFixtureMeta,
@@ -104,6 +106,9 @@ interface FrameOutcome {
   /** The three.js camera's vertical fov (degrees) at capture time — feeds
    * `intrinsicsFromFov` for the fixture-export `camera` block. */
   fovDeg: number;
+  camSim: CameraSimValues;
+  calibration: FisheyeCalibration | undefined;
+  cornersRectified: GroundTruthCode["corners_px"];
 }
 
 function QrPlane({
@@ -171,6 +176,7 @@ function ScanLoop({ qr, physicalSize, client, payload, camSim, meshRef, onResult
   const scanningRef = useRef(false);
   const noiseSeedRef = useRef(0x9e3779b9);
   const scratchRef = useRef<ScanScratch | null>(null);
+  const warpRef = useRef<{ key: string; warp: FisheyeWarp } | null>(null);
 
   useEffect(() => {
     const target = new THREE.WebGLRenderTarget(camSim.resolution, camSim.resolution, {
@@ -195,129 +201,153 @@ function ScanLoop({ qr, physicalSize, client, payload, camSim, meshRef, onResult
 
     const { resolution, blurSigma, noiseSigma, exposureOffset } = camSim;
     const wallStart = performance.now();
-
-    const prevTarget = gl.getRenderTarget();
-    gl.setRenderTarget(target);
-    gl.render(state.scene, camera);
-    gl.setRenderTarget(prevTarget);
-
-    // Reused scratch buffers — realloc only on resolution change (see
-    // `ScanScratch`'s doc for the full reuse-safety argument).
-    let scratch = scratchRef.current;
-    if (!scratch || scratch.res !== resolution) {
-      scratch = {
-        res: resolution,
-        readback: new Uint8Array(resolution * resolution * 4),
-        frame: new Uint8ClampedArray(resolution * resolution * 4),
-      };
-      scratchRef.current = scratch;
-    }
-
-    gl.readRenderTargetPixels(target, 0, 0, resolution, resolution, scratch.readback);
-    // A clamped VIEW over the readback's own storage (no copy) — just a
-    // type adapter, since readRenderTargetPixels wants Uint8Array and the
-    // image pipeline speaks Uint8ClampedArray.
-    const bottomUp = new Uint8ClampedArray(
-      scratch.readback.buffer,
-      scratch.readback.byteOffset,
-      scratch.readback.length,
-    );
-
-    // Camera-sim pipeline order: row-flip -> noise -> exposure -> blur.
-    // Noise and exposure run BEFORE blur deliberately-ish (the blur then
-    // smooths the just-added noise, muting the noise knob's visible
-    // effect at high blur sigmas) — a physical camera actually noises
-    // AFTER optical blur, so this ordering slightly understates noise
-    // under blur; acceptable for a sim whose passes are all documented
-    // approximations anyway (see camSim.ts), just don't be surprised
-    // that maxing blur visually "eats" the noise slider.
-    // Bottom-up -> top-down flip first (see this file's module doc +
-    // rowFlip.ts); then noise/exposure mutate `scratch.frame` in place.
-    let rgba = flipRowsRgba(bottomUp, resolution, resolution, scratch.frame);
-    if (noiseSigma > 0) {
-      // Fresh seed per tick (not truly random — deterministic advance of
-      // a counter) so consecutive frames don't dither on identical noise,
-      // while a single tick's `applyGaussianNoise` call stays pure/
-      // reproducible given its seed.
-      noiseSeedRef.current = (noiseSeedRef.current + 0x6d2b79f5) >>> 0;
-      rgba = applyGaussianNoise(rgba, noiseSigma, noiseSeedRef.current, rgba);
-    }
-    if (exposureOffset !== 0) rgba = applyExposureOffset(rgba, exposureOffset, rgba);
-    if (blurSigma > 0) {
-      rgba = applyGaussianBlurCanvas(rgba, resolution, resolution, blurSigma, (w, h) => {
-        const c = document.createElement("canvas");
-        c.width = w;
-        c.height = h;
-        return c;
-      });
-    }
-
-    // Ground truth: project the plane's module-region corners through
-    // THIS camera into the readback's own resolution x resolution pixel
-    // space — see this file's module doc on why no scale conversion is
-    // needed here.
-    mesh.updateMatrixWorld(true);
-    camera.updateMatrixWorld(true);
-    const cameraStats = computeCameraStats(camera, mesh.matrixWorld);
-    const localCorners = moduleRegionLocalCornersArray(qr.dim, QUIET_MODULES, physicalSize);
-    const worldCorners = localCorners.map((c) => new THREE.Vector3(c[0], c[1], c[2]).applyMatrix4(mesh.matrixWorld));
-    const truthPxRaw = projectAllToPixels(worldCorners, camera, resolution, resolution);
-    const truthPx: [
-      [number, number],
-      [number, number],
-      [number, number],
-      [number, number],
-    ] = [truthPxRaw[0]!, truthPxRaw[1]!, truthPxRaw[2]!, truthPxRaw[3]!];
-
-    const truth: GroundTruthCode[] = [
-      {
-        corners_px: truthPx,
-        version: qr.dim,
-        // Pose-DERIVED, from the actual projected corners — exactly
-        // generate.py's |TR-TL|/dim (Plan 5d review fix: the previous
-        // pose-invariant `resolution/(dim+2*quiet)` constant described
-        // the texture's density, not the rendered code's, and was ~2.3x
-        // too large at the default pose).
-        module_size_px: moduleSizeFromCorners(truthPx, qr.dim),
-        inverted: false,
-        opaque_plate: false,
-        payload,
-      },
-    ];
-
-    // Fresh snapshot (not a view over `scratch`/the blur pass's own
-    // buffer) so it survives later ticks mutating those in place — see
-    // `FrameOutcome.capturedRgba`'s doc.
-    const capturedRgba = rgba.slice();
     const fovDeg = (camera as THREE.PerspectiveCamera).fov ?? 50;
+    const calibration = camSim.fisheye
+      ? fisheyeCalibration(intrinsicsFromFov(fovDeg, resolution, resolution), camSim.fisheyeStrength)
+      : undefined;
 
-    client
-      .scan(rgba, resolution, resolution, { maxDim: 0, withTrace: true, refine: true })
-      .then((outcome) => {
-        const roundTripMs = performance.now() - wallStart;
-        const decoded = outcome.result.detections.codes.find((c) => c.payload === payload);
-        const errorSample: ErrorSample | null = decoded?.refined_corners
-          ? { corners: cornerErrors(decoded.refined_corners, truthPx) }
-          : null;
-        onResult({
-          scan: outcome.result,
-          truth,
-          errorSample,
-          timings: { timings: outcome.result.detections.timings, wallMs: outcome.wallMs, roundTripMs },
-          cameraStats,
-          capturedRgba,
-          resolution,
-          fovDeg,
-        });
-      })
-      .catch((err: unknown) => {
-        if (!(err instanceof StaleScanError)) {
-          console.error("scene3d: scan failed", err);
+    try {
+      const prevTarget = gl.getRenderTarget();
+      gl.setRenderTarget(target);
+      try { gl.render(state.scene, camera); } finally { gl.setRenderTarget(prevTarget); }
+
+      // Reused scratch buffers — realloc only on resolution change (see
+      // `ScanScratch`'s doc for the full reuse-safety argument).
+      let scratch = scratchRef.current;
+      if (!scratch || scratch.res !== resolution) {
+        scratch = {
+          res: resolution,
+          readback: new Uint8Array(resolution * resolution * 4),
+          frame: new Uint8ClampedArray(resolution * resolution * 4),
+        };
+        scratchRef.current = scratch;
+      }
+
+      gl.readRenderTargetPixels(target, 0, 0, resolution, resolution, scratch.readback);
+      // A clamped VIEW over the readback's own storage (no copy) — just a
+      // type adapter, since readRenderTargetPixels wants Uint8Array and the
+      // image pipeline speaks Uint8ClampedArray.
+      const bottomUp = new Uint8ClampedArray(
+        scratch.readback.buffer,
+        scratch.readback.byteOffset,
+        scratch.readback.length,
+      );
+
+      // Camera-sim pipeline order: row-flip -> lens warp -> noise -> exposure -> blur.
+      // Noise and exposure run BEFORE blur deliberately-ish (the blur then
+      // smooths the just-added noise, muting the noise knob's visible
+      // effect at high blur sigmas) — a physical camera actually noises
+      // AFTER optical blur, so this ordering slightly understates noise
+      // under blur; acceptable for a sim whose passes are all documented
+      // approximations anyway (see camSim.ts), just don't be surprised
+      // that maxing blur visually "eats" the noise slider.
+      // Bottom-up -> top-down flip first (see this file's module doc +
+      // rowFlip.ts); then noise/exposure mutate `scratch.frame` in place.
+      let rgba = flipRowsRgba(bottomUp, resolution, resolution, scratch.frame);
+      if (calibration) {
+        const key = JSON.stringify([resolution, calibration]);
+        if (warpRef.current?.key !== key) {
+          warpRef.current = { key, warp: new FisheyeWarp(resolution, resolution, calibration) };
         }
-      })
-      .finally(() => {
-        scanningRef.current = false;
-      });
+        rgba = warpRef.current.warp.apply(rgba);
+      } else {
+        warpRef.current = null;
+      }
+      if (noiseSigma > 0) {
+        // Fresh seed per tick (not truly random — deterministic advance of
+        // a counter) so consecutive frames don't dither on identical noise,
+        // while a single tick's `applyGaussianNoise` call stays pure/
+        // reproducible given its seed.
+        noiseSeedRef.current = (noiseSeedRef.current + 0x6d2b79f5) >>> 0;
+        rgba = applyGaussianNoise(rgba, noiseSigma, noiseSeedRef.current, rgba);
+      }
+      if (exposureOffset !== 0) rgba = applyExposureOffset(rgba, exposureOffset, rgba);
+      if (blurSigma > 0) {
+        rgba = applyGaussianBlurCanvas(rgba, resolution, resolution, blurSigma, (w, h) => {
+          const c = document.createElement("canvas");
+          c.width = w;
+          c.height = h;
+          return c;
+        });
+      }
+
+      // Ground truth: project the plane's module-region corners through
+      // THIS camera into the readback's own resolution x resolution pixel
+      // space — see this file's module doc on why no scale conversion is
+      // needed here.
+      mesh.updateMatrixWorld(true);
+      camera.updateMatrixWorld(true);
+      const cameraStats = computeCameraStats(camera, mesh.matrixWorld);
+      const localCorners = moduleRegionLocalCornersArray(qr.dim, QUIET_MODULES, physicalSize);
+      const worldCorners = localCorners.map((c) => new THREE.Vector3(c[0], c[1], c[2]).applyMatrix4(mesh.matrixWorld));
+      const truthPxRaw = projectAllToPixels(worldCorners, camera, resolution, resolution);
+      const truthPx: [
+        [number, number],
+        [number, number],
+        [number, number],
+        [number, number],
+      ] = [truthPxRaw[0]!, truthPxRaw[1]!, truthPxRaw[2]!, truthPxRaw[3]!];
+
+      let truth: GroundTruthCode[] = [
+        {
+          corners_px: truthPx,
+          version: versionFromDim(qr.dim),
+          // Pose-DERIVED, from the actual projected corners — exactly
+          // generate.py's |TR-TL|/dim (Plan 5d review fix: the previous
+          // pose-invariant `resolution/(dim+2*quiet)` constant described
+          // the texture's density, not the rendered code's, and was ~2.3x
+          // too large at the default pose).
+          module_size_px: moduleSizeFromCorners(truthPx, qr.dim),
+          inverted: false,
+          opaque_plate: false,
+          payload,
+        },
+      ];
+
+      if (calibration) truth = truth.map((code) => distortTruth(code, calibration));
+
+      // Fresh snapshot (not a view over `scratch`/the blur pass's own
+      // buffer) so it survives later ticks mutating those in place — see
+      // `FrameOutcome.capturedRgba`'s doc.
+      const capturedRgba = rgba.slice();
+
+      client
+        .scan(rgba, resolution, resolution, {
+          maxDim: 0, withTrace: true, refine: true,
+          ...(calibration && camSim.correctLens ? { calibration } : {}),
+        })
+        .then((outcome) => {
+          const roundTripMs = performance.now() - wallStart;
+          const decoded = outcome.result.detections.codes.find((c) => c.payload === payload);
+          const errorSample: ErrorSample | null = decoded?.refined_corners
+            ? { corners: cornerErrors(decoded.refined_corners, truth[0]!.corners_px) }
+            : null;
+          onResult({
+            scan: outcome.result,
+            truth,
+            errorSample,
+            timings: { timings: outcome.result.detections.timings, wallMs: outcome.wallMs, roundTripMs },
+            cameraStats,
+            capturedRgba,
+            resolution,
+            fovDeg,
+            camSim: { ...camSim },
+            calibration,
+            cornersRectified: truthPx,
+          });
+        })
+        .catch((err: unknown) => {
+          if (!(err instanceof StaleScanError)) {
+            console.error("scene3d: scan failed", err);
+          }
+        })
+        .finally(() => {
+          scanningRef.current = false;
+        });
+    } catch (err) {
+      scanningRef.current = false;
+      console.error("scene3d: capture failed", err);
+    }
   });
 
   return null;
@@ -339,7 +369,13 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
     blurSigma: 0,
     noiseSigma: 0,
     exposureOffset: 0,
+    fisheye: false,
+    fisheyeStrength: 0.5,
+    correctLens: true,
   });
+
+  const currentCamSimRef = useRef(camSim);
+  currentCamSimRef.current = camSim;
 
   const [qr, setQr] = useState<GeneratedQr | null>(null);
   const [qrError, setQrError] = useState<string | null>(null);
@@ -397,6 +433,9 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
     cameraStats: CameraStats;
     truth: GroundTruthCode;
     fovDeg: number;
+    camSim: CameraSimValues;
+    calibration: FisheyeCalibration | undefined;
+    cornersRectified: GroundTruthCode["corners_px"];
   } | null>(null);
 
   useEffect(() => {
@@ -468,6 +507,7 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
 
   const [timingsSample, setTimingsSample] = useState<TimingsSample | null>(null);
   const [sampleId, setSampleId] = useState(0);
+  const [scanStatus, setScanStatus] = useState("Waiting for scan…");
   const [errorSample, setErrorSample] = useState<ErrorSample | null>(null);
   /** Sensor-view display mode (Plan 5d follow-up — see `sensorView.ts`):
    * default "auto" shows the processed readback frame whenever any camSim
@@ -482,8 +522,10 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
     (outcome: FrameOutcome) => {
       const canvas = overlayCanvasRef.current;
       const ctx = canvas?.getContext("2d");
-      const showSensor = sensorViewActive(sensorViewMode, camSim);
-      if (ctx && canvas) {
+      // Ignore results from an old resolution or lens setting after a control change.
+      if (JSON.stringify(outcome.camSim) !== JSON.stringify(currentCamSimRef.current)) return;
+      const showSensor = sensorViewActive(sensorViewMode, outcome.camSim);
+      if (ctx && canvas && canvas.width === outcome.resolution && canvas.height === outcome.resolution) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         // Sensor view (Plan 5d follow-up): paint the PROCESSED post-camSim
         // readback frame — the exact rgba the scanner ingested this tick —
@@ -518,11 +560,10 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
         // HUD last, on the SAME overlay canvas — never the offscreen
         // readback target (see `hud.ts`'s module doc). Uses this tick's
         // own camSim snapshot (the `FrameOutcome`'s `timings`/`truth`
-        // already close over ScanLoop's per-tick values the same way;
-        // camSim values themselves come straight from this component's
-        // own state below since they don't change mid-tick).
-        drawHud(ctx, formatHudLines(camSim, outcome.cameraStats, showSensor));
+        // already close over ScanLoop's per-tick values the same way).
+        drawHud(ctx, formatHudLines(outcome.camSim, outcome.cameraStats, showSensor));
       }
+      setScanStatus(`Decoded ${outcome.scan.detections.codes.length} QR · ${outcome.calibration && outcome.camSim.correctLens ? "calibrated" : "uncorrected"}`);
       setTimingsSample(outcome.timings);
       setErrorSample(outcome.errorSample);
       setCameraStats(outcome.cameraStats);
@@ -533,6 +574,9 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
         cameraStats: outcome.cameraStats,
         truth: outcome.truth[0]!,
         fovDeg: outcome.fovDeg,
+        camSim: outcome.camSim,
+        calibration: outcome.calibration,
+        cornersRectified: outcome.cornersRectified,
       };
     },
     [overlayRegistry, camSim, sensorViewMode],
@@ -574,17 +618,19 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
         frame.rgba,
         frame.resolution,
         frame.resolution,
-        frame.truth.corners_px,
-        moduleSizePx,
+        frame.cornersRectified,
+        moduleSizeFromCorners(frame.cornersRectified, qr.dim),
+        frame.calibration ? (p) => distortPoint(p, frame.calibration!) : undefined,
       );
       const meta = buildFixtureMeta({
         name: fixtureName,
         width: frame.resolution,
         height: frame.resolution,
         camera,
-        blurSigma: camSim.blurSigma,
-        noiseSigma: camSim.noiseSigma,
-        exposureOffset: camSim.exposureOffset,
+        ...(frame.calibration ? { distortion: frame.calibration.distortion } : {}),
+        blurSigma: frame.camSim.blurSigma,
+        noiseSigma: frame.camSim.noiseSigma,
+        exposureOffset: frame.camSim.exposureOffset,
         code: {
           payload,
           version: versionFromDim(qr.dim),
@@ -594,6 +640,8 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
           tiltDeg: frame.cameraStats.incidenceDeg,
           moduleSizePx,
           cornersPx: frame.truth.corners_px,
+          ...(frame.truth.outline_px ? { outlinePx: frame.truth.outline_px } : {}),
+          ...(frame.truth.finder_centers_px ? { finderCentersPx: frame.truth.finder_centers_px } : {}),
           inverted: probe.inverted,
           opaquePlate: opaquePlateFromAlpha(qrColors.bgAlpha),
         },
@@ -725,7 +773,12 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
           <h2 className="panel-title">Camera sim</h2>
           <CameraSimControls
             values={camSim}
-            onChange={setCamSim}
+            onChange={(values) => {
+              setCamSim(values);
+              setErrorSample(null);
+              setTimingsSample(null);
+              setScanStatus("Waiting for scan…");
+            }}
             sensorView={sensorViewMode}
             onSensorViewChange={setSensorViewMode}
           />
@@ -733,12 +786,13 @@ export function Scene3D({ client, scannerReady, overlayRegistry }: Scene3DProps)
 
         <section className="panel-section">
           <h2 className="panel-title">Corner error</h2>
-          <ErrorPanel sample={errorSample} sampleId={sampleId} />
+          <div role="status" style={{ fontSize: 12 }}>{scanStatus}</div>
+          <ErrorPanel key={JSON.stringify(camSim)} sample={errorSample} sampleId={sampleId} />
         </section>
 
         <section className="panel-section">
           <h2 className="panel-title">Timings</h2>
-          <TimingsPanel sample={timingsSample} sampleId={sampleId} />
+          <TimingsPanel key={JSON.stringify(camSim)} sample={timingsSample} sampleId={sampleId} />
         </section>
 
         <section className="panel-section">

@@ -71,6 +71,7 @@ use crate::consts::{
     REFINE_ROUNDS,
 };
 use crate::homography::PerspectiveTransform;
+use crate::sample::SourceView;
 use crate::sample::{fit_line_tls_weighted, intersect_lines, EdgeFit};
 use crate::LumaView;
 use qr_lab_geometry::{sample_bilinear, BorderMode};
@@ -160,8 +161,8 @@ const EDGE_TO_CORNERS: [(usize, usize); 4] = [(0, 1), (1, 2), (2, 3), (3, 0)];
 /// their analytic truth into this integer-center convention by
 /// subtracting 0.5 per axis (see `pose_quad`'s callers) rather than this
 /// function adapting to the test renderer.
-fn bilinear_at(view: &LumaView, x: f64, y: f64) -> Option<f64> {
-    sample_bilinear(*view, x, y, BorderMode::Reject)
+fn bilinear_at(sample: &impl Fn(f64, f64) -> Option<f64>, x: f64, y: f64) -> Option<f64> {
+    sample(x, y)
 }
 
 /// One localized edge point + its Devernay-profile gradient-magnitude
@@ -241,7 +242,7 @@ struct EdgePoint {
 /// leakage into the 3-sample quadratic stencil is negligible — no
 /// correction applied.
 fn localize_edge_point_pass(
-    source: &LumaView,
+    source: &impl Fn(f64, f64) -> Option<f64>,
     center: [f64; 2],
     normal: [f64; 2],
     step: f64,
@@ -374,7 +375,7 @@ fn localize_edge_point_pass(
 /// moves more than one sample step is a sign the sequence is not
 /// locally linear at all, and the probe is rejected rather than trusted.
 fn localize_edge_point(
-    source: &LumaView,
+    source: &impl Fn(f64, f64) -> Option<f64>,
     coarse: [f64; 2],
     normal: [f64; 2],
     step: f64,
@@ -490,7 +491,7 @@ fn fit_edge(localized: &[EdgePoint], probed: usize, module_px: f64) -> (Option<E
 /// all four edges, fit lines, intersect — [`refine_corners`]'s per-round
 /// body (see that function for the two-round rationale).
 fn refine_round(
-    source: &LumaView,
+    source: &impl Fn(f64, f64) -> Option<f64>,
     corners_in: &[[f64; 2]; 4],
     bits: &BitMatrix,
     inverted: bool,
@@ -660,6 +661,43 @@ fn refine_round(
 /// weaker but still evidence-based refinement, never a coarse echo.
 pub(crate) fn refine_corners(
     source: &LumaView,
+    sx: f64,
+    sy: f64,
+    code_corners_working: &[[f64; 2]; 4],
+    bits: &BitMatrix,
+    inverted: bool,
+) -> Option<RefinedCorners> {
+    // Specialize the ordinary sampler: no lens-model branch per profile sample.
+    refine_corners_with_sampler(
+        &|x, y| sample_bilinear(*source, x, y, BorderMode::Reject),
+        sx,
+        sy,
+        code_corners_working,
+        bits,
+        inverted,
+    )
+}
+
+/// Fit straight edges in full rectified coordinates, sampling their curved
+/// paths directly in the original camera buffer when calibration is present.
+pub(crate) fn refine_corners_mapped(
+    source: SourceView<'_>,
+    code_corners_working: &[[f64; 2]; 4],
+    bits: &BitMatrix,
+    inverted: bool,
+) -> Option<RefinedCorners> {
+    refine_corners_with_sampler(
+        &|x, y| source.sample(x, y),
+        source.sx,
+        source.sy,
+        code_corners_working,
+        bits,
+        inverted,
+    )
+}
+
+fn refine_corners_with_sampler(
+    source: &impl Fn(f64, f64) -> Option<f64>,
     sx: f64,
     sy: f64,
     code_corners_working: &[[f64; 2]; 4],

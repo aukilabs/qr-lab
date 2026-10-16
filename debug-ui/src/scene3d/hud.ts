@@ -16,6 +16,9 @@ export interface HudCamSimValues {
   blurSigma: number;
   noiseSigma: number;
   exposureOffset: number;
+  fisheye?: boolean;
+  fisheyeStrength?: number;
+  correctLens?: boolean;
 }
 
 /**
@@ -38,6 +41,10 @@ export function formatHudLines(
     `exposure ${camSim.exposureOffset > 0 ? "+" : ""}${camSim.exposureOffset}`,
   ];
   if (sensorView) lines.unshift("[sensor view]");
+  if (camSim.fisheye) lines.push(
+    `fisheye k1=${(-0.5 * (camSim.fisheyeStrength ?? 0)).toFixed(3)}`,
+    `scan    ${camSim.correctLens ? "calibrated" : "uncorrected"}`,
+  );
   if (stats) {
     lines.push(
       `dist    ${stats.distanceM.toFixed(3)}m`,

@@ -14,18 +14,21 @@ export interface SensorKnobs {
   blurSigma: number;
   noiseSigma: number;
   exposureOffset: number;
+  fisheye?: boolean;
 }
 
 /** `true` when any camSim knob is away from its no-op default (blur 0,
  * noise 0, exposure 0) — i.e. the readback the scanner sees actually
  * differs from the pristine render. */
 export function anyKnobActive(knobs: SensorKnobs): boolean {
-  return knobs.blurSigma > 0 || knobs.noiseSigma > 0 || knobs.exposureOffset !== 0;
+  return knobs.fisheye === true || knobs.blurSigma > 0 || knobs.noiseSigma > 0 || knobs.exposureOffset !== 0;
 }
 
 /** Resolve the sensor-view select + current knob values into "should the
  * processed frame be displayed this tick". */
 export function sensorViewActive(mode: SensorViewMode, knobs: SensorKnobs): boolean {
+  // Geometric overlays must never be drawn over the unwarped WebGL view.
+  if (knobs.fisheye) return true;
   if (mode === "on") return true;
   if (mode === "off") return false;
   return anyKnobActive(knobs);

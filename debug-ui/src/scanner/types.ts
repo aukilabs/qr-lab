@@ -44,7 +44,8 @@ export interface DecodedCode {
   dimension: number;
   corners: [[number, number], [number, number], [number, number], [number, number]];
   inverted: boolean;
-  finder_indices: [number, number, number];
+  /** Null for calibrated scans, which expose only sensor-space corners. */
+  finder_indices: [number, number, number] | null;
   /** Subpixel-refined `[TL, TR, BR, BL]` corners, in SOURCE image px (Plan
    * 5 Task 3) — `null` when `ScanOptions.refine` was `false`, or `true` but
    * refinement produced fewer than 2 valid edge lines. Unlike `corners`
@@ -453,7 +454,7 @@ function parseTripletCandidateArray(v: unknown, path: string): TripletCandidate[
   return arr.map((item, i) => parseTripletCandidate(item, indexPath(path, i)));
 }
 
-export function parseDecodedCode(v: unknown, path: string): DecodedCode {
+export function parseDecodedCode(v: unknown, path: string, calibrated = false): DecodedCode {
   const obj = expectObject(v, path);
   return {
     payload: expectString(expectField(obj, "payload", path), joinPath(path, "payload")),
@@ -465,14 +466,14 @@ export function parseDecodedCode(v: unknown, path: string): DecodedCode {
     ecc: expectString(expectField(obj, "ecc", path), joinPath(path, "ecc")),
     mirrored: expectBoolean(expectField(obj, "mirrored", path), joinPath(path, "mirrored")),
     dimension: expectNumber(expectField(obj, "dimension", path), joinPath(path, "dimension")),
-    corners: parseQuad(expectField(obj, "corners", path), joinPath(path, "corners")),
+    corners: parseQuad(expectField(obj, calibrated ? "corners_source" : "corners", path), joinPath(path, "corners")),
     inverted: expectBoolean(expectField(obj, "inverted", path), joinPath(path, "inverted")),
-    finder_indices: parseTriple(
+    finder_indices: calibrated ? null : parseTriple(
       expectField(obj, "finder_indices", path),
       joinPath(path, "finder_indices"),
     ),
     refined_corners: parseQuadOrNull(
-      expectField(obj, "refined_corners", path),
+      expectField(obj, calibrated ? "refined_corners_source" : "refined_corners", path),
       joinPath(path, "refined_corners"),
     ),
     corner_refined: parseBooleanQuad(
@@ -828,5 +829,25 @@ export function parseScanResult(v: unknown): ScanResult {
       "detections",
     ),
     trace: parseTraceOrNull(expectField(obj, "trace", ""), "trace"),
+  };
+}
+
+/** Adapt the separate calibrated WASM envelope to the display's sensor-space
+ * geometry. No invented finder indices or rectified traces are exposed. */
+export function parseCalibratedScanResult(v: unknown): ScanResult {
+  const root = expectObject(v, "");
+  const detections = expectObject(expectField(root, "detections", ""), "detections");
+  // Validate the calibrated timing contract even though the panel currently
+  // displays stage timings and the worker wall time (which includes remapping).
+  expectNumber(expectField(detections, "rectification_ns", "detections"), "detections.rectification_ns");
+  expectNumber(expectField(detections, "total_ns", "detections"), "detections.total_ns");
+  return {
+    detections: {
+      finders: [], triplets: [], source_scale: 1,
+      codes: expectArray(expectField(detections, "codes", "detections"), "detections.codes")
+        .map((code, i) => parseDecodedCode(code, `detections.codes[${i}]`, true)),
+      timings: parseStageTimings(expectField(detections, "timings", "detections"), "detections.timings"),
+    },
+    trace: null,
   };
 }

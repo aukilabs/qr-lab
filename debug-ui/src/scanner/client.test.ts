@@ -851,3 +851,27 @@ describe("ScannerClient", () => {
     });
   });
 });
+
+it("forwards calibration and parses sensor-space results without diagnostic geometry", async () => {
+  const worker = new FakeWorker();
+  const client = new ScannerClient(worker);
+  const init = client.init();
+  worker.emit({ type: "ready" });
+  await init;
+  const calibration = {
+    intrinsics: { fx: 100, fy: 100, cx: 0.5, cy: 0.5 },
+    distortion: { model: "fisheye" as const, coefficients: [0, 0, 0, 0] as [number, number, number, number] },
+  };
+  const scan = client.scan(new Uint8ClampedArray(16), 2, 2, { calibration, maxDim: 0, withTrace: true, refine: true });
+  const request = worker.posted.at(-1)!.message;
+  expect(request.calibration).toEqual(calibration);
+  const result = minimalScanResultJson() as { detections: Record<string, unknown> };
+  worker.emit({ type: "scan-result", id: request.id, ok: true,
+    result: { detections: { codes: [], timings: result.detections.timings, rectification_ns: 1, total_ns: 2 }, scan_width: 2, scan_height: 2 },
+    wallMs: 1, scanWidth: 2, scanHeight: 2,
+  });
+  const outcome = await scan;
+  expect(outcome.result.trace).toBeNull();
+  expect(outcome.result.detections).toMatchObject({ codes: [], finders: [], triplets: [], source_scale: 1 });
+  client.dispose();
+});

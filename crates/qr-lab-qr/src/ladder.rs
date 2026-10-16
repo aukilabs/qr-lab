@@ -1699,6 +1699,7 @@ fn scan_robust_inner(
     let baseline = detect_with_source(
         &working,
         downscaled.then_some(SourceView {
+            camera: None,
             view: source,
             sx: w_scale.0,
             sy: w_scale.1,
@@ -1835,6 +1836,7 @@ fn scan_robust_inner(
                 &mut l,
                 &box_view,
                 Some(SourceView {
+                    camera: None,
                     view: source,
                     sx: w_scale.0,
                     sy: w_scale.1,
@@ -1883,6 +1885,7 @@ fn scan_robust_inner(
                     &mut l,
                     &lview,
                     Some(SourceView {
+                        camera: None,
                         view: source,
                         sx: scale.0,
                         sy: scale.1,
@@ -1929,6 +1932,7 @@ fn scan_robust_inner(
                     &mut l,
                     &box_view,
                     Some(SourceView {
+                        camera: None,
                         view: source,
                         sx: w_scale.0,
                         sy: w_scale.1,
@@ -1953,6 +1957,7 @@ fn scan_robust_inner(
                 &mut l,
                 &box_view,
                 Some(SourceView {
+                    camera: None,
                     view: source,
                     sx: w_scale.0,
                     sy: w_scale.1,
@@ -1984,6 +1989,7 @@ fn scan_robust_inner(
                 &mut l,
                 &box_view,
                 Some(SourceView {
+                    camera: None,
                     view: source,
                     sx: w_scale.0,
                     sy: w_scale.1,
@@ -2077,6 +2083,7 @@ fn scan_robust_inner(
                 &mut l,
                 &uview,
                 Some(SourceView {
+                    camera: None,
                     view: source,
                     sx: w_scale.0,
                     sy: w_scale.1,
@@ -2142,6 +2149,7 @@ fn scan_robust_inner(
                         &mut l,
                         &uview,
                         Some(SourceView {
+                            camera: None,
                             view: &roi_view,
                             sx: f,
                             sy: f,
@@ -2216,6 +2224,7 @@ fn scan_robust_inner(
                             &mut l,
                             &uview,
                             Some(SourceView {
+                                camera: None,
                                 view: source,
                                 sx: scale.0,
                                 sy: scale.1,
@@ -2274,6 +2283,7 @@ fn scan_robust_inner(
                         &mut l,
                         &uview,
                         Some(SourceView {
+                            camera: None,
                             view: source,
                             sx: scale.0,
                             sy: scale.1,
@@ -2399,6 +2409,7 @@ fn scan_robust_inner(
                     &mut l,
                     &dview,
                     Some(SourceView {
+                        camera: None,
                         view: &roi_view,
                         sx: 1.0,
                         sy: 1.0,
@@ -2591,6 +2602,7 @@ fn pool_group_and_decode(
         &fresh,
         false,
         Some(SourceView {
+            camera: None,
             view: source,
             sx: box_map.sx,
             sy: box_map.sy,
@@ -3121,6 +3133,7 @@ mod tests {
             &mut l,
             &uview,
             Some(SourceView {
+                camera: None,
                 view: &roi_view,
                 sx: f,
                 sy: f,

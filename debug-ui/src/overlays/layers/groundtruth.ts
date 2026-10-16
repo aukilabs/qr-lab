@@ -28,7 +28,7 @@ export const groundtruthLayer: OverlayLayer = {
       imageToScreen(view, [p[0] * workingScale, p[1] * workingScale]);
 
     for (const code of groundTruth) {
-      const quad = code.corners_px.map(toScreen);
+      const quad = (code.outline_px?.length ? code.outline_px : code.corners_px).map(toScreen);
 
       ctx.beginPath();
       ctx.moveTo(quad[0]![0], quad[0]![1]);

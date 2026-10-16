@@ -50,7 +50,7 @@ export const tripletsLayer: OverlayLayer = {
     if (!triplets || triplets.length === 0) return;
 
     const decodedKeys = new Set(
-      (scan?.detections.codes ?? []).map((c) => finderKey(c.finder_indices)),
+      (scan?.detections.codes ?? []).flatMap((c) => c.finder_indices ? [finderKey(c.finder_indices)] : []),
     );
 
     ctx.lineWidth = 1.5;

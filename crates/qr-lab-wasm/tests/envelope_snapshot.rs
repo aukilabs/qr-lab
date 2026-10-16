@@ -16,8 +16,8 @@
 //! freshly generated JSON matches it byte-for-byte (modulo a trailing
 //! newline) — silent drift between Rust and TS fails this test.
 
-use qr_lab_wasm::WasmResult;
 use qr_lab::{scan_traced, LumaView, ScanOptions, StageTimings, Trace};
+use qr_lab_wasm::WasmResult;
 use std::path::PathBuf;
 
 const WIDTH: usize = 1280;

@@ -32,6 +32,9 @@ use qr_lab::{
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+mod calibrated;
+pub use calibrated::WasmCalibratedScanner;
+
 #[cfg(feature = "qr-gen")]
 mod qrgen;
 #[cfg(feature = "qr-gen")]
