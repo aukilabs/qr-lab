@@ -8,10 +8,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod camera;
 mod homography;
 mod line;
 mod sampling;
 
+pub use camera::{CalibrationError, CameraCalibration, CameraIntrinsics, LensDistortion};
 pub use homography::PerspectiveTransform;
 pub use line::{fit_line_tls, fit_line_tls_weighted, intersect_lines, FitLineError, Line2, Point2};
 pub use sampling::{sample_bilinear, BorderMode};

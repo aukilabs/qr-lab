@@ -10,9 +10,14 @@
     "prebuild": "node scripts/check-wasm-built.mjs && node scripts/gen-fixture-manifest.mjs",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
-    "build:wasm": "bash ../scripts/build-wasm.sh"
+    "build:wasm": "bash ../scripts/build-wasm.sh",
+    "pretest:calibrated": "node scripts/check-wasm-built.mjs",
+    "test:calibrated": "QR_LAB_WASM_TESTS=1 vitest run src/scene3d/fisheye.wasm.test.ts",
+    "prebench:fisheye": "node scripts/check-wasm-built.mjs",
+    "bench:fisheye": "node scripts/fisheye-sweep.mjs"
   },
   "devDependencies": {
+    "@types/node": "^24.19.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",

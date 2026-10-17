@@ -56,7 +56,7 @@ use crate::bitmatrix::{
 };
 use crate::consts::{MAX_DECODE_ROUNDS, MAX_OOB_FRACTION};
 use crate::finder::FinderCandidate;
-use crate::refine::{refine_corners, RefinedCorners};
+use crate::refine::{refine_corners, refine_corners_mapped, RefinedCorners};
 use crate::sample::{
     needs_refined_br, provisional_transform, refine_fourth_corner, sample_grid, EdgeFitMode,
     SourceView,
@@ -874,7 +874,10 @@ fn attempt_candidate(
                 None => (view, 1.0, 1.0),
             };
             let refine_clock = StageClock::start();
-            let result = refine_corners(refine_source, sx, sy, &corners, bits, t.inverted);
+            let result = match source.filter(|s| s.camera.is_some()) {
+                Some(mapped) => refine_corners_mapped(mapped, &corners, bits, t.inverted),
+                None => refine_corners(refine_source, sx, sy, &corners, bits, t.inverted),
+            };
             timings.refine_ns += refine_clock.elapsed_ns();
             result
         })

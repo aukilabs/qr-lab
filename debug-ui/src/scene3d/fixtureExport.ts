@@ -12,6 +12,7 @@
 // real `HTMLCanvasElement`/DOM and is manual/headless-browser-QA'd only —
 // same split this codebase already uses throughout `scene3d/` (see
 // `camSim.ts`'s module doc on the same pure/impure canvas split).
+import type { CameraCalibration } from "../scanner/calibration";
 import type { Intrinsics } from "./intrinsics";
 import { CONTRAST_WARN_THRESHOLD, FIXTURE_EXPORT_SEED } from "./consts";
 import { lumaAt, lumaBufferFromRgba } from "../media/luma";
@@ -130,6 +131,7 @@ export function probeInvertedFromRgba(
   height: number,
   corners: [Point2, Point2, Point2, Point2],
   moduleSizePx: number,
+  project: (point: Point2) => Point2 = (point) => point,
 ): InvertedProbe {
   if (!Number.isFinite(moduleSizePx) || moduleSizePx <= 0) {
     throw new RangeError(`probeInvertedFromRgba: moduleSizePx must be > 0, got ${moduleSizePx}`);
@@ -144,7 +146,8 @@ export function probeInvertedFromRgba(
   const step = 0.5 * moduleSizePx;
 
   const sample = (x: number, y: number, label: string): number => {
-    const luma = lumaAt(rgba, width, height, Math.round(x), Math.round(y));
+    const [sensorX, sensorY] = project([x, y]);
+    const luma = lumaAt(rgba, width, height, Math.round(sensorX), Math.round(sensorY));
     if (luma === null) {
       throw new RangeError(
         `probeInvertedFromRgba: ${label} probe (${x.toFixed(1)}, ${y.toFixed(1)}) is outside the ${width}x${height} frame`,
@@ -180,6 +183,8 @@ export interface FixtureCodeInput {
   moduleSizePx: number;
   /** [TL, TR, BR, BL], readback px — `projectAllToPixels`' output. */
   cornersPx: [Point2, Point2, Point2, Point2];
+  outlinePx?: Point2[];
+  finderCentersPx?: Point2[];
   inverted: boolean;
   opaquePlate: boolean;
 }
@@ -190,6 +195,7 @@ export interface FixtureMetaInput {
   width: number;
   height: number;
   camera: Intrinsics;
+  distortion?: CameraCalibration["distortion"];
   blurSigma: number;
   noiseSigma: number;
   /** No schema field for this (a fixture's plate rendering has no
@@ -205,7 +211,7 @@ export interface FixtureMeta {
   name: string;
   width: number;
   height: number;
-  camera: Intrinsics;
+  camera: Intrinsics & { distortion?: CameraCalibration["distortion"] };
   blur_sigma: number;
   noise_sigma: number;
   exposure_offset: number;
@@ -225,7 +231,10 @@ export function buildFixtureMeta(input: FixtureMetaInput): FixtureMeta {
     name: input.name,
     width: input.width,
     height: input.height,
-    camera: { fx: input.camera.fx, fy: input.camera.fy, cx: input.camera.cx, cy: input.camera.cy },
+    camera: {
+      fx: input.camera.fx, fy: input.camera.fy, cx: input.camera.cx, cy: input.camera.cy,
+      ...(input.distortion ? { distortion: input.distortion } : {}),
+    },
     blur_sigma: input.blurSigma,
     noise_sigma: input.noiseSigma,
     exposure_offset: input.exposureOffset,
@@ -250,6 +259,8 @@ export function buildFixtureMeta(input: FixtureMetaInput): FixtureMeta {
         inplane_deg: 0,
         module_size_px: code.moduleSizePx,
         corners_px: code.cornersPx,
+        ...(code.outlinePx ? { outline_px: code.outlinePx } : {}),
+        ...(code.finderCentersPx ? { finder_centers_px: code.finderCentersPx } : {}),
         inverted: code.inverted,
         opaque_plate: code.opaquePlate,
       },

@@ -21,6 +21,9 @@ export interface GroundTruthCode {
    * `square_to_quad` convention) — NOT working-res px; the `groundtruth`
    * layer scales by `OverlayContext.workingScale` before drawing. */
   corners_px: [Point2, Point2, Point2, Point2];
+  /** Optional nonlinear lens geometry, in original sensor pixels. */
+  outline_px?: Point2[];
+  finder_centers_px?: Point2[];
   version: number;
   module_size_px: number;
   inverted: boolean;
@@ -128,6 +131,8 @@ function parseCorners(v: unknown, path: string): [Point2, Point2, Point2, Point2
 export function parseGroundTruth(v: unknown): GroundTruthCode {
   const obj = expectObject(v, "");
   return {
+    ...(obj.outline_px === undefined ? {} : { outline_px: expectArray(obj.outline_px, "outline_px").map((p, i) => parsePoint2(p, `outline_px[${i}]`)) }),
+    ...(obj.finder_centers_px === undefined ? {} : { finder_centers_px: expectArray(obj.finder_centers_px, "finder_centers_px").map((p, i) => parsePoint2(p, `finder_centers_px[${i}]`)) }),
     corners_px: parseCorners(expectField(obj, "corners_px", ""), "corners_px"),
     version: expectNumber(expectField(obj, "version", ""), "version"),
     module_size_px: expectNumber(expectField(obj, "module_size_px", ""), "module_size_px"),

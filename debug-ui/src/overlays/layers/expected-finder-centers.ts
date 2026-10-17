@@ -18,6 +18,7 @@ import type { GroundTruthCode } from "../groundtruth-types";
  * shouldn't rely solely on that backstop).
  */
 export function expectedFinderCenters(code: GroundTruthCode): Point2[] {
+  if (code.finder_centers_px) return code.finder_centers_px;
   const h = squareToQuad(code.corners_px);
   if (!h) return [];
 

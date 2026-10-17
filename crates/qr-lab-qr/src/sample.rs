@@ -725,9 +725,13 @@ pub(crate) fn refine_fourth_corner(
 ///
 /// Convention per axis, matching `Detections::source_scale`'s direction:
 /// `working_px = source_px * s`, each `<= 1`.
+/// With `camera`, the lifted coordinates are in the full-size virtual rectified
+/// image; `sample` applies the lens projection before reading the actual source.
 #[derive(Clone, Copy)]
 pub(crate) struct SourceView<'a> {
     pub view: &'a LumaView<'a>,
+    /// Optional map from full rectified pixels to the actual camera buffer.
+    pub camera: Option<&'a qr_lab_geometry::CameraCalibration>,
     /// `working_width / source_width`.
     pub sx: f64,
     /// `working_height / source_height`.
@@ -735,6 +739,16 @@ pub(crate) struct SourceView<'a> {
 }
 
 impl SourceView<'_> {
+    /// Read original pixels at a full-resolution rectified coordinate. Without
+    /// calibration this is the historical source-resolution bilinear sample.
+    pub(crate) fn sample(&self, x: f64, y: f64) -> Option<f64> {
+        let [x, y] = match self.camera {
+            Some(camera) => camera.rectified_to_source([x, y])?,
+            None => [x, y],
+        };
+        qr_lab_geometry::sample_bilinear(*self.view, x, y, qr_lab_geometry::BorderMode::Reject)
+    }
+
     /// Lift a module→WORKING transform to module→SOURCE: compose with the
     /// per-axis inverse scale `scaled(1/sx, 1/sy)` (`source_px =
     /// working_px / s`, per axis). [`sample_grid`]'s one lift site,
@@ -742,6 +756,8 @@ impl SourceView<'_> {
     /// unit-testable against `downscale_luma`'s actual independent-axis
     /// rounding (see
     /// `lift_uses_per_axis_scales_when_downscale_rounding_diverges`).
+    /// When calibrated, the lifted homography ends in full rectified pixels;
+    /// the nonlinear camera mapping is applied separately by `sample`.
     pub(crate) fn lift(&self, module_to_working: &PerspectiveTransform) -> PerspectiveTransform {
         module_to_working.then(&PerspectiveTransform::scaled(1.0 / self.sx, 1.0 / self.sy))
     }
@@ -946,8 +962,12 @@ pub(crate) fn sample_grid(
                 let (mx, my) = (x as f64 + 0.5, y as f64 + 0.5);
                 let (ink, gray) = match (source, &source_transform) {
                     (Some(src), Some(src_transform)) => {
-                        let gray =
-                            sample_module_gray_bilinear(src.view, src_transform, dimension, mx, my);
+                        let gray = if src.camera.is_some() {
+                            let [x, y] = src_transform.map(mx / dimf, my / dimf);
+                            src.sample(x, y).map(|v| v as f32)
+                        } else {
+                            sample_module_gray_bilinear(src.view, src_transform, dimension, mx, my)
+                        };
                         let ink = gray.map(|g| {
                             let (xu, yu) =
                                 working_tile_coords(view, &region.transform, dimension, mx, my);
@@ -1382,6 +1402,7 @@ mod tests {
             &alignment,
             None,
             Some(SourceView {
+                camera: None,
                 view: &source_view,
                 sx,
                 sy,
@@ -1493,6 +1514,7 @@ mod tests {
         .unwrap();
 
         let src = SourceView {
+            camera: None,
             view: &source_view,
             sx,
             sy,

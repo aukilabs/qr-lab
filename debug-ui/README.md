@@ -419,6 +419,76 @@ accuracy meter you can orbit around.
   way to confirm refinement actually ran; see
   `.superpowers/sdd/task-7-report.md` for the full QA record.
 
+### Synthetic fisheye camera
+
+In **3D Scene → Camera sim**, set **lens** to **fisheye (OpenCV)**.
+**Extra barrel distortion** varies `k1` from 0 to -0.5; the other three
+OpenCV fisheye coefficients stay zero. At 0% the projection is still an
+equidistant fisheye; choose **pinhole** to disable lens distortion entirely.
+Zoom in or pan the QR toward an edge to increase its distortion.
+
+**Scan with known intrinsics** switches between the calibrated Rust scanner
+and the ordinary scanner on the same distorted sensor pixels. The calibrated
+scanner caches its rectification map and returns corners in the distorted
+image. It exposes no internal trace, so finder/triplet/sample-grid overlays
+are unavailable in that mode. The ground-truth overlay draws curved edges
+and correctly projected finder centers. Corner-error/timing history resets
+when camera controls change, keeping comparisons separate.
+
+The sensor view stays on while fisheye is enabled. The lens warp precedes
+noise/exposure/blur, uses bilinear sampling, and caches its inverse map.
+It warps the existing 50° pinhole render; it does **not** render additional
+wide-angle scenery. Pixels without a source sample use the scene background.
+This is a deterministic distortion test, not a full 180° optical simulator.
+
+**Save as fixture** exports those same sensor pixels and distorted ground
+truth. JSON includes `camera: {fx, fy, cx, cy, distortion: {model: "fisheye",
+coefficients: [k1, 0, 0, 0]}}`, plus `outline_px` and `finder_centers_px` per
+code. Intrinsics and lens settings come from the captured frame, even if
+controls change before saving. Media mode currently scans imported fixtures
+without automatically applying their calibration; use the scene toggle or
+`WasmCalibratedScanner` for calibrated replay.
+
+Run the cross-language regression test after building WASM:
+
+```sh
+cd debug-ui
+npm run build:wasm
+npm run test:calibrated
+```
+
+It covers the actual simulator warp → WASM scanner → UI parser, all three
+render sizes, zero/nonzero fisheye coefficients, inversion, downscaling,
+scanner reuse and invalid input. `npm test` keeps running the fast unit suite
+without requiring a generated WASM package.
+
+### Fisheye stress sweep
+
+Run the actual simulator lens warp and both WASM scanners over a deterministic
+grid of distortion strengths, plane angles, edge/corner positions and clipping:
+
+```sh
+# From debug-ui; build WASM first. Node 22.15+ (tested on 26.3.1).
+npm run bench:fisheye -- --out ../target/fisheye-sweep
+# Optional charts/report; Python with matplotlib installed.
+python scripts/analyze-fisheye-sweep.py ../target/fisheye-sweep
+```
+
+The default is 4,950 images at 640×640, rendered with 4×4 source supersampling.
+Options use `--name value` pairs: `resolution`, `side` (frontal QR width in px),
+`samples` (samples per pixel axis), `phase` (subpixel source placement),
+`version`, `tilts`, `azimuths`, `positions`, `margins`, `strengths`, and `out`.
+Lists are comma-separated. Positions are `center,left,right,top,bottom,tl,tr,br,bl`;
+strengths accept `pinhole` or numbers in [0, 1]. Margins are source-image
+quiet-zone margins; negative values deliberately clip the source. The output
+contains per-case CSV/JSONL, metadata, summaries and selected PNG/JSON fixtures.
+
+The analytic reference renderer supplies exact geometric corners; the scanner
+and lens warp are production code. It does not reproduce WebGL rasterization.
+With `--verify-opencv`, the analyzer independently checks ground-truth projection
+using `opencv-python`; include a `pinhole` control in that sweep. See the
+[measured limits and follow-ups](../docs/qr-lab/fisheye-stress-test-2026-10-16.md).
+
 ## Scene controls (Plan 5d)
 
 The 3D-scene sidebar's "Appearance" panel and "Save as fixture" panel add

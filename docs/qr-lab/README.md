@@ -2,6 +2,10 @@
 
 Current reference:
 
+- [`calibrated-scanning.md`](calibrated-scanning.md) — known camera intrinsics,
+  lens distortion, source-coordinate corners, and validation
+- [`fisheye-stress-test-2026-10-16.md`](fisheye-stress-test-2026-10-16.md) — distortion,
+  angle and edge sweep, measured decoding/corner limits, reproducible harness
 - [`architecture-decisions.md`](architecture-decisions.md) — package,
   coordinate, allocation, compatibility, and binding decisions
 - [`migration.md`](migration.md) — existing `qr-lab-core` users and new modular

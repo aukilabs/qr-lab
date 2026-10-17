@@ -13,6 +13,7 @@
 
 mod alignment;
 mod bitmatrix;
+mod calibrated;
 mod consts;
 mod decode;
 mod downscale;
@@ -37,6 +38,7 @@ mod triplet;
 mod version;
 
 pub use bitmatrix::{decode_bits, BitMatrix, DecodeFailure, DecodedPayload};
+pub use calibrated::{scan_calibrated, CalibratedCode, CalibratedDetections, CalibratedScanner};
 pub use decode::DecodedCode;
 pub use downscale::{downscale_luma, downscaled_dims};
 pub use facade::{Scanner, ScannerConfig};
@@ -49,6 +51,7 @@ pub use ladder::{
 #[doc(hidden)]
 pub use ladder::{scan_robust_with_kernel, UpscaleKernel};
 pub use luma::{luma_from_rgba, LumaError, LumaView, Rgb8View};
+pub use qr_lab_geometry::{CalibrationError, CameraCalibration, CameraIntrinsics, LensDistortion};
 pub use scan::{scan, scan_traced, ScanOptions};
 pub use scanner::{detect, detect_traced, detect_with, Detections, StageClock, StageTimings};
 pub use tiles::{BinarizeSpec, TileGrid};

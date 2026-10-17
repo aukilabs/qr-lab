@@ -94,6 +94,7 @@ fn scan_with(source: &LumaView, opts: &ScanOptions, trace: Option<&mut Trace>) -
             let mut detections = detect_with_source(
                 &working,
                 Some(SourceView {
+                    camera: None,
                     view: source,
                     sx,
                     sy,

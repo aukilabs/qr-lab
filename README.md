@@ -36,6 +36,8 @@ image-processing crates can be used on their own — no QR decoder required.
 - Robust recovery ladder for blur, low resolution, uneven illumination, and difficult thresholds
 - Stateful temporal scanning for video streams
 - Source-resolution, subpixel-refined corners in TL/TR/BR/BL order
+- Calibrated Rust scanning for fisheye and radial/tangential lens distortion,
+  returning corners in the original image coordinates
 - Reusable grayscale image views, projective geometry, thresholding, morphology, illumination correction, blur estimation, and restoration
 - Native, Python, WebAssembly, and mobile bindings built from the same scanner
 
@@ -133,6 +135,13 @@ fn scan_frame(
 
 Packed RGB8 frames use `Scanner::scan_rgb8` with `qr_lab::qr::Rgb8View` (BT.601
 luma, allocation reused across frames).
+
+For a camera with known intrinsics and distortion coefficients, use
+`scan_calibrated` or a reusable `CalibratedScanner`. These share the single-frame
+`scan` pipeline, correct the working image for detection, and sample QR modules
+and corner profiles directly from the original camera pixels. See the
+[calibrated scanning guide](docs/qr-lab/calibrated-scanning.md) for parameters,
+coordinate conventions, and an example.
 
 ### Crate layout
 

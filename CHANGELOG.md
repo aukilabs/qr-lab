@@ -25,6 +25,13 @@ changes; see [docs/qr-lab/stability.md](docs/qr-lab/stability.md)).
 
 ### Added
 
+- Synthetic fisheye controls, calibrated/uncorrected scan comparison, curved
+  ground truth, and calibration-aware fixture export in the 3D scene; a reusable
+  calibrated WASM scanner.
+- Rust `scan_calibrated` and reusable `CalibratedScanner` with known camera
+  intrinsics, Brown–Conrady or OpenCV fisheye coefficients, direct source-pixel
+  decoding/refinement, and corners returned in original input coordinates.
+- Reusable `CameraCalibration` geometry and cached `UndistortMap` image operator.
 - Project contribution guide and MIT license; package metadata aligned with the
   repository license.
 - Publishable Python/Maturin and Expo integrations under `bindings/`.
