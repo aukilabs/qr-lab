@@ -16,7 +16,7 @@ publish.workspace = true
 qr-lab-image = { path = "../qr-lab-image" }
 qr-lab-geometry = { path = "../qr-lab-geometry" }
 qr-lab-imgproc = { path = "../qr-lab-imgproc" }
-rqrr = { version = "0.10", default-features = false }
+rqrr = { version = "0.11", default-features = false }
 serde = { version = "1", features = ["derive"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
