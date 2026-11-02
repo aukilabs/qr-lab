@@ -215,6 +215,11 @@ fn bwb_run(
             return None; // truncated at the image border mid-crossing
         }
         let (xu, yu) = (xi as usize, yi as usize);
+        if grid.is_skip(xu, yu) {
+            // A flat neighborhood cannot locate a boundary. Preserve the BWB
+            // state through large finder interiors, just as finder cross-checks do.
+            continue;
+        }
         let ink = (view.get(xu, yu) < grid.threshold_at(xu, yu)) != inverted;
         if (state == 1) == ink {
             if state == 2 {

@@ -42,7 +42,7 @@ import { makeQrTexture, type QrColorOptions } from "./qrTexture";
 import { moduleRegionLocalCornersArray, moduleRegionPhysicalSize } from "./moduleRegion";
 import { projectAllToPixels } from "./projection";
 import { flipRowsRgba } from "./rowFlip";
-import { applyExposureOffset, applyGaussianBlurCanvas, applyGaussianNoise } from "./camSim";
+import { applyExposureOffset, GaussianBlurCanvas, applyGaussianNoise } from "./camSim";
 import { cornerErrors } from "./errorStats";
 import { CameraSimControls, type CameraSimValues } from "./CameraSimControls";
 import { ErrorPanel, type ErrorSample } from "./ErrorPanel";
@@ -176,6 +176,7 @@ function ScanLoop({ qr, physicalSize, client, payload, camSim, meshRef, onResult
   const scanningRef = useRef(false);
   const noiseSeedRef = useRef(0x9e3779b9);
   const scratchRef = useRef<ScanScratch | null>(null);
+  const blurRef = useRef<GaussianBlurCanvas | null>(null);
   const warpRef = useRef<{ key: string; warp: FisheyeWarp } | null>(null);
 
   useEffect(() => {
@@ -263,12 +264,13 @@ function ScanLoop({ qr, physicalSize, client, payload, camSim, meshRef, onResult
       }
       if (exposureOffset !== 0) rgba = applyExposureOffset(rgba, exposureOffset, rgba);
       if (blurSigma > 0) {
-        rgba = applyGaussianBlurCanvas(rgba, resolution, resolution, blurSigma, (w, h) => {
-          const c = document.createElement("canvas");
-          c.width = w;
-          c.height = h;
-          return c;
+        blurRef.current ??= new GaussianBlurCanvas((width, height) => {
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          return canvas;
         });
+        rgba = blurRef.current.apply(rgba, resolution, resolution, blurSigma);
       }
 
       // Ground truth: project the plane's module-region corners through

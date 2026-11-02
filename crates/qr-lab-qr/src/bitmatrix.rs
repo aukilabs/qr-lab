@@ -114,9 +114,10 @@ impl rqrr::BitGrid for Transposed<'_> {
 /// A successfully decoded QR payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedPayload {
-    /// Decoded content, as UTF-8 text (rqrr rejects non-UTF-8 output).
+    /// UTF-8 display text; invalid sequences are replaced with U+FFFD.
+    /// Use [`Self::payload_bytes`] for lossless binary content.
     pub payload: String,
-    /// Same content as raw bytes.
+    /// Lossless decoded bytes, before UTF-8 display conversion.
     pub payload_bytes: Vec<u8>,
     /// QR version (1..=40).
     pub version: u32,
@@ -144,7 +145,7 @@ pub enum DecodeFailure {
     /// declared error-correction level.
     Ecc,
     /// The (ECC-corrected) data stream itself was malformed: an unknown
-    /// data-segment type, a bit-length mismatch, or non-UTF-8 output.
+    /// data-segment type or a bit-length mismatch.
     Content,
 }
 
@@ -443,16 +444,22 @@ pub(crate) fn gray_threshold_variants(grays: &[f32], dim: usize, inverted: bool)
 
 /// Decode a QR payload from a sampled bit matrix.
 ///
-/// Content decoding is a single `rqrr::Grid::decode` call — rqrr itself
+/// Content decoding is a single `rqrr::Grid::decode_to` call — rqrr itself
 /// retries the mirrored reading internally, so a mirrored matrix decodes
 /// to the correct payload without any orientation handling on our side.
 /// The `mirrored` flag is then determined independently by `is_mirrored`
 /// (rqrr does not report which orientation its internal retry used).
 pub fn decode_bits(m: &BitMatrix) -> Result<DecodedPayload, DecodeFailure> {
-    let (meta, payload) = rqrr::Grid::new(m).decode().map_err(map_err)?;
+    // Decode into private storage: rqrr may write a partial payload before
+    // returning an error, which must never escape as a successful decode.
+    let mut payload_bytes = Vec::new();
+    let meta = rqrr::Grid::new(m)
+        .decode_to(&mut payload_bytes)
+        .map_err(map_err)?;
+    let payload = String::from_utf8_lossy(&payload_bytes).into_owned();
     let version = meta.version.0 as u32;
     Ok(DecodedPayload {
-        payload_bytes: payload.as_bytes().to_vec(),
+        payload_bytes,
         payload,
         version,
         ecc: ecc_char(meta.ecc_level),

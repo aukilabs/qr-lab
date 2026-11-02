@@ -76,9 +76,9 @@ use crate::LumaView;
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct DecodedCode {
-    /// Decoded content, as UTF-8 text.
+    /// UTF-8 display text; invalid sequences are replaced with U+FFFD.
     pub payload: String,
-    /// Same content as raw bytes.
+    /// Lossless decoded bytes, before UTF-8 display conversion.
     pub payload_bytes: Vec<u8>,
     /// QR version (1..=40), from [`crate::bitmatrix::DecodedPayload`] —
     /// RS-validated, so trusted over the geometric estimate even when the

@@ -16,7 +16,7 @@
 // back over postMessage. A scan superseded by a newer one
 // (`StaleScanError`) is dropped silently — a fresher frame is already on
 // its way, so there's nothing to report.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { useImageSource } from "./media/useImageSource";
 import { lumaAt } from "./media/luma";
@@ -35,7 +35,6 @@ import { tilesLayer } from "./overlays/layers/tiles";
 import { tripletsLayer } from "./overlays/layers/triplets";
 import { parseGroundTruth, type GroundTruthCode } from "./overlays/groundtruth-types";
 import { createRegistry, type OverlayContext } from "./overlays/registry";
-import { Scene3D } from "./scene3d/Scene3D";
 import { FilmstripPanel } from "./panels/FilmstripPanel";
 import { LadderPanel } from "./panels/LadderPanel";
 import { LayerPanel } from "./panels/LayerPanel";
@@ -60,6 +59,9 @@ import type {
 import type { ScanResult } from "./scanner/types";
 import type { ViewTransform } from "./viewport/transform";
 import { Viewport } from "./viewport/Viewport";
+
+// Keep Three.js and the simulator out of the initial media-mode bundle.
+const Scene3D = lazy(() => import("./scene3d/Scene3D").then(({ Scene3D }) => ({ default: Scene3D })));
 
 /** Registered once at module scope (not per-`App`-instance) since it has no
  * lifecycle of its own — layer enable/disable state living here rather than
@@ -206,6 +208,11 @@ export function App() {
   // image/overlays back for a frame before the new source's own scan
   // finishes and overwrites them again.
   const sourceGenerationRef = useRef(0);
+
+  const reportWorkerFailure = useCallback((error: unknown) => {
+    setInitError(error instanceof Error ? error.message : String(error));
+    setScannerReady(false);
+  }, []);
 
   // Worker + client lifecycle: one per `App` mount. `cancelled` guards
   // against a stray resolve/reject from a StrictMode-doubled effect's first
@@ -590,8 +597,12 @@ export function App() {
   // synchronous posts; effect declaration order is their run order).
   useEffect(() => {
     if (!scannerReady || !sessionActive || !robustConfig) return;
-    clientRef.current?.configureSession(robustConfig, sessionRotationPeriod, sessionPoolTtl);
-  }, [scannerReady, sessionActive, robustConfig, sessionRotationPeriod, sessionPoolTtl]);
+    try {
+      clientRef.current?.configureSession(robustConfig, sessionRotationPeriod, sessionPoolTtl);
+    } catch (error) {
+      reportWorkerFailure(error);
+    }
+  }, [scannerReady, sessionActive, robustConfig, sessionRotationPeriod, sessionPoolTtl, reportWorkerFailure]);
 
   // Video-mode counterpart of image mode's config-edit live-rescan: video
   // frames are PUSHED (rVFC/seeked), so a robust toggle or panel edit
@@ -671,7 +682,11 @@ export function App() {
     // candidates from the previous source can't seed the new one (Plan 6).
     // No-op in the worker if no session exists; the configure effect
     // rebuilds it when the new source is a video and session mode is on.
-    clientRef.current?.resetSession();
+    try {
+      clientRef.current?.resetSession();
+    } catch (error) {
+      reportWorkerFailure(error);
+    }
     setSource(next);
     setScanState(null);
     setScanError(null);
@@ -691,8 +706,12 @@ export function App() {
   // steps (the frame buttons / arrow keys) are near-duplicates and left
   // alone. No-op in the worker outside session mode.
   const handleScrubStart = useCallback(() => {
-    clientRef.current?.resetSession();
-  }, []);
+    try {
+      clientRef.current?.resetSession();
+    } catch (error) {
+      reportWorkerFailure(error);
+    }
+  }, [reportWorkerFailure]);
 
   const handleRescan = () => {
     if (imageSourceState.rgba) {
@@ -908,7 +927,9 @@ export function App() {
           </div>
         </main>
       ) : (
-        <Scene3D client={clientRef.current} scannerReady={scannerReady} overlayRegistry={overlayRegistry} />
+        <Suspense fallback={<main role="status">Loading 3D scene…</main>}>
+          <Scene3D client={clientRef.current} scannerReady={scannerReady} overlayRegistry={overlayRegistry} />
+        </Suspense>
       )}
 
       {/* Hidden decode surface for video mode — the visible bitmap is the

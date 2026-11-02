@@ -158,7 +158,8 @@ impl TileThresholdGrid {
                     }
                 };
                 let index = tile_y * tiles_x + tile_x;
-                thresholds[index] = (base + config.threshold_offset).clamp(0, 255) as u8;
+                thresholds[index] =
+                    (i32::from(base) + i32::from(config.threshold_offset)).clamp(0, 255) as u8;
                 skip[index] = maximum - minimum < config.contrast_floor;
             }
         }
@@ -307,10 +308,16 @@ pub fn sauvola_into(
     }
     for y in 0..src.height() {
         let y0 = y.saturating_sub(config.radius);
-        let y1 = (y + config.radius + 1).min(src.height());
+        let y1 = y
+            .saturating_add(config.radius)
+            .saturating_add(1)
+            .min(src.height());
         for x in 0..src.width() {
             let x0 = x.saturating_sub(config.radius);
-            let x1 = (x + config.radius + 1).min(src.width());
+            let x1 = x
+                .saturating_add(config.radius)
+                .saturating_add(1)
+                .min(src.width());
             let count = ((x1 - x0) * (y1 - y0)) as u64;
             let sum = rect_sum(&workspace.sum, integral_width, x0, y0, x1, y1);
             let sum_sq = rect_sum(&workspace.sum_sq, integral_width, x0, y0, x1, y1);
@@ -356,6 +363,55 @@ fn integer_sqrt(value: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extreme_tile_offsets_clamp_without_overflow() {
+        let pixels = [100; 4];
+        let src = Gray8View::new(&pixels, 2, 2, 2).unwrap();
+        for method in [
+            TileThresholdMethod::Midrange,
+            TileThresholdMethod::Sauvola {
+                k: 0.2,
+                dynamic_range: 128.0,
+            },
+        ] {
+            for (threshold_offset, expected) in [(i16::MIN, 0), (i16::MAX, 255)] {
+                let grid = TileThresholdGrid::build(
+                    src,
+                    TileThresholdConfig {
+                        threshold_offset,
+                        method,
+                        ..TileThresholdConfig::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(grid.threshold_at(0, 0), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn oversized_sauvola_radius_uses_the_whole_image() {
+        let pixels = [0, 50, 100, 150, 200, 255];
+        let src = Gray8View::new(&pixels, 3, 2, 3).unwrap();
+        let expected = sauvola(
+            src,
+            &SauvolaConfig {
+                radius: 3,
+                ..SauvolaConfig::default()
+            },
+        )
+        .unwrap();
+        let actual = sauvola(
+            src,
+            &SauvolaConfig {
+                radius: usize::MAX,
+                ..SauvolaConfig::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
 
     #[test]
     fn flat_image_thresholds_deterministically() {

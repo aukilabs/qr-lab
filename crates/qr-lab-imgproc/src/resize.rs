@@ -9,7 +9,7 @@
 //!
 //! `downscaleRgba` operated on interleaved RGBA and returned the *same*
 //! buffer reference on a no-op passthrough; `downscale_luma` operates on a
-//! single-channel [`LumaView`] and returns `None` on the equivalent no-op
+//! single-channel [`qr_lab_image::LumaView`] and returns `None` on the equivalent no-op
 //! case (`max_dim == 0` — cap disabled, TS's `maxDim <= 0` — or the source
 //! already fits) so the caller can borrow `src` directly instead of
 //! allocating an identical copy.

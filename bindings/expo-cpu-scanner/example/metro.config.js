@@ -13,7 +13,9 @@ config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, "node_modules"),
   path.resolve(moduleRoot, "node_modules"),
 ];
-config.resolver.disableHierarchicalLookup = true;
+// Keep Metro's hierarchical lookup enabled: npm may install version-specific
+// dependencies under expo/node_modules (for example @expo/log-box). The
+// explicit paths above remain fallbacks for the linked local modules.
 
 // Still allow .luma assets if fixtures are used later.
 if (!config.resolver.assetExts.includes("luma")) {

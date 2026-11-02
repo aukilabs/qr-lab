@@ -2,6 +2,10 @@
 
 Current reference:
 
+- [`core-review-2026-11-02.md`](core-review-2026-11-02.md) — step-by-step Rust
+  pipeline review, correctness fixes, performance evidence, and integration checks
+- [`review-2026-11-02.md`](review-2026-11-02.md) — browser/native simulator
+  improvements, measured performance, regression checks, and remaining limits
 - [`calibrated-scanning.md`](calibrated-scanning.md) — known camera intrinsics,
   lens distortion, source-coordinate corners, and validation
 - [`fisheye-stress-test-2026-10-16.md`](fisheye-stress-test-2026-10-16.md) — distortion,

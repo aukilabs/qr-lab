@@ -101,3 +101,15 @@ Native side throttles to `targetFps` and uses `STRATEGY_KEEP_ONLY_LATEST` /
 
 Rebuild the app (`npx expo run:ios` / `run:android`). Metro alone is enough
 for pure JS/TS edits.
+
+## Native bridge regression check
+
+After rebuilding and opening the app on an iOS simulator, evaluate
+[`scripts/check-native.simulator.js`](scripts/check-native.simulator.js) in
+its JS runtime using Argent `debugger-evaluate`. It calls the actual native
+module and verifies oversized dimensions, byte-count overflow, invalid
+buffers, and valid scans after those errors (including a padded stride with
+an unpadded final row). All ten checks must pass without terminating the app.
+
+The [2026-11-02 review](../../../docs/qr-lab/review-2026-11-02.md) records
+iOS 26 camera-feed verification and the remaining iOS 27 startup limitation.

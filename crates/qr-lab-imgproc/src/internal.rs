@@ -224,11 +224,8 @@ fn ext<const IS_MAX: bool>(a: u8, b: u8) -> u8 {
 /// 1-D van Herk/Gil-Werman running extremum (max when `IS_MAX`, else min)
 /// over a centered window of `k` samples (`k` odd), O(n) independent of `k`:
 /// block-scoped prefix and suffix extrema give any window as
-/// `ext(suffix[lo], prefix[hi])`. Border windows are clamped to the signal
-/// and read the extremum of the whole touching block, i.e. the effective
-/// window near a border is up to 2× wider — for a background ENVELOPE this
-/// only over-smooths the outermost `k` pixels, far outside any decodable
-/// code's quiet zone.
+/// `ext(suffix[lo], prefix[hi])`. Clipped border windows contained in a
+/// single block use only the prefix or suffix inside that window.
 fn running_extremum_1d<const IS_MAX: bool>(
     src: &[u8],
     k: usize,
@@ -257,7 +254,13 @@ fn running_extremum_1d<const IS_MAX: bool>(
     for (i, o) in out.iter_mut().enumerate() {
         let lo = i.saturating_sub(r);
         let hi = (i + r).min(n - 1);
-        *o = ext(suf[lo], pre[hi]);
+        *o = if lo == 0 {
+            pre[hi]
+        } else if hi == n - 1 && lo / k == hi / k {
+            suf[lo]
+        } else {
+            ext(suf[lo], pre[hi])
+        };
     }
 }
 
@@ -323,8 +326,14 @@ pub fn morph_rect<const IS_MAX: bool>(src: &[u8], w: usize, h: usize, k: usize, 
         let s = &suf[lo * w..(lo + 1) * w];
         let p = &pre[hi * w..(hi + 1) * w];
         let out = &mut dst[y * w..(y + 1) * w];
-        for x in 0..w {
-            out[x] = ext(s[x], p[x]);
+        if lo == 0 {
+            out.copy_from_slice(p);
+        } else if hi == h - 1 && lo / k == hi / k {
+            out.copy_from_slice(s);
+        } else {
+            for x in 0..w {
+                out[x] = ext(s[x], p[x]);
+            }
         }
     }
 }
@@ -1129,10 +1138,8 @@ mod tests {
             } else {
                 running_extremum_1d::<false>(&src, k, &mut pre, &mut suf, &mut out);
             }
-            // Interior positions (border windows deliberately read the whole
-            // touching block — see the function doc).
-            for i in k..n - k {
-                let win = &src[i - r..=i + r];
+            for i in 0..n {
+                let win = &src[i.saturating_sub(r)..=(i + r).min(n - 1)];
                 let want = if is_max {
                     *win.iter().max().unwrap()
                 } else {
@@ -1144,7 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn morph_rect_matches_naive_extremum_in_the_interior() {
+    fn morph_rect_matches_naive_extremum_including_borders() {
         let (w, h) = (24, 18);
         let mut x: u32 = 99;
         let src: Vec<u8> = (0..w * h)
@@ -1162,11 +1169,11 @@ mod tests {
             } else {
                 morph_rect::<false>(&src, w, h, k, &mut dst);
             }
-            for y in k..h - k {
-                for xx in k..w - k {
+            for y in 0..h {
+                for xx in 0..w {
                     let mut want = if is_max { 0u8 } else { 255u8 };
-                    for dy in y - r..=y + r {
-                        for dx in xx - r..=xx + r {
+                    for dy in y.saturating_sub(r)..=(y + r).min(h - 1) {
+                        for dx in xx.saturating_sub(r)..=(xx + r).min(w - 1) {
                             let v = src[dy * w + dx];
                             want = if is_max { want.max(v) } else { want.min(v) };
                         }

@@ -1,6 +1,10 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
-    "strict": true
+    "strict": true,
+    // The linked scanner package lives above this example's node_modules.
+    "paths": {
+      "expo": ["./node_modules/expo"]
+    }
   }
 }

@@ -69,19 +69,29 @@ pub(crate) fn match_row(
 /// `x_offset` in the source row. Keeping the offset in the matcher avoids
 /// materializing skipped tile spans merely to preserve source coordinates.
 fn match_row_at(
-    bits: impl Iterator<Item = bool>,
+    mut bits: impl Iterator<Item = bool>,
     x_offset: usize,
     scratch: &mut Vec<(bool, usize, usize)>,
     out: &mut Vec<RunHit>,
 ) {
     scratch.clear();
-    for (x, v) in bits.enumerate() {
-        let x = x + x_offset;
-        match scratch.last_mut() {
-            Some(last) if last.0 == v => last.2 += 1,
-            _ => scratch.push((v, x, 1)),
+    let Some(mut color) = bits.next() else {
+        return;
+    };
+    let (mut start, mut length) = (x_offset, 1);
+    // Accumulate the current run in registers; touch the Vec only when a
+    // run ends, instead of reading/writing its last element for every pixel.
+    for (offset, value) in bits.enumerate() {
+        if value == color {
+            length += 1;
+        } else {
+            scratch.push((color, start, length));
+            color = value;
+            start = x_offset + offset + 1;
+            length = 1;
         }
     }
+    scratch.push((color, start, length));
     if scratch.len() < 5 {
         return;
     }
@@ -135,7 +145,9 @@ struct Scan<'a, 'b> {
 impl Scan<'_, '_> {
     /// Sample the binarized polarity at `(x, y)`, or `None` off-image (the
     /// caller treats a border as ending — clamping — the current run).
-    fn sample(&self, x: isize, y: isize) -> Option<bool> {
+    /// A low-contrast neighborhood supplies no transition evidence: preserve
+    /// the current run's color instead of thresholding a flat black core at 0.
+    fn sample(&self, x: isize, y: isize, flat_color: bool) -> Option<bool> {
         if x < 0 || y < 0 {
             return None;
         }
@@ -143,7 +155,11 @@ impl Scan<'_, '_> {
         if xu >= self.w || yu >= self.h {
             return None;
         }
-        Some(self.view.get(xu, yu) < self.grid.threshold_at(xu, yu))
+        Some(if self.grid.is_skip(xu, yu) {
+            flat_color
+        } else {
+            self.view.get(xu, yu) < self.grid.threshold_at(xu, yu)
+        })
     }
 
     /// Walk from `(x, y)` in unit steps `(dx, dy)`, counting consecutive
@@ -160,7 +176,7 @@ impl Scan<'_, '_> {
     ) -> isize {
         let mut n = 0isize;
         while n < cap {
-            match self.sample(x, y) {
+            match self.sample(x, y, target) {
                 Some(c) if c == target => {
                     n += 1;
                     x += dx;
@@ -187,8 +203,9 @@ impl Scan<'_, '_> {
         dx: isize,
         dy: isize,
         cap: isize,
+        center_color: bool,
     ) -> Option<([f64; 5], f64)> {
-        let center_color = self.sample(x0, y0)?;
+        let center_color = self.sample(x0, y0, center_color)?;
 
         // Middle run: half extending outward in +direction, half in
         // -direction (the seed pixel itself belongs to whichever half is
@@ -232,7 +249,7 @@ impl Scan<'_, '_> {
         // 4.0 adds slack for measurement jitter.
         let cap = ((4.0 * hit.module).ceil() as isize).max(1);
 
-        let (v_runs, t) = self.axis_cross_check(x0, y0, 0, 1, cap)?;
+        let (v_runs, t) = self.axis_cross_check(x0, y0, 0, 1, cap, !hit.inverted)?;
         if !pattern_fits(&v_runs) {
             return None;
         }
@@ -241,7 +258,7 @@ impl Scan<'_, '_> {
 
         let cyr = cy.round() as isize;
         let diag_ok = |dx: isize, dy: isize| {
-            self.axis_cross_check(x0, cyr, dx, dy, cap)
+            self.axis_cross_check(x0, cyr, dx, dy, cap, !hit.inverted)
                 .is_some_and(|(runs, _)| pattern_fits(&runs))
         };
         if !(diag_ok(1, 1) || diag_ok(1, -1)) {
@@ -304,10 +321,11 @@ fn merge_candidate(merged: &mut Vec<FinderCandidate>, new: FinderCandidate) {
 /// active span tile-by-tile (constant threshold per 16px tile; aarch64 uses
 /// NEON compares), then RLE-match the span in source coordinates. A tile is
 /// marked active from a 3×3 neighborhood of tile statistics, so every
-/// contrast-bearing tile has one full tile of active padding. Consequently
-/// a 1:1:3:1:1 window cannot be cut by a skipped span: any window containing
-/// both polarities makes its own tile or a neighbor active. Resetting the RLE
-/// at skipped spans also prevents low-contrast texture from manufacturing
+/// contrast-bearing tile has one full tile of active padding. Large finder
+/// interiors can still be skipped: those rows may miss a horizontal match,
+/// while rows nearer the core's top/bottom edges supply candidates. Cross-checks
+/// must walk through flat interiors without inventing a polarity transition.
+/// Resetting sparse RLE spans prevents low-contrast texture from manufacturing
 /// cross-span finder candidates.
 pub fn find_finders(view: &LumaView, grid: &TileGrid) -> Vec<FinderCandidate> {
     let (w, h) = (view.width(), view.height());
@@ -375,7 +393,8 @@ pub fn find_finders(view: &LumaView, grid: &TileGrid) -> Vec<FinderCandidate> {
 }
 
 /// Fill `dark` for source-row span `x0..x1` with
-/// `row[x] < threshold_at(x, y)`. The span is tile-aligned except for the
+/// `row[x] < threshold_at(x, y)`, carrying the preceding color across flat
+/// tiles on the dense path. The span is tile-aligned except for the
 /// image's ragged right edge. One threshold lookup per tile; full tiles use
 /// NEON lane compares on aarch64.
 fn binarize_row_span(
@@ -392,6 +411,13 @@ fn binarize_row_span(
         let tile_x0 = tx * TILE;
         let tile_x1 = (tile_x0 + TILE).min(span_x1);
         let out0 = tile_x0 - span_x0;
+        if grid.is_skip(tile_x0, y) {
+            // Dense spans can include flat finder cores. Their local threshold
+            // is not a foreground/background decision; keep the current run.
+            let color = out0 > 0 && dark[out0 - 1];
+            dark[out0..out0 + tile_x1 - tile_x0].fill(color);
+            continue;
+        }
         let thr = grid.threshold_at(tile_x0, y);
         let seg = &row[tile_x0..tile_x1];
         #[cfg(target_arch = "aarch64")]

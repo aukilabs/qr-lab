@@ -55,8 +55,10 @@ struct FfiCode {
     dimension: u32,
     /// Module-region corners TL/TR/BR/BL in WORKING pixels.
     corners: [[f64; 2]; 4],
-    /// Subpixel-refined corners in SOURCE pixels, when `refine` was set.
+    /// Refinement output in SOURCE pixels, including fallback corners.
     refined_corners: Option<[[f64; 2]; 4]>,
+    /// Which TL/TR/BR/BL corners passed the final refinement fit.
+    corner_refined: [bool; 4],
 }
 
 #[derive(Serialize)]
@@ -97,6 +99,7 @@ impl From<&DecodedCode> for FfiCode {
             dimension: c.dimension,
             corners: c.corners,
             refined_corners: c.refined_corners,
+            corner_refined: c.corner_refined,
         }
     }
 }
@@ -669,6 +672,29 @@ mod tests {
         assert_eq!(base64_encode(b"fo"), "Zm8=");
         assert_eq!(base64_encode(b"foo"), "Zm9v");
         assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+    }
+
+    #[test]
+    fn code_json_preserves_partial_refinement_provenance() {
+        let code = DecodedCode {
+            payload: "test".into(),
+            payload_bytes: b"test".to_vec(),
+            version: 1,
+            ecc: 'M',
+            mirrored: false,
+            inverted: false,
+            dimension: 21,
+            corners: [[0.0; 2]; 4],
+            finder_indices: [0, 1, 2],
+            refined_corners: Some([[1.0; 2]; 4]),
+            corner_refined: [true, true, false, false],
+        };
+        let json = serde_json::to_value(FfiCode::from(&code)).unwrap();
+        assert_eq!(
+            json["cornerRefined"],
+            serde_json::json!([true, true, false, false])
+        );
+        assert!(json["refinedCorners"].is_array());
     }
 
     #[test]
