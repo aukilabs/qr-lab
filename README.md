@@ -178,7 +178,9 @@ Publishable integrations are summarized in the [bindings guide](bindings/README.
   [`rqrr`](https://crates.io/crates/rqrr) (MIT OR Apache-2.0). Finder detection,
   sampling, robust recovery, temporal scanning, and corner refinement are QR Lab.
 - **No FNC1 or Structured Append.** ECI payloads are returned as bytes for the
-  caller to interpret.
+  caller to interpret. `payload_bytes` preserves decoded bytes; `payload` is
+  UTF-8 display text with invalid sequences replaced by U+FFFD. C/Expo encode
+  the lossless bytes in `payloadBytesB64`.
 - **No GPU, no `no_std`, no camera capture.** Feed it a grayscale or RGB8 buffer.
 - **Packages are not on crates.io / PyPI / npm yet.** Install from git or a
   local checkout.

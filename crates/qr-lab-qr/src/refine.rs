@@ -252,20 +252,22 @@ fn localize_edge_point_pass(
     let n = REFINE_PROFILE_SAMPLES;
     let half = (n / 2) as f64; // 3 for n = 7
     let coarse = center;
-    let mut samples = Vec::with_capacity(n);
-    for k in 0..n {
+    // Profiles have a fixed seven-sample stencil. Keep it on the stack:
+    // this runs three times per probe, over many probes on every QR edge.
+    let mut samples = [0.0; REFINE_PROFILE_SAMPLES];
+    for (k, sample) in samples.iter_mut().enumerate() {
         let offset = k as f64 - half;
         let p = [
             coarse[0] + normal[0] * offset * step,
             coarse[1] + normal[1] * offset * step,
         ];
-        samples.push(bilinear_at(source, p[0], p[1])?);
+        *sample = bilinear_at(source, p[0], p[1])?;
     }
     // Central-difference gradient at interior indices 1..=n-2 only (needs
     // both neighbors); n = 7 -> indices 1..=5. Index 0 and n-1 stay 0.0 —
     // consistent with the flat quiet zone the profile's outward tail
     // reads, which the telescoped correction below relies on.
-    let mut grad = vec![0.0f64; n];
+    let mut grad = [0.0; REFINE_PROFILE_SAMPLES];
     for i in 1..n - 1 {
         grad[i] = samples[i + 1] - samples[i - 1];
     }
@@ -274,18 +276,16 @@ fn localize_edge_point_pass(
     // stride is `1 module / REFINE_PROFILE_STEP_MODULES` — exact module
     // geometry, not a tunable.
     let stride = (1.0 / REFINE_PROFILE_STEP_MODULES).round() as usize;
-    let corrected: Vec<f64> = if inward_differs {
-        (0..n)
-            .map(|i| {
-                let mut sum = 0.0;
-                let mut j = i;
-                while j < n {
-                    sum += grad[j];
-                    j += stride;
-                }
-                sum
-            })
-            .collect()
+    let corrected = if inward_differs {
+        std::array::from_fn::<_, REFINE_PROFILE_SAMPLES, _>(|i| {
+            let mut sum = 0.0;
+            let mut j = i;
+            while j < n {
+                sum += grad[j];
+                j += stride;
+            }
+            sum
+        })
     } else {
         grad
     };

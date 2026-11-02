@@ -21,11 +21,13 @@ enum Operation {
 }
 
 /// Grayscale erosion with an odd square structuring element.
+/// Windows are clipped to the image at its borders.
 pub fn grayscale_erode(src: Gray8View<'_>, kernel_size: usize) -> ImgProcResult<Gray8Image> {
     allocate(src, kernel_size, Operation::Erode)
 }
 
 /// Grayscale dilation with an odd square structuring element.
+/// Windows are clipped to the image at its borders.
 pub fn grayscale_dilate(src: Gray8View<'_>, kernel_size: usize) -> ImgProcResult<Gray8Image> {
     allocate(src, kernel_size, Operation::Dilate)
 }
@@ -257,8 +259,17 @@ fn morph_rect_into<const IS_MAX: bool>(
         let high = (y + radius).min(height - 1);
         let suffix_row = &suffix[low * width..(low + 1) * width];
         let prefix_row = &prefix[high * width..(high + 1) * width];
-        for x in 0..width {
-            dst[y * width + x] = extremum(suffix_row[x], prefix_row[x]);
+        let row = &mut dst[y * width..(y + 1) * width];
+        // A clipped window contained in one block needs only one extremum.
+        // Combining both would include pixels beyond the requested window.
+        if low == 0 {
+            row.copy_from_slice(prefix_row);
+        } else if high == height - 1 && low / kernel_size == high / kernel_size {
+            row.copy_from_slice(suffix_row);
+        } else {
+            for x in 0..width {
+                row[x] = extremum(suffix_row[x], prefix_row[x]);
+            }
         }
     }
 }
@@ -289,7 +300,13 @@ fn running_extremum_1d<const IS_MAX: bool>(
     for (index, value) in output.iter_mut().enumerate().take(src.len()) {
         let low = index.saturating_sub(radius);
         let high = (index + radius).min(src.len() - 1);
-        *value = extremum(suffix[low], prefix[high]);
+        *value = if low == 0 {
+            prefix[high]
+        } else if high == src.len() - 1 && low / kernel_size == high / kernel_size {
+            suffix[low]
+        } else {
+            extremum(suffix[low], prefix[high])
+        };
     }
 }
 
@@ -315,6 +332,68 @@ fn validate(source: Size, destination: Size, kernel_size: usize) -> ImgProcResul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rectangular_extrema_match_clipped_window_reference() {
+        for (width, height) in [(1, 1), (2, 5), (9, 1), (9, 7), (16, 13)] {
+            let pixels: Vec<u8> = (0..width * height).map(|i| (i * 73 + 19) as u8).collect();
+            let src = Gray8View::new(&pixels, width, height, width).unwrap();
+            for kernel in [3, 5, 9, 31] {
+                let radius = kernel / 2;
+                for is_max in [false, true] {
+                    let mut expected = Vec::new();
+                    for y in 0..height {
+                        for x in 0..width {
+                            let mut value = if is_max { 0 } else { 255 };
+                            for sy in y.saturating_sub(radius)..=(y + radius).min(height - 1) {
+                                for sx in x.saturating_sub(radius)..=(x + radius).min(width - 1) {
+                                    value = if is_max {
+                                        value.max(src.get(sx, sy))
+                                    } else {
+                                        value.min(src.get(sx, sy))
+                                    };
+                                }
+                            }
+                            expected.push(value);
+                        }
+                    }
+                    let actual = if is_max {
+                        grayscale_dilate(src, kernel)
+                    } else {
+                        grayscale_erode(src, kernel)
+                    }
+                    .unwrap();
+                    assert_eq!(
+                        actual.as_slice(),
+                        expected,
+                        "{width}x{height} kernel={kernel} max={is_max}"
+                    );
+                    let mut legacy = Vec::new();
+                    if is_max {
+                        crate::internal::morph_rect::<true>(
+                            &pixels,
+                            width,
+                            height,
+                            kernel,
+                            &mut legacy,
+                        );
+                    } else {
+                        crate::internal::morph_rect::<false>(
+                            &pixels,
+                            width,
+                            height,
+                            kernel,
+                            &mut legacy,
+                        );
+                    }
+                    assert_eq!(
+                        legacy, expected,
+                        "scanner kernel: {width}x{height} kernel={kernel} max={is_max}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn public_close_matches_scanner_legacy_kernel() {

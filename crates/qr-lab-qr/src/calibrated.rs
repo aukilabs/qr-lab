@@ -14,9 +14,9 @@ use qr_lab_imgproc::{undistort::UndistortMap, ImgProcError, ImgProcResult};
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct CalibratedCode {
-    /// Decoded content as UTF-8 text (same convention as `DecodedCode`).
+    /// UTF-8 display text; invalid sequences are replaced with U+FFFD.
     pub payload: String,
-    /// Decoded content as raw bytes.
+    /// Lossless decoded bytes, before UTF-8 display conversion.
     pub payload_bytes: Vec<u8>,
     /// QR version, 1 through 40.
     pub version: u32,

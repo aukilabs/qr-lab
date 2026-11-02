@@ -69,19 +69,29 @@ pub(crate) fn match_row(
 /// `x_offset` in the source row. Keeping the offset in the matcher avoids
 /// materializing skipped tile spans merely to preserve source coordinates.
 fn match_row_at(
-    bits: impl Iterator<Item = bool>,
+    mut bits: impl Iterator<Item = bool>,
     x_offset: usize,
     scratch: &mut Vec<(bool, usize, usize)>,
     out: &mut Vec<RunHit>,
 ) {
     scratch.clear();
-    for (x, v) in bits.enumerate() {
-        let x = x + x_offset;
-        match scratch.last_mut() {
-            Some(last) if last.0 == v => last.2 += 1,
-            _ => scratch.push((v, x, 1)),
+    let Some(mut color) = bits.next() else {
+        return;
+    };
+    let (mut start, mut length) = (x_offset, 1);
+    // Accumulate the current run in registers; touch the Vec only when a
+    // run ends, instead of reading/writing its last element for every pixel.
+    for (offset, value) in bits.enumerate() {
+        if value == color {
+            length += 1;
+        } else {
+            scratch.push((color, start, length));
+            color = value;
+            start = x_offset + offset + 1;
+            length = 1;
         }
     }
+    scratch.push((color, start, length));
     if scratch.len() < 5 {
         return;
     }
