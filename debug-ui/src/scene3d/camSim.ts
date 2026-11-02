@@ -15,8 +15,8 @@
 //    `filter: blur(...)` — a real (if unspecified-exact-kernel) Gaussian
 //    blur the browser implements, but "blur in screen-space after
 //    rendering" is itself an approximation of optical defocus (no depth-
-//    of-field, no lens PSF shape); untested here (canvas-dependent, no
-//    DOM in vitest's `node` environment) — manual QA only (Task 7).
+//    of-field, no lens PSF shape). Pixel parity and canvas reuse are
+//    checked in a real browser by scripts/check-blur.browser.ts.
 //
 // Noise and exposure are deterministic/seeded so they're unit-testable:
 // same seed -> byte-identical output, letting a test assert reproducibility
@@ -137,7 +137,7 @@ export function applyGaussianNoise(
 export interface Canvas2DLike {
   width: number;
   height: number;
-  getContext(id: "2d"): {
+  getContext(id: "2d", options?: { willReadFrequently: boolean }): {
     filter: string;
     putImageData(imageData: ImageData, dx: number, dy: number): void;
     drawImage(image: unknown, dx: number, dy: number): void;
@@ -146,22 +146,57 @@ export interface Canvas2DLike {
   } | null;
 }
 
-/**
- * Approximate a Gaussian blur of `sigmaPx` by round-tripping the buffer
- * through a 2D canvas with `ctx.filter = "blur(...)"` — the browser's own
- * (real, if kernel-unspecified) Gaussian blur implementation. `sigmaPx <=
- * 0` is a no-op copy (skips touching the canvas entirely).
- *
- * Two-canvas round trip: `ctx.filter` only affects `drawImage` calls, not
- * `putImageData` (which writes pixels directly, bypassing the filter
- * pipeline) — so the source pixels are painted onto `srcCanvas`
- * un-filtered via `putImageData`, then drawn (filtered) onto `dstCanvas`
- * via `drawImage`, and finally read back from `dstCanvas`.
- *
- * Untested (needs a real `CanvasRenderingContext2D`, unavailable in
- * vitest's `node` environment) — manual QA only (Task 7's browser pass:
- * "knobs sweep — blur up -> error up smoothly, no crash").
- */
+/** Reuses the two canvas surfaces across frames and resolution changes.
+ * putImageData is synchronous, so wrapping the input needs no pixel copy.
+ * getImageData still returns independent storage safe for later scan ticks. */
+export class GaussianBlurCanvas {
+  private surfaces: {
+    source: Canvas2DLike;
+    destination: Canvas2DLike;
+    sourceContext: NonNullable<ReturnType<Canvas2DLike["getContext"]>>;
+    destinationContext: NonNullable<ReturnType<Canvas2DLike["getContext"]>>;
+  } | null = null;
+
+  constructor(private readonly makeCanvas: (w: number, h: number) => Canvas2DLike) {}
+
+  apply(rgba: Uint8ClampedArray, width: number, height: number, sigmaPx: number): Uint8ClampedArray {
+    if (sigmaPx <= 0) return rgba.slice();
+    let surfaces = this.surfaces;
+    if (!surfaces) {
+      const source = this.makeCanvas(width, height);
+      const destination = this.makeCanvas(width, height);
+      const sourceContext = source.getContext("2d");
+      // Keep the filter on the same rendering path as a fresh canvas.
+      // Chromium otherwise switches repeated readbacks to a CPU canvas,
+      // which changes blur rounding (and therefore synthetic QR pixels).
+      const destinationContext = destination.getContext("2d", { willReadFrequently: false });
+      if (!sourceContext || !destinationContext) {
+        throw new Error("applyGaussianBlurCanvas: 2d context unavailable");
+      }
+      surfaces = { source, destination, sourceContext, destinationContext };
+      this.surfaces = surfaces;
+    }
+    const { source, destination, sourceContext, destinationContext } = surfaces;
+    if (source.width !== width || source.height !== height) {
+      source.width = destination.width = width;
+      source.height = destination.height = height;
+    }
+    // ImageData disallows SharedArrayBuffer, but normal frame buffers need
+    // only a view (also preserves the offset of a caller's subarray).
+    const pixels = rgba.buffer instanceof ArrayBuffer
+      ? new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength)
+      : rgba.slice();
+    sourceContext.putImageData(new ImageData(pixels, width, height), 0, 0);
+    // A reused destination must be cleared: source-over would otherwise
+    // accumulate old frames wherever the blur produces translucent pixels.
+    destinationContext.clearRect(0, 0, width, height);
+    destinationContext.filter = `blur(${sigmaPx}px)`;
+    destinationContext.drawImage(source, 0, 0);
+    return destinationContext.getImageData(0, 0, width, height).data;
+  }
+}
+
+/** One-shot blur. Keep a GaussianBlurCanvas for repeated video frames. */
 export function applyGaussianBlurCanvas(
   rgba: Uint8ClampedArray,
   width: number,
@@ -169,18 +204,5 @@ export function applyGaussianBlurCanvas(
   sigmaPx: number,
   makeCanvas: (w: number, h: number) => Canvas2DLike,
 ): Uint8ClampedArray {
-  if (sigmaPx <= 0) return rgba.slice();
-
-  const srcCanvas = makeCanvas(width, height);
-  const srcCtx = srcCanvas.getContext("2d");
-  if (!srcCtx) throw new Error("applyGaussianBlurCanvas: 2d context unavailable (source canvas)");
-  srcCtx.putImageData(new ImageData(rgba.slice(), width, height), 0, 0);
-
-  const dstCanvas = makeCanvas(width, height);
-  const dstCtx = dstCanvas.getContext("2d");
-  if (!dstCtx) throw new Error("applyGaussianBlurCanvas: 2d context unavailable (dest canvas)");
-  dstCtx.filter = `blur(${sigmaPx}px)`;
-  dstCtx.drawImage(srcCanvas, 0, 0);
-
-  return dstCtx.getImageData(0, 0, width, height).data as Uint8ClampedArray;
+  return new GaussianBlurCanvas(makeCanvas).apply(rgba, width, height, sigmaPx);
 }

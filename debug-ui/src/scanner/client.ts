@@ -22,8 +22,8 @@ import { parseScanResult, parseCalibratedScanResult, type ScanResult } from "./t
  */
 export interface ScannerWorkerLike {
   postMessage(message: unknown, transfer?: Transferable[]): void;
-  addEventListener(type: "message", listener: (ev: MessageEvent) => void): void;
-  removeEventListener(type: "message", listener: (ev: MessageEvent) => void): void;
+  addEventListener<K extends keyof WorkerEventMap>(type: K, listener: (ev: WorkerEventMap[K]) => void): void;
+  removeEventListener<K extends keyof WorkerEventMap>(type: K, listener: (ev: WorkerEventMap[K]) => void): void;
   terminate(): void;
 }
 
@@ -42,16 +42,7 @@ export class StaleScanError extends Error {
  * up. See {@link WorkerInitTimeoutError}'s doc comment for why this exists. */
 export const INIT_TIMEOUT_MS = 10_000;
 
-/**
- * Thrown by {@link ScannerClient.init} when the worker never posts a
- * "ready" message within {@link INIT_TIMEOUT_MS}. Known gap this guards
- * against: `worker.ts`'s wasm `init()` failure is only `console.error`'d,
- * not surfaced as a message the client could reject on — so without this
- * timeout, a broken wasm build (missing/corrupt `.wasm` file, unsupported
- * browser, etc.) leaves `init()` pending forever with no feedback at all.
- * Callers (the debug UI's App shell) should catch this and show a banner
- * rather than leave the app looking like it's stuck loading.
- */
+/** Fallback for a worker that neither initializes nor reports an error. */
 export class WorkerInitTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(
@@ -196,13 +187,8 @@ export class ScannerClient {
   private readonly worker: ScannerWorkerLike;
   private nextId = 1;
   private isReady = false;
-  /** Latched true when the init timeout fires. Once set, a late "ready"
-   * from the worker is ignored (see `handleMessage`) — `init()` already
-   * rejected and told callers the client is permanently broken, so letting
-   * a straggler ready flip `isReady` back on would resurrect a client the
-   * caller has likely already replaced (or surfaced an error banner for),
-   * with two clients then racing over one UI. */
-  private initFailed = false;
+  private failure: Error | null = null;
+  private readyReject: ((error: Error) => void) | null = null;
   private readyResolve: (() => void) | null = null;
   private readyPromise: Promise<void> | null = null;
   private initTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -217,6 +203,8 @@ export class ScannerClient {
   constructor(worker: ScannerWorkerLike) {
     this.worker = worker;
     this.worker.addEventListener("message", this.handleMessage);
+    this.worker.addEventListener("error", this.handleError);
+    this.worker.addEventListener("messageerror", this.handleMessageError);
   }
 
   /** Resolves once the worker has finished loading wasm and is ready to
@@ -232,14 +220,15 @@ export class ScannerClient {
    * call); a caller that wants to retry should construct a fresh
    * `ScannerClient` around a fresh `Worker`. */
   async init(): Promise<void> {
+    if (this.failure) throw this.failure;
     if (this.isReady) return;
     if (!this.readyPromise) {
       this.readyPromise = new Promise<void>((resolve, reject) => {
         this.readyResolve = resolve;
+        this.readyReject = reject;
         this.initTimeoutId = setTimeout(() => {
           this.initTimeoutId = null;
-          this.initFailed = true;
-          reject(new WorkerInitTimeoutError(INIT_TIMEOUT_MS));
+          this.fail(new WorkerInitTimeoutError(INIT_TIMEOUT_MS));
         }, INIT_TIMEOUT_MS);
       });
     }
@@ -271,6 +260,7 @@ export class ScannerClient {
     height: number,
     opts: ScanOptions,
   ): Promise<ScanOutcome> {
+    if (this.failure) return Promise.reject(this.failure);
     return new Promise<ScanOutcome>((resolve, reject) => {
       this.enqueue({
         kind: "scan",
@@ -302,6 +292,7 @@ export class ScannerClient {
     height: number,
     opts: RobustScanOptions,
   ): Promise<RobustScanOutcome> {
+    if (this.failure) return Promise.reject(this.failure);
     return new Promise<RobustScanOutcome>((resolve, reject) => {
       this.enqueue({
         kind: "scan-robust",
@@ -324,7 +315,7 @@ export class ScannerClient {
    * calling this on a config/param change doubles as a reset.
    */
   configureSession(config: RobustConfig, rotationPeriod: number, poolTtlFrames: number): void {
-    this.worker.postMessage({ type: "session-config", config, rotationPeriod, poolTtlFrames });
+    this.post({ type: "session-config", config, rotationPeriod, poolTtlFrames });
   }
 
   /**
@@ -334,7 +325,7 @@ export class ScannerClient {
    * Fire-and-forget; a no-op in the worker if no session exists yet.
    */
   resetSession(): void {
-    this.worker.postMessage({ type: "session-reset" });
+    this.post({ type: "session-reset" });
   }
 
   /**
@@ -353,6 +344,7 @@ export class ScannerClient {
     height: number,
     opts: SessionScanOptions,
   ): Promise<RobustScanOutcome> {
+    if (this.failure) return Promise.reject(this.failure);
     return new Promise<RobustScanOutcome>((resolve, reject) => {
       this.enqueue({
         kind: "session",
@@ -374,11 +366,12 @@ export class ScannerClient {
    * the cache without touching the worker.
    */
   robustPresets(): Promise<RobustPresets> {
+    if (this.failure) return Promise.reject(this.failure);
     if (!this.presetsPromise) {
       const promise = new Promise<RobustPresets>((resolve, reject) => {
         const id = this.nextId++;
         this.pendingPresets.set(id, { resolve, reject });
-        this.worker.postMessage({ type: "robust-presets", id });
+        this.post({ type: "robust-presets", id });
       });
       this.presetsPromise = promise;
       promise.catch(() => {
@@ -399,18 +392,50 @@ export class ScannerClient {
     this.queued = pending;
   }
 
-  /** Releases the underlying worker. The client is unusable afterward. */
+  /** Releases the worker and settles all requests, including initialization. */
   dispose(): void {
+    this.fail(new Error("ScannerClient disposed"));
+  }
+
+  private fail(error: Error): void {
+    if (this.failure) return;
+    this.failure = error;
+    this.isReady = false;
     if (this.initTimeoutId != null) {
       clearTimeout(this.initTimeoutId);
       this.initTimeoutId = null;
     }
-    for (const pending of this.pendingPresets.values()) {
-      pending.reject(new Error("ScannerClient disposed"));
-    }
+    this.readyReject?.(error);
+    this.readyResolve = null;
+    this.readyReject = null;
+    this.inFlight?.reject(error);
+    this.queued?.reject(error);
+    this.inFlight = null;
+    this.queued = null;
+    for (const pending of this.pendingPresets.values()) pending.reject(error);
     this.pendingPresets.clear();
     this.worker.removeEventListener("message", this.handleMessage);
+    this.worker.removeEventListener("error", this.handleError);
+    this.worker.removeEventListener("messageerror", this.handleMessageError);
     this.worker.terminate();
+  }
+
+  private readonly handleError = (event: ErrorEvent): void => {
+    this.fail(new Error(event.message || "Scanner worker failed"));
+  };
+
+  private readonly handleMessageError = (): void => {
+    this.fail(new Error("Scanner worker response could not be deserialized"));
+  };
+
+  private post(message: unknown, transfer?: Transferable[]): void {
+    if (this.failure) throw this.failure;
+    try {
+      this.worker.postMessage(message, transfer);
+    } catch (error) {
+      this.fail(error instanceof Error ? error : new Error(String(error)));
+      throw this.failure;
+    }
   }
 
   private start(pending: PendingScan): void {
@@ -457,19 +482,29 @@ export class ScannerClient {
         refine: pending.opts.refine ?? false,
       };
     }
-    this.worker.postMessage(message, [buffer]);
+    try {
+      this.post(message, [buffer]);
+    } catch {
+      // post() has already rejected both scan slots and closed the client.
+    }
   }
 
   private readonly handleMessage = (ev: MessageEvent): void => {
-    const msg = ev.data as { type?: unknown };
+    if (this.failure) return;
+    const msg = ev.data as { type?: unknown; error?: string };
+    if (msg?.type === "fatal-error") {
+      this.fail(new Error(msg.error ?? "Scanner worker initialization failed"));
+      return;
+    }
     if (msg?.type === "ready") {
-      if (this.initFailed) return; // too late — init() already rejected; see `initFailed`
       this.isReady = true;
       if (this.initTimeoutId != null) {
         clearTimeout(this.initTimeoutId);
         this.initTimeoutId = null;
       }
       this.readyResolve?.();
+      this.readyResolve = null;
+      this.readyReject = null;
       return;
     }
     if (msg?.type === "robust-presets-result") {

@@ -44,6 +44,25 @@ worker imports `src/wasm/qr_lab_wasm.js` once at startup, so `npm run
 build:wasm` followed by a browser reload (not just a fixture change) is
 required to pick up new Rust code while `npm run dev` keeps running.
 
+### Browser regression checks
+
+With the Vite dev server running, execute these in its browser console:
+
+```js
+await (await import('/scripts/check-scanner.browser.ts')).checkScanner()
+await (await import('/scripts/check-blur.browser.ts')).checkBlur()
+```
+
+The scanner check uses real workers/WASM to verify initialization failure,
+runtime crashes, disposal, and classic/robust/session decoding of `near_00`.
+The blur check compares pixels against the previous implementation, checks
+canvas reuse across frames and size changes, and reports interleaved timing
+medians at 640, 960, and 1280 pixels. Both throw on failure. These checks
+complement Vitest, which runs without browser canvas APIs.
+
+See the [simulator review](../docs/qr-lab/review-2026-11-02.md) for measured
+results and the production UI/native simulator checklist.
+
 ## Architecture
 
 ```

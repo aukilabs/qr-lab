@@ -24,7 +24,7 @@ import { ScanResultParseError } from "./types";
 class FakeWorker implements ScannerWorkerLike {
   posted: Array<{ message: any; transfer?: Transferable[] }> = [];
   terminated = false;
-  private listeners: Array<(ev: MessageEvent) => void> = [];
+  private listeners = new Map<string, Set<(ev: any) => void>>();
 
   postMessage(message: unknown, transfer?: Transferable[]): void {
     if (transfer) {
@@ -42,13 +42,13 @@ class FakeWorker implements ScannerWorkerLike {
     this.posted.push(transfer === undefined ? { message } : { message, transfer });
   }
 
-  addEventListener(type: "message", listener: (ev: MessageEvent) => void): void {
-    if (type === "message") this.listeners.push(listener);
+  addEventListener<K extends keyof WorkerEventMap>(type: K, listener: (ev: WorkerEventMap[K]) => void): void {
+    if (!this.listeners.has(type)) this.listeners.set(type, new Set());
+    this.listeners.get(type)!.add(listener);
   }
 
-  removeEventListener(type: "message", listener: (ev: MessageEvent) => void): void {
-    if (type !== "message") return;
-    this.listeners = this.listeners.filter((l) => l !== listener);
+  removeEventListener<K extends keyof WorkerEventMap>(type: K, listener: (ev: WorkerEventMap[K]) => void): void {
+    this.listeners.get(type)?.delete(listener);
   }
 
   terminate(): void {
@@ -56,10 +56,13 @@ class FakeWorker implements ScannerWorkerLike {
   }
 
   emit(data: unknown): void {
-    for (const listener of this.listeners) {
-      listener({ data } as MessageEvent);
-    }
+    this.emitEvent("message", { data } as MessageEvent);
   }
+
+  emitEvent<K extends keyof WorkerEventMap>(type: K, event: WorkerEventMap[K]): void {
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+
 }
 
 function minimalScanResultJson(): unknown {
@@ -874,4 +877,72 @@ it("forwards calibration and parses sensor-space results without diagnostic geom
   expect(outcome.result.trace).toBeNull();
   expect(outcome.result.detections).toMatchObject({ codes: [], finders: [], triplets: [], source_scale: 1 });
   client.dispose();
+});
+
+
+describe("worker lifecycle failures", () => {
+  const options = { maxDim: 0, withTrace: false };
+
+  it("disposal rejects init, both scan slots and presets, and forbids reuse", async () => {
+    const worker = new FakeWorker();
+    const client = new ScannerClient(worker);
+    const pending = [client.init(), client.scan(makeRgba(16), 2, 2, options),
+      client.scan(makeRgba(16), 2, 2, options), client.robustPresets()];
+    const settled = Promise.allSettled(pending);
+    client.dispose();
+    client.dispose();
+    for (const result of await settled) {
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") expect(result.reason.message).toContain("disposed");
+    }
+    expect(worker.terminated).toBe(true);
+    const posted = worker.posted.length;
+    await expect(client.init()).rejects.toThrow("disposed");
+    await expect(client.scan(makeRgba(16), 2, 2, options)).rejects.toThrow("disposed");
+    await expect(client.scanRobust(makeRgba(16), 2, 2,
+      { maxDim: 0, config: allOffConfig(), capture: false })).rejects.toThrow("disposed");
+    await expect(client.scanSessionFrame(makeRgba(16), 2, 2, { maxDim: 0 })).rejects.toThrow("disposed");
+    await expect(client.robustPresets()).rejects.toThrow("disposed");
+    expect(() => client.resetSession()).toThrow("disposed");
+    expect(() => client.configureSession(allOffConfig(), 3, 4)).toThrow("disposed");
+    expect(worker.posted).toHaveLength(posted);
+  });
+
+  it("reports WASM init errors immediately, even before init is called", async () => {
+    const worker = new FakeWorker();
+    const client = new ScannerClient(worker);
+    worker.emit({ type: "fatal-error", error: "bad wasm" });
+    worker.emit({ type: "ready" });
+    await expect(client.init()).rejects.toThrow("bad wasm");
+    expect(worker.terminated).toBe(true);
+  });
+
+  it.each(["error", "messageerror"] as const)("rejects pending requests on %s", async (type) => {
+    const worker = new FakeWorker();
+    const client = new ScannerClient(worker);
+    worker.emit({ type: "ready" });
+    const settled = Promise.allSettled([
+      client.scan(makeRgba(16), 2, 2, options),
+      client.scanSessionFrame(makeRgba(16), 2, 2, { maxDim: 0 }),
+      client.robustPresets(),
+    ]);
+    worker.emitEvent(type, { message: "worker crashed" } as ErrorEvent);
+    expect((await settled).every(result => result.status === "rejected")).toBe(true);
+    await expect(client.init()).rejects.toThrow();
+    expect(worker.terminated).toBe(true);
+  });
+
+  it("rejects both slots when sending a queued frame throws", async () => {
+    const worker = new FakeWorker();
+    const client = new ScannerClient(worker);
+    const first = client.scan(makeRgba(16), 2, 2, options);
+    const second = client.scan(makeRgba(16), 2, 2, options);
+    const settled = Promise.allSettled([first, second]);
+    vi.spyOn(worker, "postMessage").mockImplementation(() => { throw new Error("clone failed"); });
+    worker.emit({ type: "scan-result", id: 1, ok: false, error: "scan failed" });
+    const results = await settled;
+    expect(results[1]).toMatchObject({ status: "rejected", reason: { message: "clone failed" } });
+    await expect(client.scan(makeRgba(16), 2, 2, options)).rejects.toThrow("clone failed");
+    expect(worker.terminated).toBe(true);
+  });
 });

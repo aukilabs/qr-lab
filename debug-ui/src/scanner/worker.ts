@@ -140,6 +140,11 @@ interface ScanRgbaResult {
   scan_height: number;
 }
 
+interface FatalErrorMessage {
+  type: "fatal-error";
+  error: string;
+}
+
 interface ReadyMessage {
   type: "ready";
 }
@@ -168,7 +173,7 @@ interface RobustPresetsResultMessage {
  * conflicts with this project's `DOM` lib) but precisely typed for what's
  * actually used here. */
 interface WorkerGlobalLike {
-  postMessage(message: ReadyMessage | ScanResultMessage | RobustPresetsResultMessage): void;
+  postMessage(message: ReadyMessage | FatalErrorMessage | ScanResultMessage | RobustPresetsResultMessage): void;
   addEventListener(
     type: "message",
     listener: (ev: MessageEvent<RequestMessage>) => void,
@@ -183,23 +188,26 @@ const ctx = self as unknown as WorkerGlobalLike;
  * `.free()`d) on every reconfigure. */
 let session: WasmScanSession | null = null;
 
-const ready = init()
-  .then(() => {
+const ready = init().then(
+  () => {
     ctx.postMessage({ type: "ready" });
-  })
-  .catch((err: unknown) => {
-    // No dedicated "init failed" message in the protocol (out of scope for
-    // this task) — surface it the same way a scan failure would so it's at
-    // least visible in the console instead of silently hanging forever.
-    console.error("scanner worker: wasm init failed", err);
-  });
+    return true;
+  },
+  (error: unknown) => {
+    ctx.postMessage({
+      type: "fatal-error",
+      error: `Scanner WASM initialization failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+    return false;
+  },
+);
 
 ctx.addEventListener("message", (ev) => {
   const msg = ev.data;
 
   if (msg.type === "robust-presets") {
     void (async () => {
-      await ready;
+      if (!await ready) return;
       try {
         ctx.postMessage({
           type: "robust-presets-result",
@@ -225,7 +233,7 @@ ctx.addEventListener("message", (ev) => {
     // `scan-session-frame` surfaces a missing session as an ok:false result
     // anyway). Dropping the old session `.free()`s its wasm memory.
     void (async () => {
-      await ready;
+      if (!await ready) return;
       try {
         if (session) {
           session.free();
@@ -241,7 +249,7 @@ ctx.addEventListener("message", (ev) => {
 
   if (msg.type === "session-reset") {
     void (async () => {
-      await ready;
+      if (!await ready) return;
       try {
         session?.reset();
       } catch (err) {
@@ -254,7 +262,7 @@ ctx.addEventListener("message", (ev) => {
   if (msg.type !== "scan" && msg.type !== "scan-robust" && msg.type !== "scan-session-frame") return;
 
   void (async () => {
-    await ready;
+    if (!await ready) return;
 
     // Hoisted with the requested (source) dims as a fallback: if
     // constructing `view`/the wasm call throws before the real working
