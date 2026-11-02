@@ -45,7 +45,8 @@ scratch allocation capacity; it must not be called concurrently.
       "inverted": false,
       "dimension": 21,
       "corners": [[x,y],[x,y],[x,y],[x,y]],
-      "refinedCorners": null
+      "refinedCorners": null,
+      "cornerRefined": [false, false, false, false]
     }
   ],
   "timings": {
@@ -61,7 +62,10 @@ scratch allocation capacity; it must not be called concurrently.
 ```
 
 - `corners` are TL/TR/BR/BL in **working** pixels.
-- `refinedCorners` (when `refine != 0`) are in **source** pixels.
+- `refinedCorners` (when `refine != 0`) are in **source** pixels. Failed fits
+  can retain fallback estimates; a non-null array does not mean all four fit.
+- `cornerRefined` gives final-fit success for TL/TR/BR/BL. These flags report
+  refinement provenance, not a geometric accuracy guarantee.
 - `sourceScale` is `working / source` (width axis); convert working → source with `working / sourceScale`.
 
 ## Android 16 KB pages

@@ -13,8 +13,10 @@ export type QrCodeDetection = {
   dimension: number;
   /** TL / TR / BR / BL corners in **working** pixels. */
   corners: [QrCorner, QrCorner, QrCorner, QrCorner];
-  /** Subpixel-refined corners in **source** pixels when `refine` was true. */
+  /** Refinement output in **source** pixels, including fallbacks for failed fits. */
   refinedCorners: [QrCorner, QrCorner, QrCorner, QrCorner] | null;
+  /** TL / TR / BR / BL final-fit success. Absent in older native libraries. */
+  cornerRefined?: [boolean, boolean, boolean, boolean];
 };
 
 export type QrScanTimings = {

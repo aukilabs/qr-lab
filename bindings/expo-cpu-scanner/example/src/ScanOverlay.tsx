@@ -131,7 +131,11 @@ export function ScanOverlay({
               </Text>
               <Text style={styles.chipMeta} numberOfLines={1}>
                 v{code.version} · {code.ecc}
-                {code.refinedCorners ? " · refined" : ""}
+                {code.refinedCorners
+                  ? code.cornerRefined
+                    ? ` · refined ${code.cornerRefined.filter(Boolean).length}/4`
+                    : " · refinement attempted"
+                  : ""}
               </Text>
             </View>
           </View>

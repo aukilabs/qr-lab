@@ -52,6 +52,11 @@ changes; see [docs/qr-lab/stability.md](docs/qr-lab/stability.md)).
 
 ### Fixed
 
+- Large finder patterns no longer acquire false internal transitions from
+  low-contrast tile thresholds during finder and triplet measurements.
+- Native JSON forwards per-corner refinement flags; the Expo overlay reports
+  how many corners passed fitting instead of labeling partial results refined.
+
 - Extreme tile-threshold offsets and Sauvola radii no longer overflow.
 - Erosion/dilation now use the requested clipped window at image borders,
   including the morphology used by QR shadow recovery.
