@@ -11,6 +11,12 @@ changes; see [docs/qr-lab/stability.md](docs/qr-lab/stability.md)).
 
 ### Changed
 
+- Finder run-length encoding writes scratch storage once per run; subpixel
+  edge profiles use fixed stack storage instead of per-probe allocations.
+- QR `payload_bytes` now preserves valid non-UTF-8 content. `payload` remains
+  UTF-8 display text, replacing invalid sequences with U+FFFD.
+- The debug UI loads its 3D scene on demand and reuses blur canvases across
+  simulated camera frames.
 - Open-source announcement prep: source-first install instructions (not on
   crates.io / PyPI / npm yet), security policy, GitHub issue/PR templates, and CI.
 - Renamed the project from **QRKit** / `qrkit` to **QR Lab** / `qr-lab`.
@@ -43,6 +49,15 @@ changes; see [docs/qr-lab/stability.md](docs/qr-lab/stability.md)).
 - Caller-owned/workspace native operator APIs and `WasmImageProcessor`.
 - Python/NumPy package with stateless and temporal scanning, reusable
   image-processing contexts, type stubs, and Maturin wheel generation.
+
+### Fixed
+
+- Extreme tile-threshold offsets and Sauvola radii no longer overflow.
+- Erosion/dilation now use the requested clipped window at image borders,
+  including the morphology used by QR shadow recovery.
+- Scanner worker failures and disposal now settle pending UI requests.
+- The iOS bridge rejects overflowing dimensions without trapping; the Expo
+  example resolves its nested dependencies and linked-source types.
 
 ### Preserved
 
