@@ -18,7 +18,7 @@ wasm:
 
 # Install debug-ui npm dependencies (no-op when node_modules is fresh enough)
 ui-install:
-    cd debug-ui && npm install
+    cd debug-ui && npm ci
 
 # Start the Vite debug UI (predev checks WASM + regenerates fixture manifest)
 dev: ui-install
@@ -105,7 +105,7 @@ python-test:
 # Needs natives first (`just expo-native`) and a dev build (not Expo Go).
 
 expo-example-install:
-    cd bindings/expo-cpu-scanner/example && npm install
+    cd bindings/expo-cpu-scanner/example && npm ci
 
 expo-example: expo-example-install
     cd bindings/expo-cpu-scanner/example && npm start
